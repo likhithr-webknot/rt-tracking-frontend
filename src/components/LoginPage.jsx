@@ -1,0 +1,214 @@
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Eye, EyeOff, Briefcase, Award, TrendingUp as Profit, Headset, Zap, Copy, Check, Activity } from "lucide-react";
+
+export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [metricIndex, setMetricIndex] = useState(0);
+  const [copied, setCopied] = useState(false);
+
+  const hrEmail = "hr@webknot.in";
+  const metrics = [
+    { label: "Career Growth", value: "+42% Yearly", icon: <Briefcase size={20} className="text-blue-400" />, color: "bg-blue-500/10" },
+    { label: "Salary Increment", value: "Top 5% Tier", icon: <Profit size={20} className="text-emerald-400" />, color: "bg-emerald-500/10" },
+    { label: "Skill Mastery", value: "Level 9 Expert", icon: <Award size={20} className="text-purple-400" />, color: "bg-purple-500/10" }
+  ];
+
+  const chartData = [80, 140, 200, 260, 360, 290, 400, 320];
+  const barWidth = 35;
+  const spacing = 75;
+  const chartBaseY = 450;
+  const startX = 50;
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setMetricIndex((prev) => (prev + 1) % metrics.length);
+    }, 3500);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(hrEmail);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const canSubmit = email.endsWith("@webknot.in") && password.length >= 8;
+
+  const bounceTransition = (i) => ({
+    duration: 3,
+    repeat: Infinity,
+    ease: "easeInOut",
+    delay: i * 0.15,
+  });
+
+  return (
+      <div className="fixed inset-0 flex flex-col md:flex-row w-full bg-[#0F0F0F] font-sans selection:bg-purple-500/30 overflow-hidden text-slate-100">
+
+        {/* Left Panel - Responsive container */}
+        <div className="flex w-full md:w-[35%] lg:w-[30%] xl:w-[25%] flex-col justify-between p-6 md:p-10 lg:p-12 z-40 bg-[#0F0F0F] border-r border-white/5 shadow-2xl overflow-y-auto">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 md:h-12 md:w-12 items-center justify-center rounded-xl md:rounded-2xl bg-purple-600 text-white shadow-lg">
+              <Zap size={22} fill="currentColor" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-lg md:text-xl font-black uppercase italic tracking-tight">Webknot</span>
+              <span className="text-[10px] font-bold text-purple-400 uppercase tracking-[0.3em]">Technologies</span>
+            </div>
+          </div>
+
+          <div className="w-full max-w-sm mx-auto my-8 md:my-0">
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tighter">Login</h1>
+            <p className="mt-2 text-sm text-gray-500 font-medium">Professional growth starts here.</p>
+
+            <form className="mt-10 md:mt-12 space-y-6 md:space-y-8" onSubmit={(e) => e.preventDefault()}>
+              <div className="space-y-1.5 md:space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Corporate Email</label>
+                <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full border-b border-white/10 bg-transparent pb-2 md:pb-3 outline-none focus:border-purple-500 transition-all text-base md:text-lg"
+                    placeholder="name@webknot.in"
+                />
+              </div>
+
+              <div className="space-y-1.5 md:space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Access Key</label>
+                <div className="relative">
+                  <input
+                      type={showPassword ? "text" : "password"}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full border-b border-white/10 bg-transparent pb-2 md:pb-3 pr-10 outline-none focus:border-purple-500 transition-all text-base md:text-lg"
+                      placeholder="••••••••"
+                  />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-0 bottom-3 text-gray-600 hover:text-purple-400">
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                  disabled={!canSubmit}
+                  className="w-full rounded-xl bg-purple-600 py-3 md:py-4 font-black uppercase text-white hover:bg-purple-500 disabled:opacity-20 active:scale-95 transition-all shadow-lg text-sm md:text-base"
+              >
+                Sign In
+              </button>
+            </form>
+          </div>
+
+          <div className="flex justify-between items-center text-[10px] text-gray-700 font-bold uppercase tracking-widest">
+            <span>© 2026 Webknot</span>
+            <button onClick={() => setShowAdminModal(true)} className="hover:text-purple-500 transition-colors">
+              <Headset size={14} className="inline mr-1" /> Support
+            </button>
+          </div>
+        </div>
+
+        {/* Right Visual Panel - Relative sizing for fit */}
+        <div className="relative hidden md:flex flex-1 flex-col items-center justify-center bg-[#6344F5] overflow-hidden">
+          <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: `linear-gradient(to right, white 1px, transparent 1px), linear-gradient(to bottom, white 1px, transparent 1px)`, backgroundSize: '40px 40px' }} />
+          <div className="absolute h-[50vw] w-[50vw] bg-white/10 rounded-full blur-[120px] animate-pulse" />
+
+          <div className="relative z-10 w-full max-w-4xl text-center px-4">
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/20 text-[10px] font-bold text-white mb-4 uppercase tracking-widest">
+                <Activity size={12} className="text-emerald-400" /> System Synchronized
+              </div>
+              <h2 className="text-[4rem] lg:text-[6rem] font-black text-white leading-tight tracking-tighter">PRECISION</h2>
+              <h2 className="text-[4rem] lg:text-[6rem] font-black text-white/40 leading-[0.5] tracking-tighter">TRACKING</h2>
+            </motion.div>
+
+            <div className="relative flex justify-center items-center w-full max-h-[500px]">
+              {/* ViewBox based SVG for perfect screen fit */}
+              <svg viewBox="0 0 650 500" className="w-full h-auto max-w-[650px] overflow-visible">
+                <defs>
+                  <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgba(255,255,255,0.4)" />
+                    <stop offset="100%" stopColor="rgba(255,255,255,0.05)" />
+                  </linearGradient>
+                </defs>
+
+                {chartData.map((h, i) => {
+                  const x = startX + i * spacing;
+                  const nextH = chartData[i + 1];
+                  const nextX = startX + (i + 1) * spacing;
+
+                  return (
+                      <g key={`vis-${i}`}>
+                        <motion.rect
+                            x={x} width={barWidth} rx="4" fill="url(#barGrad)" stroke="rgba(255,255,255,0.15)"
+                            animate={{ height: [h, h + 20, h], y: [chartBaseY - h, chartBaseY - (h + 20), chartBaseY - h] }}
+                            transition={bounceTransition(i)}
+                        />
+                        {nextH !== undefined && (
+                            <motion.line
+                                stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="4 4"
+                                animate={{
+                                  x1: x + barWidth / 2, y1: [chartBaseY - h, chartBaseY - (h + 20), chartBaseY - h],
+                                  x2: nextX + barWidth / 2, y2: [chartBaseY - nextH, chartBaseY - (nextH + 20), chartBaseY - nextH]
+                                }}
+                                transition={bounceTransition(i)}
+                            />
+                        )}
+                        <motion.circle
+                            cx={x + barWidth / 2} r="4" fill="white" style={{ filter: "drop-shadow(0 0 8px #fff)" }}
+                            animate={{ cy: [chartBaseY - h, chartBaseY - (h + 20), chartBaseY - h], scale: [1, 1.2, 1] }}
+                            transition={bounceTransition(i)}
+                        />
+                      </g>
+                  );
+                })}
+              </svg>
+
+              {/* Metric Card - Percentage positioned */}
+              <AnimatePresence mode="wait">
+                <motion.div
+                    key={metricIndex}
+                    initial={{ x: 20, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1, y: [0, -10, 0] }}
+                    exit={{ x: -20, opacity: 0 }}
+                    transition={{ x: { duration: 0.3 }, y: { duration: 4, repeat: Infinity, ease: "easeInOut" } }}
+                    className="absolute -right-4 lg:-right-12 top-0 rounded-[2rem] bg-white p-6 lg:p-10 shadow-2xl w-64 lg:w-80 text-gray-900 border border-white/20"
+                >
+                  <div className="flex items-center gap-4 lg:gap-6">
+                    <div className={`h-12 w-12 lg:h-16 lg:w-16 rounded-xl lg:rounded-2xl ${metrics[metricIndex].color} flex items-center justify-center`}>
+                      {metrics[metricIndex].icon}
+                    </div>
+                    <div className="text-left overflow-hidden">
+                      <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1 truncate">{metrics[metricIndex].label}</p>
+                      <p className="text-xl lg:text-2xl font-black tracking-tighter whitespace-nowrap">{metrics[metricIndex].value}</p>
+                    </div>
+                  </div>
+                </motion.div>
+              </AnimatePresence>
+            </div>
+          </div>
+        </div>
+
+        {/* Support Modal */}
+        <AnimatePresence>
+          {showAdminModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAdminModal(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
+                <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-sm rounded-[2.5rem] bg-[#121212] border border-white/10 p-10 shadow-2xl">
+                  <h3 className="text-2xl font-bold text-white tracking-tight">Support</h3>
+                  <p className="mt-4 text-gray-400 text-sm">Talent Desk Assistance:</p>
+                  <div className="mt-6 flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10 overflow-hidden">
+                    <span className="text-sm font-medium text-purple-300 truncate mr-2">{hrEmail}</span>
+                    <button onClick={handleCopy} className="p-2 text-gray-400 hover:text-white shrink-0 transition-colors">
+                      {copied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
+                    </button>
+                  </div>
+                  <button onClick={() => setShowAdminModal(false)} className="mt-10 w-full py-4 bg-white text-black font-black rounded-xl uppercase tracking-widest active:scale-95 transition-all">Close</button>
+                </motion.div>
+              </div>
+          )}
+        </AnimatePresence>
+      </div>
+  );
+}

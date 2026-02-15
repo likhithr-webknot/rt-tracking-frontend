@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+
+/* Optional: keep a sane default */
+@layer base {
+  body {
+    margin: 0;
+  }
+}
