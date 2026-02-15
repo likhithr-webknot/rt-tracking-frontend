@@ -11,6 +11,11 @@ import {
 } from "recharts";
 
 import { promoteEmployee as promoteEmployeeApi } from "../api/employees.js";
+import {
+  closeSubmissionWindowNow,
+  openSubmissionWindowNow,
+  scheduleSubmissionWindow,
+} from "../api/submission-window.js";
 
 function parseLocalInputValue(value) {
   const d = new Date(value);
@@ -40,6 +45,9 @@ function StatCard({ label, value, icon }) {
 export default function AdminDashboard({
   portalWindow,
   setPortalWindow,
+  portalWindowLoading,
+  portalWindowError,
+  reloadPortalWindow,
   employees,
   setEmployees,
   reloadEmployees,
@@ -51,6 +59,7 @@ export default function AdminDashboard({
   const [toast, setToast] = useState(null); // { title: string, message?: string }
   const toastTimerRef = useRef(null);
   const [promotingId, setPromotingId] = useState(null);
+  const [portalWindowBusy, setPortalWindowBusy] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
   function showToast(nextToast) {
@@ -64,7 +73,21 @@ export default function AdminDashboard({
     return () => window.clearInterval(id);
   }, []);
 
+  function portalWindowFromServer(data) {
+    const obj = data && typeof data === "object" ? data : {};
+    const startAt = obj.startAt ? new Date(obj.startAt) : null;
+    const endAt = obj.endAt ? new Date(obj.endAt) : null;
+    return {
+      start: startAt && !Number.isNaN(startAt.getTime()) ? toLocalInputValue(startAt) : portalWindow.start,
+      end: endAt && !Number.isNaN(endAt.getTime()) ? toLocalInputValue(endAt) : "",
+      manualClosed: Boolean(obj.manualClosed),
+      cycleKey: typeof obj.cycleKey === "string" ? obj.cycleKey : null,
+      meta: { ...(portalWindow.meta ?? {}), lastAction: "server", updatedAt: Date.now() },
+    };
+  }
+
   const portalIsOpenNow = useMemo(() => {
+    if (portalWindow?.manualClosed) return false;
     const start = parseLocalInputValue(portalWindow.start);
     if (!start) return false;
 
@@ -75,7 +98,7 @@ export default function AdminDashboard({
     if (now < start) return false;
     if (!end) return true; // indefinite window
     return now <= end;
-  }, [portalWindow.start, portalWindow.end, now]);
+  }, [portalWindow?.manualClosed, portalWindow.start, portalWindow.end, now]);
 
   const stats = useMemo(() => {
     const totalEmployees = employees.length;
@@ -207,28 +230,29 @@ export default function AdminDashboard({
 			            <div className="w-full space-y-4">
 			              <button
 			                onClick={() => {
-			                  if (portalIsOpenNow) {
-			                    const clickedAt = new Date();
-			                    const past = new Date(clickedAt);
-			                    past.setMinutes(past.getMinutes() - 1);
-			                    setPortalWindow((prev) => ({
-			                      ...prev,
-			                      start: toLocalInputValue(past),
-			                      end: toLocalInputValue(past),
-			                      meta: { ...(prev.meta ?? {}), lastAction: "stop", updatedAt: Date.now() },
-			                    }));
-			                    showToast({ title: "Window stopped", message: "Submission window is now closed." });
-			                    return;
-			                  }
-
-			                  const clickedAt = new Date();
-			                  setPortalWindow((prev) => ({
-			                    ...prev,
-			                    start: toLocalInputValue(clickedAt),
-			                    end: "",
-			                    meta: { ...(prev.meta ?? {}), lastAction: "start", updatedAt: Date.now() },
-			                  }));
-			                  showToast({ title: "Window started", message: "Submission window is now open." });
+			                  if (portalWindowBusy || portalWindowLoading) return;
+			                  setPortalWindowBusy(true);
+			                  (async () => {
+			                    try {
+			                      const res = portalIsOpenNow
+			                        ? await closeSubmissionWindowNow()
+			                        : await openSubmissionWindowNow();
+			                      setPortalWindow(portalWindowFromServer(res));
+			                      showToast({
+			                        title: portalIsOpenNow ? "Window stopped" : "Window started",
+			                        message: portalIsOpenNow
+			                          ? "Submission window is now closed."
+			                          : "Submission window is now open.",
+			                      });
+			                    } catch (err) {
+			                      showToast({
+			                        title: "Window update failed",
+			                        message: err?.message || "Please try again.",
+			                      });
+			                    } finally {
+			                      setPortalWindowBusy(false);
+			                    }
+			                  })();
 			                }}
 			                className={[
 			                  "w-full px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all grid place-items-center",
@@ -236,6 +260,7 @@ export default function AdminDashboard({
 			                    ? "bg-red-500/10 text-red-200 hover:bg-red-500 hover:text-white shadow-xl shadow-red-900/20 border border-red-500/20"
 			                    : "bg-emerald-500 text-black hover:bg-emerald-400 shadow-xl shadow-emerald-900/20",
 			                ].join(" ")}
+			                disabled={portalWindowBusy || portalWindowLoading}
 			                title={portalIsOpenNow ? "Stop window" : "Start window"}
 			                aria-label={portalIsOpenNow ? "Stop window" : "Start window"}
 			              >
@@ -267,20 +292,49 @@ export default function AdminDashboard({
 		                    showToast({ title: "Invalid schedule", message: "Close at must be in the future." });
 		                    return;
 		                  }
-
-			                  setPortalWindow((prev) => ({
-			                    ...prev,
-			                    start: portalWindow.start,
-			                    end: portalWindow.end,
-			                    meta: { ...(prev.meta ?? {}), lastAction: "schedule", updatedAt: Date.now() },
-			                  }));
-			                  showToast({ title: "Window scheduled", message: "Submission window will auto-close at the end time." });
+		                  if (portalWindowBusy || portalWindowLoading) return;
+		                  setPortalWindowBusy(true);
+		                  (async () => {
+		                    try {
+		                      const res = await scheduleSubmissionWindow({
+		                        startAt: new Date(portalWindow.start).toISOString(),
+		                        endAt: new Date(portalWindow.end).toISOString(),
+		                      });
+		                      setPortalWindow(portalWindowFromServer(res));
+		                      showToast({
+		                        title: "Window scheduled",
+		                        message: "Submission window schedule updated.",
+		                      });
+		                    } catch (err) {
+		                      showToast({
+		                        title: "Schedule failed",
+		                        message: err?.message || "Please try again.",
+		                      });
+		                    } finally {
+		                      setPortalWindowBusy(false);
+		                    }
+		                  })();
 			                }}
 		                className="w-full bg-purple-600 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-purple-500 shadow-xl shadow-purple-900/20 transition-all"
 		                title="Validate and run this schedule"
+		                disabled={portalWindowBusy || portalWindowLoading}
 		              >
 		                Schedule
 		              </button>
+		              {portalWindowError ? (
+		                <div className="text-xs text-red-200/90">
+		                  Failed to sync window: {portalWindowError}
+		                  {typeof reloadPortalWindow === "function" ? (
+		                    <button
+		                      type="button"
+		                      onClick={() => reloadPortalWindow?.().catch(() => {})}
+		                      className="ml-2 underline text-red-200 hover:text-white"
+		                    >
+		                      Retry
+		                    </button>
+		                  ) : null}
+		                </div>
+		              ) : null}
 		            </div>
 		          </div>
 		        </div>

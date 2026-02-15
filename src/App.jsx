@@ -4,121 +4,14 @@ import EmployeePortal from "./components/EmployeePortal.jsx";
 import LoginPage from "./components/LoginPage.jsx";
 import SubmissionWindowClosed from "./components/SubmissionWindowClosed.jsx";
 import { clearAuth, getAuth } from "./api/auth.js";
-
-const PORTAL_WINDOW_STORAGE_KEY = "rt_tracking_portal_window_v1";
-
-function toLocalInputValue(date) {
-  const pad = (n) => String(n).padStart(2, "0");
-  const yyyy = date.getFullYear();
-  const mm = pad(date.getMonth() + 1);
-  const dd = pad(date.getDate());
-  const hh = pad(date.getHours());
-  const min = pad(date.getMinutes());
-  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
-}
-
-function parseLocalDateTime(value) {
-  const v = String(value ?? "").trim();
-  if (!v) return null;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function defaultPortalWindow() {
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(18, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  end.setHours(18, 0, 0, 0);
-  return {
-    start: toLocalInputValue(start),
-    end: toLocalInputValue(end),
-    meta: { lastAction: "default", updatedAt: Date.now() },
-  };
-}
-
-function loadPortalWindowFromStorage() {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(PORTAL_WINDOW_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-
-    const start = typeof parsed?.start === "string" ? parsed.start : "";
-    const end = typeof parsed?.end === "string" ? parsed.end : "";
-    if (!start) return null;
-
-    const meta = parsed?.meta && typeof parsed.meta === "object" ? parsed.meta : {};
-    return {
-      start,
-      end,
-      meta: {
-        lastAction: typeof meta.lastAction === "string" ? meta.lastAction : "unknown",
-        updatedAt: typeof meta.updatedAt === "number" ? meta.updatedAt : null,
-      },
-    };
-  } catch {
-    return null;
-  }
-}
-
-function resolvePortalWindowNow() {
-  const saved = loadPortalWindowFromStorage();
-  if (!saved) return defaultPortalWindow();
-
-  const now = new Date();
-  const start = parseLocalDateTime(saved.start);
-  const end = saved.end ? parseLocalDateTime(saved.end) : null;
-
-  const looksManuallyStopped = Boolean(start && end && end <= start);
-  const wasStopped = saved?.meta?.lastAction === "stop" || looksManuallyStopped;
-
-  if (!wasStopped && end && end < now) {
-    const next = {
-      ...defaultPortalWindow(),
-      meta: { lastAction: "autoroll", updatedAt: Date.now() },
-    };
-    try {
-      window.localStorage.setItem(PORTAL_WINDOW_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // ignore
-    }
-    return next;
-  }
-
-  return saved;
-}
-
-function isPortalWindowOpen(portalWindow, now) {
-  const start = parseLocalDateTime(portalWindow?.start);
-  if (!start) return false;
-
-  const endRaw = String(portalWindow?.end ?? "").trim();
-  const end = endRaw ? parseLocalDateTime(endRaw) : null;
-
-  if (endRaw && !end) return false;
-  if (end && end <= start) return false;
-
-  const t = now instanceof Date ? now : new Date();
-  if (t < start) return false;
-  if (!end) return true;
-  return t <= end;
-}
-
-function isSamePortalWindowIdentity(a, b) {
-  if (!a || !b) return false;
-  return (
-    String(a.start ?? "") === String(b.start ?? "") &&
-    String(a.end ?? "") === String(b.end ?? "") &&
-    String(a?.meta?.lastAction ?? "") === String(b?.meta?.lastAction ?? "")
-  );
-}
+import { fetchSubmissionWindowCurrent } from "./api/submission-window.js";
 
 export default function App() {
   const [auth, setAuthState] = useState(() => getAuth());
-  const [portalWindow, setPortalWindow] = useState(() => resolvePortalWindowNow());
-  const [nowTick, setNowTick] = useState(() => Date.now());
+  const [windowData, setWindowData] = useState(null);
+  const [windowLoading, setWindowLoading] = useState(false);
+  const [windowError, setWindowError] = useState("");
+  const [windowRefreshNonce, setWindowRefreshNonce] = useState(0);
 
   const roleLabel = useMemo(() => {
     const role = String(auth?.role ?? "").trim();
@@ -129,43 +22,59 @@ export default function App() {
   }, [auth?.role]);
 
   useEffect(() => {
-    // Keep the gate responsive to time passing and cross-tab admin changes.
-    const interval = window.setInterval(() => {
-      setNowTick(Date.now());
-      // Also autoroll when needed (unless manually stopped).
-      setPortalWindow((prev) => {
-        const next = resolvePortalWindowNow();
-        return isSamePortalWindowIdentity(prev, next) ? prev : next;
-      });
-    }, 10_000);
-    function onStorage(e) {
-      if (e?.key === PORTAL_WINDOW_STORAGE_KEY) {
-        setPortalWindow((prev) => {
-          const next = resolvePortalWindowNow();
-          return isSamePortalWindowIdentity(prev, next) ? prev : next;
-        });
+    // Gate Employee/Manager portal by the server submission-window state.
+    if (!auth?.accessToken) {
+      setWindowData(null);
+      setWindowError("");
+      setWindowLoading(false);
+      return;
+    }
+    if (roleLabel === "Admin") return;
+
+    let alive = true;
+    let timer = null;
+    let controller = null;
+
+    async function load({ showSpinner } = {}) {
+      if (!alive) return;
+      if (controller) controller.abort();
+      controller = new AbortController();
+
+      if (showSpinner) setWindowLoading(true);
+      setWindowError("");
+      try {
+        const data = await fetchSubmissionWindowCurrent({ signal: controller.signal });
+        if (!alive) return;
+        setWindowData(data);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!alive) return;
+        setWindowError(err?.message || "Failed to load submission window status.");
+        setWindowData(null);
+      } finally {
+        const stillAlive = alive;
+        if (stillAlive) {
+          setWindowLoading(false);
+          timer = window.setTimeout(() => load({ showSpinner: false }), 30_000);
+        }
       }
     }
-    function onPortalWindowChanged() {
-      setPortalWindow((prev) => {
-        const next = resolvePortalWindowNow();
-        return isSamePortalWindowIdentity(prev, next) ? prev : next;
-      });
-    }
-    window.addEventListener("storage", onStorage);
-    window.addEventListener("rt_tracking_portal_window_changed_v1", onPortalWindowChanged);
+
+    load({ showSpinner: true });
+
     return () => {
-      window.clearInterval(interval);
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener("rt_tracking_portal_window_changed_v1", onPortalWindowChanged);
+      alive = false;
+      if (timer) window.clearTimeout(timer);
+      if (controller) controller.abort();
     };
-  }, []);
+  }, [auth?.accessToken, roleLabel, windowRefreshNonce]);
 
   function logout() {
     clearAuth();
     setAuthState(null);
-    // Ensure the next login sees the latest window state without waiting for the polling tick.
-    setPortalWindow(resolvePortalWindowNow());
+    setWindowData(null);
+    setWindowError("");
+    setWindowLoading(false);
   }
 
   if (!auth) {
@@ -173,7 +82,7 @@ export default function App() {
       <LoginPage
         onLoginSuccess={(nextAuth) => {
           setAuthState(nextAuth);
-          setPortalWindow(resolvePortalWindowNow());
+          setWindowRefreshNonce((n) => n + 1);
         }}
       />
     );
@@ -183,9 +92,37 @@ export default function App() {
     return <AdminControlCenter onLogout={logout} auth={auth} />;
   }
 
-  const isWindowOpen = isPortalWindowOpen(portalWindow, new Date(nowTick));
-  if (!isWindowOpen) {
-    return <SubmissionWindowClosed portalWindow={portalWindow} />;
+  if (windowLoading && !windowData) {
+    return (
+      <div className="min-h-screen bg-[#080808] text-slate-100 grid place-items-center px-6">
+        <div className="text-center">
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Loading</div>
+          <div className="mt-2 text-2xl font-black uppercase tracking-tighter italic">
+            Checking Submission Window
+          </div>
+          <div className="mt-2 text-sm text-gray-400">Please wait…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!windowData) {
+    return (
+      <SubmissionWindowClosed
+        portalWindow={null}
+        error={windowError || "Unable to determine whether submissions are open."}
+        onRetry={() => setWindowRefreshNonce((n) => n + 1)}
+      />
+    );
+  }
+
+  if (!windowData.isOpen) {
+    return (
+      <SubmissionWindowClosed
+        portalWindow={windowData}
+        onRetry={() => setWindowRefreshNonce((n) => n + 1)}
+      />
+    );
   }
 
   return <EmployeePortal onLogout={logout} auth={auth} />;

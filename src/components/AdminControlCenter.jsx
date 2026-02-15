@@ -19,6 +19,7 @@ import {
   normalizeKpiDefinitions,
   updateKpiDefinition
 } from "../api/kpi-definitions.js";
+import { fetchSubmissionWindowCurrent } from "../api/submission-window.js";
 
 // --- SUB-COMPONENT: SIDEBAR ---
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
@@ -158,14 +159,8 @@ function downloadTextFile({ filename, text, mime = "text/plain" }) {
   URL.revokeObjectURL(url)
 }
 
-const PORTAL_WINDOW_STORAGE_KEY = "rt_tracking_portal_window_v1";
 const EMPLOYEE_EXTRAS_STORAGE_KEY = "rt_tracking_employee_extras_v1";
 const CERTIFICATION_CATALOG_STORAGE_KEY = "rt_tracking_certification_catalog_v1";
-
-function parseLocalDateTime(value) {
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
 
 function defaultPortalWindow() {
   const now = new Date();
@@ -181,29 +176,17 @@ function defaultPortalWindow() {
   };
 }
 
-function loadPortalWindowFromStorage() {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(PORTAL_WINDOW_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-
-    const start = typeof parsed?.start === "string" ? parsed.start : "";
-    const end = typeof parsed?.end === "string" ? parsed.end : "";
-    if (!start) return null;
-
-    const meta = parsed?.meta && typeof parsed.meta === "object" ? parsed.meta : {};
-    return {
-      start,
-      end,
-      meta: {
-        lastAction: typeof meta.lastAction === "string" ? meta.lastAction : "unknown",
-        updatedAt: typeof meta.updatedAt === "number" ? meta.updatedAt : null,
-      },
-    };
-  } catch {
-    return null;
-  }
+function portalWindowFromServer(data) {
+  const obj = data && typeof data === "object" ? data : {};
+  const startAt = obj.startAt ? new Date(obj.startAt) : null;
+  const endAt = obj.endAt ? new Date(obj.endAt) : null;
+  return {
+    start: startAt && !Number.isNaN(startAt.getTime()) ? toLocalInputValue(startAt) : "",
+    end: endAt && !Number.isNaN(endAt.getTime()) ? toLocalInputValue(endAt) : "",
+    manualClosed: Boolean(obj.manualClosed),
+    cycleKey: typeof obj.cycleKey === "string" ? obj.cycleKey : null,
+    meta: { lastAction: "server", updatedAt: Date.now() },
+  };
 }
 
 function loadEmployeeExtras() {
@@ -553,39 +536,36 @@ export default function AdminControlCenter({ onLogout, auth }) {
     return () => controller.abort();
   }, [reloadKpis]);
 
-  // Portal Window state
-  const [portalWindow, setPortalWindow] = useState(() => {
-    const saved = loadPortalWindowFromStorage();
-    if (!saved) return defaultPortalWindow();
+  // Portal Window state (server)
+  const [portalWindow, setPortalWindow] = useState(() => defaultPortalWindow());
+  const [portalWindowLoading, setPortalWindowLoading] = useState(false);
+  const [portalWindowError, setPortalWindowError] = useState("");
 
-    const now = new Date();
-    const start = parseLocalDateTime(saved.start);
-    const end = saved.end ? parseLocalDateTime(saved.end) : null;
-
-    // If it was manually stopped (or looks like it), keep it stopped across refresh.
-    const looksManuallyStopped = Boolean(start && end && end <= start);
-    const wasStopped = saved?.meta?.lastAction === "stop" || looksManuallyStopped;
-
-    // Auto-roll only when the saved window has ended.
-    if (!wasStopped && end && end < now) {
-      return {
-        ...defaultPortalWindow(),
-        meta: { lastAction: "autoroll", updatedAt: Date.now() },
-      };
+  const reloadPortalWindow = useCallback(async ({ signal } = {}) => {
+    setPortalWindowError("");
+    setPortalWindowLoading(true);
+    try {
+      const data = await fetchSubmissionWindowCurrent({ signal });
+      setPortalWindow((prev) => {
+        const next = portalWindowFromServer(data);
+        // Keep any in-progress edits only if server returned empty/invalid.
+        if (!next.start) return prev;
+        return next;
+      });
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      setPortalWindowError(err?.message || "Failed to load submission window.");
+      throw err;
+    } finally {
+      setPortalWindowLoading(false);
     }
-
-    return saved;
-  })
+  }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(PORTAL_WINDOW_STORAGE_KEY, JSON.stringify(portalWindow));
-      // storage events do not fire in the same tab; this keeps App-level gates in sync immediately.
-      window.dispatchEvent(new Event("rt_tracking_portal_window_changed_v1"));
-    } catch {
-      // ignore storage errors (private mode, quotas, etc)
-    }
-  }, [portalWindow]);
+    const controller = new AbortController();
+    reloadPortalWindow({ signal: controller.signal }).catch(() => {});
+    return () => controller.abort();
+  }, [reloadPortalWindow]);
 
   // Employee state (demo)
   const [employees, setEmployees] = useState([
@@ -814,6 +794,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
           <AdminDashboard
             portalWindow={portalWindow}
             setPortalWindow={setPortalWindow}
+            portalWindowLoading={portalWindowLoading}
+            portalWindowError={portalWindowError}
+            reloadPortalWindow={reloadPortalWindow}
             employees={employees}
             setEmployees={setEmployees}
             reloadEmployees={reloadEmployees}

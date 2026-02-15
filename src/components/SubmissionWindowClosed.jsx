@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import { Calendar, Clock, Lock, ShieldAlert } from "lucide-react";
 
-function parseLocalDateTime(value) {
+function parseDateTime(value) {
   const v = String(value ?? "").trim();
   if (!v) return null;
   const d = new Date(v);
@@ -23,18 +23,41 @@ function formatLocal(date) {
   }
 }
 
-export default function SubmissionWindowClosed({ portalWindow }) {
+function formatCycleMonth(cycleKey, now) {
+  const key = String(cycleKey ?? "").trim();
+  if (!key) return null;
+  const match = /^(\d{4})-(\d{2})$/.exec(key);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex)) return null;
+  const d = new Date(now);
+  d.setFullYear(year);
+  d.setMonth(monthIndex);
+  d.setDate(1);
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(d);
+  } catch {
+    return key;
+  }
+}
+
+export default function SubmissionWindowClosed({ portalWindow, error, onRetry }) {
   const now = useMemo(() => new Date(), []);
+  const cycleKey = portalWindow?.cycleKey;
   const monthLabel = useMemo(() => {
+    const fromCycle = formatCycleMonth(cycleKey, now);
+    if (fromCycle) return fromCycle;
     try {
       return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(now);
     } catch {
       return "this month";
     }
-  }, [now]);
+  }, [cycleKey, now]);
 
-  const start = parseLocalDateTime(portalWindow?.start);
-  const end = parseLocalDateTime(portalWindow?.end);
+  const start = parseDateTime(portalWindow?.startAt ?? portalWindow?.start);
+  const end = parseDateTime(portalWindow?.endAt ?? portalWindow?.end);
+  const endValue = portalWindow?.endAt ?? portalWindow?.end;
 
   return (
     <div className="min-h-screen bg-[#080808] text-slate-100 font-sans overflow-x-hidden">
@@ -66,7 +89,7 @@ export default function SubmissionWindowClosed({ portalWindow }) {
                   </div>
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-gray-500">Closes</span>
-                    <span className="font-mono text-gray-200">{portalWindow?.end ? formatLocal(end) : "—"}</span>
+                    <span className="font-mono text-gray-200">{endValue ? formatLocal(end) : "—"}</span>
                   </div>
                 </div>
                 <div className="mt-4 text-xs text-gray-500 flex items-center gap-2">
@@ -93,11 +116,23 @@ export default function SubmissionWindowClosed({ portalWindow }) {
                   <ShieldAlert size={14} /> Support
                 </div>
                 <div className="mt-3 text-sm text-amber-100">
-                  If you believe the window should be open, please contact:
+                  {error ? "Unable to load the submission window status." : "If you believe the window should be open, please contact:"}
                 </div>
+                {error ? (
+                  <div className="mt-2 text-xs text-amber-100/90 font-mono whitespace-pre-wrap">{String(error)}</div>
+                ) : null}
                 <div className="mt-2 text-sm font-mono text-amber-100">
                   hr@webknot.in
                 </div>
+                {typeof onRetry === "function" ? (
+                  <button
+                    onClick={onRetry}
+                    className="mt-5 inline-flex items-center justify-center rounded-2xl bg-white text-black px-5 py-3 font-black text-[11px] uppercase tracking-widest hover:bg-gray-200 transition-all"
+                    type="button"
+                  >
+                    Retry
+                  </button>
+                ) : null}
                 <div className="mt-4 text-xs text-amber-200/80">
                   Note: monthly and 6-month aggregations will be handled automatically once the backend workflow is wired.
                 </div>
@@ -105,7 +140,7 @@ export default function SubmissionWindowClosed({ portalWindow }) {
             </div>
 
             <div className="mt-10 text-xs text-gray-600">
-              This gate currently uses the locally stored submission window state.
+              This view is based on the server submission window state.
             </div>
           </div>
         </div>
@@ -113,4 +148,3 @@ export default function SubmissionWindowClosed({ portalWindow }) {
     </div>
   );
 }
-
