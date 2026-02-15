@@ -1,20 +1,35 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LayoutDashboard, Users, Settings, LogOut, ChevronLeft, ChevronRight,
-  Search, Plus, Trash2, Edit3, Target
+  CheckCircle2, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X
 } from "lucide-react";
 
 import AdminDashboard from "./AdminDashboard.jsx";
+import AIAgentsConfig from "./AIAgentsConfig.jsx";
+import Certifications from "./Certifications.jsx";
 import EmployeeDirectory from "./EmployeeDirectory.jsx";
 import KPIRegistry from "./KPIRegistry.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
+import WebknotValueDirectory from "./WebknotValueDirectory.jsx";
+import { fetchEmployees, normalizeEmployees } from "../api/employees.js";
+import {
+  addKpiDefinition,
+  fetchKpiDefinitions,
+  normalizeKpiDefinition,
+  normalizeKpiDefinitions,
+  updateKpiDefinition
+} from "../api/kpi-definitions.js";
 
 // --- SUB-COMPONENT: SIDEBAR ---
-const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab }) => {
+const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
+  const isAdmin = String(account?.role || "").trim().toLowerCase() === "admin";
   const navItems = [
     { id: 'dashboard', icon: <LayoutDashboard size={20} />, label: "Dashboard" },
     { id: 'directory', icon: <Users size={20} />, label: "Employee Directory" },
     { id: 'kpi', icon: <Target size={20} />, label: "KPI Directory" },
+    { id: 'certifications', icon: <Award size={20} />, label: "Certifications" },
+    { id: 'values', icon: <Sparkles size={20} />, label: "Webknot Value Directory" },
+    ...(isAdmin ? [{ id: 'agents', icon: <Bot size={20} />, label: "Configure AI Agents" }] : []),
     { id: 'settings', icon: <Settings size={20} />, label: "Settings" },
   ];
 
@@ -66,8 +81,43 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab }) => {
         })}
       </nav>
 
+      <div className="absolute bottom-24 w-full px-3">
+        <div
+          className={[
+            "rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-gray-200",
+            isOpen ? "" : "hidden",
+          ].join(" ")}
+        >
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+            Signed In
+          </div>
+          <div className="mt-2 font-bold tracking-tight text-white truncate">
+            {account?.name || account?.email || "Unknown"}
+          </div>
+          <div className="mt-1 text-xs text-purple-300 truncate">
+            {account?.designation || "—"}
+          </div>
+        </div>
+
+        {!isOpen ? (
+          <div className="grid place-items-center text-gray-500">
+            <div
+              className="h-10 w-10 rounded-2xl border border-white/10 bg-white/[0.03] grid place-items-center"
+              title={[
+                account?.name || account?.email || "Unknown",
+                account?.designation || "",
+                account?.role || "Employee",
+              ].filter(Boolean).join(" • ")}
+            >
+              <Users size={18} />
+            </div>
+          </div>
+        ) : null}
+      </div>
+
       <div className="absolute bottom-8 w-full px-3 text-red-500">
         <button
+          onClick={onLogout}
           className={[
             'w-full rounded-xl transition-all font-bold group',
             isOpen ? 'flex items-center justify-start gap-4 p-3' : 'flex items-center justify-center p-3',
@@ -108,29 +158,434 @@ function downloadTextFile({ filename, text, mime = "text/plain" }) {
   URL.revokeObjectURL(url)
 }
 
+const PORTAL_WINDOW_STORAGE_KEY = "rt_tracking_portal_window_v1";
+const EMPLOYEE_EXTRAS_STORAGE_KEY = "rt_tracking_employee_extras_v1";
+const CERTIFICATION_CATALOG_STORAGE_KEY = "rt_tracking_certification_catalog_v1";
+
+function parseLocalDateTime(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function defaultPortalWindow() {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(18, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  end.setHours(18, 0, 0, 0);
+  return {
+    start: toLocalInputValue(start),
+    end: toLocalInputValue(end),
+    meta: { lastAction: "default", updatedAt: Date.now() },
+  };
+}
+
+function loadPortalWindowFromStorage() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PORTAL_WINDOW_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+
+    const start = typeof parsed?.start === "string" ? parsed.start : "";
+    const end = typeof parsed?.end === "string" ? parsed.end : "";
+    if (!start) return null;
+
+    const meta = parsed?.meta && typeof parsed.meta === "object" ? parsed.meta : {};
+    return {
+      start,
+      end,
+      meta: {
+        lastAction: typeof meta.lastAction === "string" ? meta.lastAction : "unknown",
+        updatedAt: typeof meta.updatedAt === "number" ? meta.updatedAt : null,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function loadEmployeeExtras() {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(EMPLOYEE_EXTRAS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveEmployeeExtras(next) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(EMPLOYEE_EXTRAS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+}
+
+function loadCertificationCatalogFromStorage() {
+  if (typeof window === "undefined") return { items: [], hasStored: false };
+  try {
+    const raw = window.localStorage.getItem(CERTIFICATION_CATALOG_STORAGE_KEY);
+    if (raw == null) return { items: [], hasStored: false };
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed) ? parsed : [];
+    return { items: normalizeCertificationCatalog(items), hasStored: true };
+  } catch {
+    return { items: [], hasStored: false };
+  }
+}
+
+function saveCertificationCatalogToStorage(items) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      CERTIFICATION_CATALOG_STORAGE_KEY,
+      JSON.stringify(normalizeCertificationCatalog(items))
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function hashFNV1a32(text) {
+  // Deterministic, tiny, good enough for local IDs.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+function makeCertificationId(name) {
+  const key = String(name ?? "").trim().toLowerCase();
+  const h = hashFNV1a32(key).toString(36);
+  return `CERT_${h}`;
+}
+
+function normalizeCertificationCatalog(items) {
+  const list = Array.isArray(items) ? items : [];
+  const out = [];
+  const seenByName = new Set();
+  const seenById = new Set();
+
+  for (const raw of list) {
+    const name = String(raw?.name ?? raw ?? "").trim();
+    if (!name) continue;
+    const nameKey = name.toLowerCase();
+    if (seenByName.has(nameKey)) continue;
+    seenByName.add(nameKey);
+
+    const idRaw = String(raw?.id ?? "").trim();
+    const id = idRaw || makeCertificationId(name);
+    if (seenById.has(id)) continue;
+    seenById.add(id);
+
+    const listed = raw && typeof raw === "object" ? Boolean(raw.listed ?? true) : true;
+    const createdAt =
+      raw && typeof raw === "object" && Number.isFinite(raw.createdAt)
+        ? raw.createdAt
+        : Date.now();
+
+    out.push({ id, name, listed, createdAt });
+  }
+
+  return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
+function applyEmployeeExtras(employees, extras) {
+  return employees.map((e) => {
+    const x = extras?.[e.id];
+    if (!x || typeof x !== "object") return e;
+
+    const recognitions =
+      typeof x.recognitions === "number" && Number.isFinite(x.recognitions)
+        ? x.recognitions
+        : e.recognitions ?? 0;
+    const certifications = Array.isArray(x.certifications) ? x.certifications : e.certifications ?? [];
+
+    return { ...e, recognitions, certifications };
+  });
+}
+
 // --- MAIN PORTAL ---
-export default function AdminControlCenter() {
+export default function AdminControlCenter({ onLogout, auth }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState("dashboard");
+  const isAdmin = String(auth?.role || auth?.claims?.role || "").trim().toLowerCase() === "admin";
 
   // KPI state
   const [showKPIModal, setShowKPIModal] = useState(false);
+  const [kpiModalMode, setKpiModalMode] = useState("add"); // "add" | "edit"
   const [searchQuery, setSearchQuery] = useState("");
-  const [kpis, setKpis] = useState([
-    { id: 1, title: "Technical Velocity", stream: "Engineering", band: "B5L", weight: "30%" },
-    { id: 2, title: "Strategic Mentorship", stream: "Engineering", band: "B6H", weight: "20%" },
-    { id: 3, title: "SLA Compliance", stream: "Support", band: "B4", weight: "50%" },
+  const [kpis, setKpis] = useState([]);
+  const [kpisLoading, setKpisLoading] = useState(false);
+  const [kpisError, setKpisError] = useState("");
+  const [kpiDraft, setKpiDraft] = useState({ title: "", stream: "", band: "", weight: "" });
+  const [editingKpiId, setEditingKpiId] = useState(null);
+  const [kpiSaving, setKpiSaving] = useState(false);
+
+  // Webknot Values (local for now)
+  const [valuesSearchQuery, setValuesSearchQuery] = useState("");
+  const [values, setValues] = useState([
+    {
+      id: "VAL_001",
+      title: "Own The Outcome",
+      pillar: "Ownership",
+      description: "Take responsibility, close loops, and ship with pride.",
+    },
+    {
+      id: "VAL_002",
+      title: "Customers Over Convenience",
+      pillar: "Customer",
+      description: "Optimize for customer value even when it is harder.",
+    },
+    {
+      id: "VAL_003",
+      title: "Raise The Bar",
+      pillar: "Excellence",
+      description: "Set high standards and keep improving the system.",
+    },
   ]);
+  const [showValueModal, setShowValueModal] = useState(false);
+  const [valueModalMode, setValueModalMode] = useState("add"); // "add" | "edit"
+  const [editingValueId, setEditingValueId] = useState(null);
+  const [valueDraft, setValueDraft] = useState({ title: "", pillar: "", description: "" });
+  const [valueSaving, setValueSaving] = useState(false);
+
+  // Certifications (admin registry)
+  const [certificationCatalog, setCertificationCatalog] = useState(() => {
+    const { items } = loadCertificationCatalogFromStorage();
+    return Array.isArray(items) ? items : [];
+  });
+
+  const [toast, setToast] = useState(null); // { title: string, message?: string }
+  const toastTimerRef = useRef(null);
+
+  function showToast(nextToast) {
+    setToast(nextToast);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
+  }
+
+  function openKpiModal() {
+    setKpiModalMode("add");
+    setEditingKpiId(null);
+    setKpiDraft({ title: "", stream: "", band: "", weight: "" });
+    setShowKPIModal(true);
+  }
+
+  function openEditKpiModal(kpi) {
+    if (!kpi) return;
+    setKpiModalMode("edit");
+    setEditingKpiId(kpi.id);
+    setKpiDraft({
+      title: String(kpi.title ?? ""),
+      stream: String(kpi.stream ?? ""),
+      band: String(kpi.band ?? ""),
+      weight: String(kpi.weight ?? ""),
+    });
+    setShowKPIModal(true);
+  }
+
+  function closeKpiModal() {
+    if (kpiSaving) return;
+    setShowKPIModal(false);
+  }
+
+  function openValueModal() {
+    setValueModalMode("add");
+    setEditingValueId(null);
+    setValueDraft({ title: "", pillar: "", description: "" });
+    setShowValueModal(true);
+  }
+
+  function openEditValueModal(v) {
+    if (!v) return;
+    setValueModalMode("edit");
+    setEditingValueId(v.id);
+    setValueDraft({
+      title: String(v.title ?? ""),
+      pillar: String(v.pillar ?? ""),
+      description: String(v.description ?? ""),
+    });
+    setShowValueModal(true);
+  }
+
+  function closeValueModal() {
+    if (valueSaving) return;
+    setShowValueModal(false);
+  }
+
+  async function submitValue(e) {
+    e.preventDefault();
+    const payload = {
+      id: editingValueId,
+      title: valueDraft.title.trim(),
+      pillar: valueDraft.pillar.trim(),
+      description: valueDraft.description.trim(),
+    };
+
+    if (!payload.title || !payload.pillar || !payload.description) {
+      showToast({ title: "Missing fields", message: "Fill title, pillar, and description." });
+      return;
+    }
+
+    setValueSaving(true);
+    try {
+      const id = valueModalMode === "edit" ? String(payload.id) : `VAL_${Date.now()}`;
+      const next = { id, title: payload.title, pillar: payload.pillar, description: payload.description };
+      setValues((prev) => {
+        const idx = prev.findIndex((x) => String(x.id) === String(id));
+        if (idx === -1) return [next, ...prev];
+        return prev.map((x) => (String(x.id) === String(id) ? next : x));
+      });
+      showToast({ title: valueModalMode === "edit" ? "Value updated" : "Value added", message: next.title });
+      setShowValueModal(false);
+    } finally {
+      setValueSaving(false);
+    }
+  }
+
+  function deleteValue(v) {
+    if (!v) return;
+    const ok = window.confirm(`Delete "${v.title}"?`);
+    if (!ok) return;
+    setValues((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
+    showToast({ title: "Value deleted", message: v.title });
+  }
+
+  async function submitKpi(e) {
+    e.preventDefault();
+    const payload = {
+      id: editingKpiId,
+      title: kpiDraft.title.trim(),
+      stream: kpiDraft.stream.trim(),
+      band: kpiDraft.band.trim(),
+      weight: kpiDraft.weight.trim(),
+    };
+
+    if (!payload.title || !payload.stream || !payload.band || !payload.weight) {
+      showToast({ title: "Missing fields", message: "Fill title, stream, band, and weight." });
+      return;
+    }
+
+    const toPercent = (value) => {
+      const text = String(value ?? "").trim();
+      if (!text) return 0;
+      const numericText = text.endsWith("%") ? text.slice(0, -1).trim() : text;
+      const parsed = Number.parseFloat(numericText);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    // Enforce: per band, total weightage must not exceed 100%.
+    const nextBand = payload.band;
+    const nextWeight = toPercent(payload.weight);
+    const existingSum = kpis
+      .filter((k) => String(k?.band ?? "").trim() === nextBand)
+      .filter((k) => String(k?.id) !== String(payload.id))
+      .reduce((sum, k) => sum + toPercent(k?.weight), 0);
+    const nextTotal = Math.round((existingSum + nextWeight) * 10) / 10;
+    if (nextTotal > 100) {
+      showToast({
+        title: "Invalid weightage",
+        message: `Total for ${nextBand} would be ${nextTotal}%. Keep it within 100%.`,
+      });
+      return;
+    }
+
+    setKpiSaving(true);
+    try {
+      const res =
+        kpiModalMode === "edit"
+          ? await updateKpiDefinition(payload)
+          : await addKpiDefinition(payload);
+      const normalized = normalizeKpiDefinition(res, payload);
+
+      setKpis((prev) => {
+        const idx = prev.findIndex((k) => String(k.id) === String(normalized.id));
+        if (idx === -1) return [normalized, ...prev];
+        return prev.map((k) => (String(k.id) === String(normalized.id) ? normalized : k));
+      });
+
+      showToast({
+        title: kpiModalMode === "edit" ? "KPI updated" : "KPI added",
+        message: normalized.title,
+      });
+      setShowKPIModal(false);
+
+      // Prefer server truth if the backend returns a minimal payload.
+      await reloadKpis().catch(() => {});
+    } catch (err) {
+      showToast({
+        title: kpiModalMode === "edit" ? "Update KPI failed" : "Add KPI failed",
+        message: err?.message || "Please try again.",
+      });
+    } finally {
+      setKpiSaving(false);
+    }
+  }
+
+  const reloadKpis = useCallback(async ({ signal } = {}) => {
+    setKpisError("");
+    setKpisLoading(true);
+    try {
+      const data = await fetchKpiDefinitions({ signal });
+      setKpis(normalizeKpiDefinitions(data));
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      const message = err?.message || "Failed to load KPIs.";
+      setKpisError(message);
+      throw err;
+    } finally {
+      setKpisLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    reloadKpis({ signal: controller.signal }).catch(() => {});
+    return () => controller.abort();
+  }, [reloadKpis]);
 
   // Portal Window state
   const [portalWindow, setPortalWindow] = useState(() => {
-    const now = new Date()
-    const start = new Date(now)
-    start.setHours(9, 0, 0, 0)
-    const end = new Date(now)
-    end.setHours(18, 0, 0, 0)
-    return { start: toLocalInputValue(start), end: toLocalInputValue(end) }
+    const saved = loadPortalWindowFromStorage();
+    if (!saved) return defaultPortalWindow();
+
+    const now = new Date();
+    const start = parseLocalDateTime(saved.start);
+    const end = saved.end ? parseLocalDateTime(saved.end) : null;
+
+    // If it was manually stopped (or looks like it), keep it stopped across refresh.
+    const looksManuallyStopped = Boolean(start && end && end <= start);
+    const wasStopped = saved?.meta?.lastAction === "stop" || looksManuallyStopped;
+
+    // Auto-roll only when the saved window has ended.
+    if (!wasStopped && end && end < now) {
+      return {
+        ...defaultPortalWindow(),
+        meta: { lastAction: "autoroll", updatedAt: Date.now() },
+      };
+    }
+
+    return saved;
   })
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PORTAL_WINDOW_STORAGE_KEY, JSON.stringify(portalWindow));
+      // storage events do not fire in the same tab; this keeps App-level gates in sync immediately.
+      window.dispatchEvent(new Event("rt_tracking_portal_window_changed_v1"));
+    } catch {
+      // ignore storage errors (private mode, quotas, etc)
+    }
+  }, [portalWindow]);
 
   // Employee state (demo)
   const [employees, setEmployees] = useState([
@@ -139,6 +594,180 @@ export default function AdminControlCenter() {
     { id: "EMP003", name: "Charlie Davis", role: "Employee", band: "B8", submitted: false },
     { id: "EMP004", name: "Dana Lee", role: "Manager", band: "B5H", submitted: false },
   ])
+  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [employeesError, setEmployeesError] = useState("");
+
+  const reloadEmployees = useCallback(async ({ signal } = {}) => {
+    setEmployeesError("");
+    setEmployeesLoading(true);
+    try {
+      const data = await fetchEmployees({ signal });
+      const base = normalizeEmployees(data);
+      const extras = loadEmployeeExtras();
+      setEmployees(applyEmployeeExtras(base, extras));
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      const message = err?.message || "Failed to load employees.";
+      setEmployeesError(message);
+      throw err;
+    } finally {
+      setEmployeesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    reloadEmployees({ signal: controller.signal }).catch(() => {});
+    return () => controller.abort();
+  }, [reloadEmployees]);
+
+  useEffect(() => {
+    saveCertificationCatalogToStorage(certificationCatalog);
+  }, [certificationCatalog]);
+
+  const addCertificationToCatalog = useCallback((name) => {
+    const cert = String(name ?? "").trim();
+    if (!cert) return;
+    setCertificationCatalog((prev) => {
+      const key = cert.toLowerCase();
+      const existing = prev.find((c) => String(c?.name ?? "").trim().toLowerCase() === key);
+      if (existing) {
+        // If it exists but was unlisted, relist it.
+        return prev.map((c) =>
+          String(c?.id) === String(existing.id)
+            ? { ...c, name: cert, listed: true, updatedAt: Date.now() }
+            : c
+        );
+      }
+      const next = { id: makeCertificationId(cert), name: cert, listed: true, createdAt: Date.now() };
+      return [next, ...prev];
+    });
+  }, []);
+
+  const editCertificationInCatalog = useCallback((id, nextName) => {
+    const targetId = String(id ?? "").trim();
+    const name = String(nextName ?? "").trim();
+    if (!targetId || !name) return;
+
+    setCertificationCatalog((prev) => {
+      const nextKey = name.toLowerCase();
+      const duplicate = prev.find(
+        (c) =>
+          String(c?.id) !== targetId &&
+          String(c?.name ?? "").trim().toLowerCase() === nextKey
+      );
+      if (duplicate) return prev;
+
+      return prev.map((c) =>
+        String(c?.id) === targetId ? { ...c, name, updatedAt: Date.now() } : c
+      );
+    });
+  }, []);
+
+  const setCertificationListed = useCallback((id, listed) => {
+    const targetId = String(id ?? "").trim();
+    if (!targetId) return;
+    setCertificationCatalog((prev) =>
+      prev.map((c) =>
+        String(c?.id) === targetId ? { ...c, listed: Boolean(listed), updatedAt: Date.now() } : c
+      )
+    );
+  }, []);
+
+  const deleteCertificationFromCatalog = useCallback((id) => {
+    const targetId = String(id ?? "").trim();
+    if (!targetId) return;
+    setCertificationCatalog((prev) => prev.filter((c) => String(c?.id) !== targetId));
+  }, []);
+
+  const _incrementEmployeeRecognitions = useCallback((employeeId) => {
+    const id = String(employeeId);
+    setEmployees((prev) => {
+      const next = prev.map((e) =>
+        e.id === id ? { ...e, recognitions: Number(e.recognitions || 0) + 1 } : e
+      );
+
+      const extras = loadEmployeeExtras();
+      const current = extras[id] && typeof extras[id] === "object" ? extras[id] : {};
+      saveEmployeeExtras({
+        ...extras,
+        [id]: {
+          ...current,
+          recognitions: (Number(current.recognitions) || 0) + 1,
+          certifications: Array.isArray(current.certifications) ? current.certifications : [],
+        },
+      });
+
+      return next;
+    });
+  }, []);
+
+  const _addEmployeeCertification = useCallback((employeeId, certification) => {
+    const id = String(employeeId);
+    const cert = String(certification || "").trim();
+    if (!cert) return;
+
+    // Enforce: only certifications in the admin registry can be added/completed.
+    const allowed = certificationCatalog.some(
+      (c) =>
+        Boolean(c?.listed) &&
+        String(c?.name ?? "").trim().toLowerCase() === cert.toLowerCase()
+    );
+    if (!allowed) return;
+
+    setEmployees((prev) => {
+      const next = prev.map((e) => {
+        if (e.id !== id) return e;
+        const existing = Array.isArray(e.certifications) ? e.certifications : [];
+        if (existing.some((c) => String(c).toLowerCase() === cert.toLowerCase())) return e;
+        return { ...e, certifications: [cert, ...existing] };
+      });
+
+      const extras = loadEmployeeExtras();
+      const current = extras[id] && typeof extras[id] === "object" ? extras[id] : {};
+      const existing = Array.isArray(current.certifications) ? current.certifications : [];
+      const merged =
+        existing.some((c) => String(c).toLowerCase() === cert.toLowerCase())
+          ? existing
+          : [cert, ...existing];
+      saveEmployeeExtras({
+        ...extras,
+        [id]: {
+          ...current,
+          recognitions: Number(current.recognitions) || 0,
+          certifications: merged,
+        },
+      });
+
+      return next;
+    });
+  }, [certificationCatalog]);
+
+  const account = useMemo(() => {
+    const email = String(auth?.claims?.sub || "").trim() || null;
+    const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
+
+    let name = null;
+    let designation = null;
+    if (email) {
+      const match = employees.find(
+        (e) => String(e?.email || "").trim().toLowerCase() === email.toLowerCase()
+      );
+      if (match?.name) name = match.name;
+      if (match?.designation) designation = match.designation;
+    }
+
+    return { email, role, name: name || email, designation };
+  }, [auth?.claims?.sub, auth?.claims?.role, auth?.role, employees]);
+
+  const currentEmployeeId = useMemo(() => {
+    const email = String(auth?.claims?.sub || "").trim();
+    if (!email) return null;
+    const match = employees.find(
+      (e) => String(e?.email || "").trim().toLowerCase() === email.toLowerCase()
+    );
+    return match?.id ?? null;
+  }, [auth?.claims?.sub, employees]);
 
   // Ability trend (demo)
   const ability6m = useMemo(() => ([
@@ -176,6 +805,8 @@ export default function AdminControlCenter() {
         setIsOpen={setIsSidebarOpen}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        onLogout={onLogout}
+        account={account}
       />
 
       <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'ml-64' : 'ml-20'} p-6 lg:p-12`}>
@@ -185,8 +816,21 @@ export default function AdminControlCenter() {
             setPortalWindow={setPortalWindow}
             employees={employees}
             setEmployees={setEmployees}
+            reloadEmployees={reloadEmployees}
+            employeesLoading={employeesLoading}
+            employeesError={employeesError}
             ability6m={ability6m}
             onGenerateReport={generateReport}
+          />
+        )}
+
+        {activeTab === "certifications" && (
+          <Certifications
+            certificationCatalog={certificationCatalog}
+            onAddCertificationToCatalog={addCertificationToCatalog}
+            onEditCertificationInCatalog={editCertificationInCatalog}
+            onSetCertificationListed={setCertificationListed}
+            onDeleteCertificationFromCatalog={deleteCertificationFromCatalog}
           />
         )}
 
@@ -194,6 +838,10 @@ export default function AdminControlCenter() {
           <EmployeeDirectory
             employees={employees}
             setEmployees={setEmployees}
+            reloadEmployees={reloadEmployees}
+            employeesLoading={employeesLoading}
+            employeesError={employeesError}
+            currentEmployeeId={currentEmployeeId}
           />
         )}
 
@@ -202,30 +850,241 @@ export default function AdminControlCenter() {
             kpis={kpis}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
-            onAddKpi={() => setShowKPIModal(true)}
+            onAddKpi={openKpiModal}
+            onEditKpi={openEditKpiModal}
+            loading={kpisLoading}
+            error={kpisError}
+            onReload={() => reloadKpis().catch(() => {})}
           />
         )}
+
+        {activeTab === "values" && (
+          <WebknotValueDirectory
+            values={values}
+            searchQuery={valuesSearchQuery}
+            setSearchQuery={setValuesSearchQuery}
+            onAddValue={openValueModal}
+            onEditValue={openEditValueModal}
+            onDeleteValue={deleteValue}
+          />
+        )}
+
+        {activeTab === "agents" && isAdmin ? <AIAgentsConfig /> : null}
 
         {activeTab === "settings" && <SettingsPanel />}
       </main>
 
-      {/* KPI Modal hook (placeholder) */}
+      {/* KPI Modal */}
       {showKPIModal ? (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
           <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
             <div className="flex items-center justify-between">
-              <h3 className="font-black uppercase tracking-tight">Add KPI (placeholder)</h3>
+              <div>
+                <h3 className="font-black uppercase tracking-tight">
+                  {kpiModalMode === "edit" ? "Edit KPI" : "Add KPI"}
+                </h3>
+                <p className="text-gray-500 text-sm mt-1">
+                  {kpiModalMode === "edit" ? (
+                    <span>
+                      Updating <span className="font-mono">{String(editingKpiId ?? "")}</span>
+                    </span>
+                  ) : (
+                    "Creates a new KPI definition."
+                  )}
+                </p>
+              </div>
               <button
-                onClick={() => setShowKPIModal(false)}
+                onClick={closeKpiModal}
                 className="p-2 rounded-xl hover:bg-white/5"
                 aria-label="Close"
               >
-                ✕
+                <X size={18} />
               </button>
             </div>
-            <p className="text-gray-500 text-sm mt-3">
-              Next: build a real form + connect it to your backend.
-            </p>
+
+            <form onSubmit={submitKpi} className="mt-6 space-y-4">
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  Objective *
+                </label>
+                <input
+                  value={kpiDraft.title}
+                  onChange={(e) => setKpiDraft((d) => ({ ...d, title: e.target.value }))}
+                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  placeholder="e.g., Technical Velocity"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                    Stream *
+                  </label>
+                  <input
+                    value={kpiDraft.stream}
+                    onChange={(e) => setKpiDraft((d) => ({ ...d, stream: e.target.value }))}
+                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    placeholder="e.g., Engineering"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                    Band *
+                  </label>
+                  <input
+                    value={kpiDraft.band}
+                    onChange={(e) => setKpiDraft((d) => ({ ...d, band: e.target.value }))}
+                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    placeholder="e.g., B5L"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  Weight *
+                </label>
+                <input
+                  value={kpiDraft.weight}
+                  onChange={(e) => setKpiDraft((d) => ({ ...d, weight: e.target.value }))}
+                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  placeholder="e.g., 30%"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeKpiModal}
+                  disabled={kpiSaving}
+                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={kpiSaving}
+                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {kpiSaving ? "Saving…" : (kpiModalMode === "edit" ? "Save Changes" : "Add KPI")}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Values Modal */}
+      {showValueModal ? (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
+          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-black uppercase tracking-tight">
+                  {valueModalMode === "edit" ? "Edit Value" : "Add Value"}
+                </h3>
+                <p className="text-gray-500 text-sm mt-1">
+                  {valueModalMode === "edit" ? (
+                    <span>
+                      Updating <span className="font-mono">{String(editingValueId ?? "")}</span>
+                    </span>
+                  ) : (
+                    "Creates a new Webknot value."
+                  )}
+                </p>
+              </div>
+              <button
+                onClick={closeValueModal}
+                className="p-2 rounded-xl hover:bg-white/5"
+                aria-label="Close"
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={submitValue} className="mt-6 space-y-4">
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  Value *
+                </label>
+                <input
+                  value={valueDraft.title}
+                  onChange={(e) => setValueDraft((d) => ({ ...d, title: e.target.value }))}
+                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  placeholder="e.g., Own The Outcome"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  Pillar *
+                </label>
+                <input
+                  value={valueDraft.pillar}
+                  onChange={(e) => setValueDraft((d) => ({ ...d, pillar: e.target.value }))}
+                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  placeholder="e.g., Ownership"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  Description *
+                </label>
+                <textarea
+                  value={valueDraft.description}
+                  onChange={(e) => setValueDraft((d) => ({ ...d, description: e.target.value }))}
+                  rows={4}
+                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all resize-none"
+                  placeholder="Write a short definition of the value..."
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeValueModal}
+                  disabled={valueSaving}
+                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={valueSaving}
+                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {valueSaving ? "Saving…" : (valueModalMode === "edit" ? "Save Changes" : "Add Value")}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Purple toast (top-right) */}
+      {toast ? (
+        <div className="fixed top-6 right-6 z-[80]">
+          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-purple-600 px-4 py-3 shadow-2xl text-white">
+            <div className="mt-0.5 text-white">
+              <CheckCircle2 size={18} />
+            </div>
+            <div className="min-w-[220px]">
+              <div className="text-sm font-black">{toast.title}</div>
+              {toast.message ? (
+                <div className="text-xs text-white/90 mt-1">{toast.message}</div>
+              ) : null}
+            </div>
+            <button
+              onClick={() => setToast(null)}
+              className="ml-2 rounded-xl p-1 text-white/90 hover:bg-white/10 hover:text-white transition"
+              aria-label="Dismiss notification"
+              title="Dismiss"
+            >
+              <X size={16} />
+            </button>
           </div>
         </div>
       ) : null}

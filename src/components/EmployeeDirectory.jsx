@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   Search,
   Trash2,
@@ -6,47 +6,80 @@ import {
   Edit3,
   X,
   CheckCircle2,
-  RefreshCw,
   Plus
 } from "lucide-react";
 
-function nextBand(band) {
-    const ladder = ["B1", "B2", "B3", "B4", "B5L", "B5H", "B6L", "B6H", "B7", "B8", "B9"];
-    const idx = ladder.indexOf(band);
-    if (idx < 0) return band;
-    return ladder[Math.min(idx + 1, ladder.length - 1)];
+import { addEmployee, promoteEmployee as promoteEmployeeApi } from "../api/employees.js";
+
+function computeNextEmployeeId(employees) {
+  let maxEmp = -1;
+  let empWidth = 3;
+  let maxNumeric = -1;
+
+  for (const e of employees) {
+    const id = String(e?.id ?? "").trim();
+    if (!id) continue;
+
+    const empMatch = /^EMP(\d+)$/i.exec(id);
+    if (empMatch) {
+      const num = Number.parseInt(empMatch[1], 10);
+      if (Number.isFinite(num) && num > maxEmp) {
+        maxEmp = num;
+        empWidth = Math.max(empWidth, empMatch[1].length);
+      }
+      continue;
+    }
+
+    const numericMatch = /^\d+$/.exec(id);
+    if (numericMatch) {
+      const num = Number.parseInt(id, 10);
+      if (Number.isFinite(num) && num > maxNumeric) maxNumeric = num;
+    }
+  }
+
+  if (maxEmp >= 0) return `EMP${String(maxEmp + 1).padStart(empWidth, "0")}`;
+  if (maxNumeric >= 0) return String(maxNumeric + 1);
+  return "EMP001";
 }
 
-function normalizeEmployees(data) {
-  const arr = Array.isArray(data)
-    ? data
-    : Array.isArray(data?.data)
-      ? data.data
-      : [];
-
-  return arr.map((e, i) => ({
-    id: String(e.employeeId ?? e.id ?? e.empId ?? `EMP_${i}`),
-    name: String(e.employeeName ?? e.name ?? e.fullName ?? "Unknown"),
-    role: String(e.empRole ?? e.role ?? e.userRole ?? "Employee"),
-    designation: String(e.designation ?? e.title ?? e.jobTitle ?? e.empRole ?? ""),
-    band: String(e.band ?? e.level ?? "B4"),
-
-    // keep if you need it later; otherwise remove
-    submitted: Boolean(e.submitted ?? e.hasSubmitted ?? false),
-  }));
+function buildOptionStats(employees, key, { emptyLabel = "Unassigned" } = {}) {
+  const map = new Map(); // value -> { count }
+  for (const emp of employees) {
+    const raw = emp?.[key];
+    const value = String(raw ?? "").trim() || emptyLabel;
+    const prev = map.get(value) || { count: 0 };
+    prev.count += 1;
+    map.set(value, prev);
+  }
+  return Array.from(map.entries())
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+    .map(([value, stats]) => ({ value, count: stats.count }));
 }
 
-export default function EmployeeDirectory({ employees, setEmployees }) {
+export default function EmployeeDirectory({
+  employees,
+  setEmployees,
+  reloadEmployees,
+  employeesLoading,
+  employeesError,
+  currentEmployeeId,
+}) {
   const [query, setQuery] = useState("");
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState([]); // string[]
+  const [roleFilter, setRoleFilter] = useState("all"); // "all" | role value
+  const [designationFilter, setDesignationFilter] = useState("all"); // "all" | designation value
+  const [bandFilter, setBandFilter] = useState("all"); // "all" | band value
 
   const [toast, setToast] = useState(null); // { title: string, message?: string }
   const toastTimerRef = useRef(null);
 
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState("");
+  const [mutating, setMutating] = useState(false);
+  const [promotingId, setPromotingId] = useState(null);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [addDraft, setAddDraft] = useState({
+    employeeId: "",
+    useNextEmployeeId: false,
     employeeName: "",
     email: "",
     empRole: "Employee",
@@ -62,45 +95,15 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }
 
-  async function loadEmployees(signal) {
-    setLoadError("");
-    setLoading(true);
-
+  async function safeReloadEmployees() {
+    if (!reloadEmployees) return false;
     try {
-      const res = await fetch("/employees/getall", { signal });
-      if (!res.ok) throw new Error(`Request failed: ${res.status} ${res.statusText}`);
-
-      const data = await res.json();
-      setEmployees(normalizeEmployees(data));
-    } catch (err) {
-      if (err?.name === "AbortError") return;
-      setLoadError(err?.message || "Failed to load employees.");
-    } finally {
-      setLoading(false);
+      await reloadEmployees();
+      return true;
+    } catch {
+      return false;
     }
   }
-
-  async function addEmployeeOnServer(payload) {
-    const res = await fetch("/employees/add", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(text || `Add failed: ${res.status} ${res.statusText}`);
-    }
-
-    // backend may return the created employee; we don't rely on it
-    return true;
-  }
-
-  useEffect(() => {
-    const controller = new AbortController();
-    loadEmployees(controller.signal);
-    return () => controller.abort();
-  }, []);
 
   const [editingEmployeeId, setEditingEmployeeId] = useState(null);
   const editingEmployee = useMemo(
@@ -117,47 +120,121 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return employees;
-    return employees.filter((e) =>
-      e.name.toLowerCase().includes(q) ||
-      e.id.toLowerCase().includes(q) ||
-      e.role.toLowerCase().includes(q) ||
-      e.band.toLowerCase().includes(q) ||
-      (e.designation ?? "").toLowerCase().includes(q)
-    );
-  }, [employees, query]);
+
+    return employees.filter((e) => {
+      const matchesText = !q
+        ? true
+        : e.name.toLowerCase().includes(q) ||
+          e.id.toLowerCase().includes(q) ||
+          e.role.toLowerCase().includes(q) ||
+          e.band.toLowerCase().includes(q) ||
+          (e.designation ?? "").toLowerCase().includes(q);
+
+      const roleValue = String(e.role ?? "").trim() || "Unassigned";
+      const designationValue = String(e.designation ?? "").trim() || "Unassigned";
+      const bandValue = String(e.band ?? "").trim() || "Unassigned";
+
+      const roleOk = roleFilter === "all" ? true : roleValue === roleFilter;
+      const designationOk = designationFilter === "all" ? true : designationValue === designationFilter;
+      const bandOk = bandFilter === "all" ? true : bandValue === bandFilter;
+
+      return matchesText && roleOk && designationOk && bandOk;
+    });
+  }, [employees, query, roleFilter, designationFilter, bandFilter]);
+
+  const isSelf = useCallback(
+    (emp) => Boolean(currentEmployeeId) && String(emp?.id) === String(currentEmployeeId),
+    [currentEmployeeId]
+  );
+
+  const selectedIdSet = useMemo(() => new Set(selectedEmployeeIds), [selectedEmployeeIds]);
+  const filteredIdSet = useMemo(() => new Set(filtered.map((e) => e.id)), [filtered]);
+  const allFilteredSelected = useMemo(() => {
+    if (filtered.length === 0) return false;
+    for (const emp of filtered) {
+      if (isSelf(emp)) continue;
+      if (!selectedIdSet.has(emp.id)) return false;
+    }
+    return true;
+  }, [filtered, isSelf, selectedIdSet]);
+
+  const deletableSelectedCount = useMemo(() => {
+    if (!currentEmployeeId) return selectedEmployeeIds.length;
+    return selectedEmployeeIds.filter((id) => String(id) !== String(currentEmployeeId)).length;
+  }, [selectedEmployeeIds, currentEmployeeId]);
+
+  const nextEmployeeId = useMemo(() => computeNextEmployeeId(employees), [employees]);
+  const roleOptions = useMemo(() => buildOptionStats(employees, "role"), [employees]);
+  const designationOptions = useMemo(
+    () => buildOptionStats(employees, "designation"),
+    [employees]
+  );
+  const bandOptions = useMemo(() => buildOptionStats(employees, "band"), [employees]);
 
   async function promoteEmployee(employeeId) {
     const emp = employees.find((e) => e.id === employeeId);
     if (!emp) return;
-
-    const from = emp.band;
-    const to = nextBand(emp.band);
-
-    if (to === from) {
-      showToast({
-        title: "Promotion not possible",
-        message: `${emp.name} is already at the highest configured band (${from}).`,
-      });
-      return;
+    setPromotingId(employeeId);
+    try {
+      await promoteEmployeeApi(employeeId);
+      await safeReloadEmployees();
+      showToast({ title: "Promotion applied", message: `${emp.name} promoted successfully.` });
+    } catch (err) {
+      showToast({ title: "Promotion failed", message: err?.message || "Please try again." });
+    } finally {
+      setPromotingId(null);
     }
-
-    // NOTE: you told us add endpoint only. When you confirm promote endpoint,
-    // we’ll write promotion to DB too. For now it stays local.
-    setEmployees((prev) =>
-      prev.map((e) => (e.id === employeeId ? { ...e, band: to } : e))
-    );
-
-    showToast({
-      title: "Promotion applied",
-      message: `${emp.name}: ${from} → ${to}`,
-    });
   }
 
   function removeEmployee(employeeId) {
+    if (currentEmployeeId && String(employeeId) === String(currentEmployeeId)) {
+      showToast({ title: "Not allowed", message: "You can't delete your own user." });
+      return;
+    }
     // NOTE: same as above—needs a backend delete endpoint to persist.
+    setSelectedEmployeeIds((prev) => prev.filter((id) => id !== employeeId));
     setEmployees((prev) => prev.filter((e) => e.id !== employeeId));
     showToast({ title: "Employee removed", message: `Removed ${employeeId}` });
+  }
+
+  function toggleRowSelected(employeeId) {
+    setSelectedEmployeeIds((prev) => {
+      const set = new Set(prev);
+      if (set.has(employeeId)) set.delete(employeeId);
+      else set.add(employeeId);
+      return Array.from(set);
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedEmployeeIds((prev) => {
+      const set = new Set(prev);
+      const shouldSelectAll = !allFilteredSelected;
+      if (shouldSelectAll) {
+        for (const emp of filtered) {
+          if (isSelf(emp)) continue;
+          set.add(emp.id);
+        }
+      } else {
+        for (const emp of filtered) set.delete(emp.id);
+      }
+      return Array.from(set);
+    });
+  }
+
+  function deleteSelected() {
+    const ids = selectedEmployeeIds
+      .filter((id) => filteredIdSet.has(id) || employees.some((e) => e.id === id))
+      .filter((id) => !currentEmployeeId || String(id) !== String(currentEmployeeId));
+    if (ids.length === 0) return;
+
+    const ok = window.confirm(`Delete ${ids.length} employee(s)? This currently removes them from the UI only.`);
+    if (!ok) return;
+
+    const idSet = new Set(ids);
+    setEmployees((prev) => prev.filter((e) => !idSet.has(e.id)));
+    setSelectedEmployeeIds((prev) => prev.filter((id) => !idSet.has(id)));
+    showToast({ title: "Employees removed", message: `Removed ${ids.length} employee(s).` });
   }
 
   function openEdit(emp) {
@@ -198,6 +275,8 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
 
   function openAdd() {
     setAddDraft({
+      employeeId: "",
+      useNextEmployeeId: false,
       employeeName: "",
       email: "",
       empRole: "Employee",
@@ -216,7 +295,9 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
   async function submitAdd(e) {
     e.preventDefault();
 
+    const employeeIdValue = (addDraft.useNextEmployeeId ? nextEmployeeId : addDraft.employeeId).trim();
     const payload = {
+      ...(employeeIdValue ? { employeeId: employeeIdValue } : {}),
       employeeName: addDraft.employeeName.trim(),
       email: addDraft.email.trim(),
       empRole: addDraft.empRole,
@@ -231,18 +312,28 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
       return;
     }
 
+    if (employeeIdValue) {
+      const exists = employees.some(
+        (emp) => String(emp?.id ?? "").trim().toLowerCase() === employeeIdValue.toLowerCase()
+      );
+      if (exists) {
+        showToast({ title: "Duplicate ID", message: `Employee ID ${employeeIdValue} already exists.` });
+        return;
+      }
+    }
+
     try {
-      setLoading(true);
-      await addEmployeeOnServer(payload);
+      setMutating(true);
+      await addEmployee(payload);
 
       showToast({ title: "Employee added", message: `${payload.employeeName} created successfully.` });
 
       closeAdd();
-      await loadEmployees(); // refresh list
+      await safeReloadEmployees(); // refresh list
     } catch (err) {
       showToast({ title: "Add failed", message: err?.message || "Please try again." });
     } finally {
-      setLoading(false);
+      setMutating(false);
     }
   }
 
@@ -266,23 +357,23 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
           </button>
 
           <button
-            onClick={() => loadEmployees()}
-            disabled={loading}
+            onClick={deleteSelected}
+            disabled={deletableSelectedCount === 0 || mutating}
             className={[
               "inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border transition-all",
-              "border-white/10 text-gray-200 hover:bg-white/5",
-              loading ? "opacity-60 cursor-not-allowed" : "",
+              "border-red-500/20 bg-red-500/10 text-red-200 hover:bg-red-500 hover:text-white",
+              deletableSelectedCount === 0 || mutating ? "opacity-60 cursor-not-allowed" : "",
             ].join(" ")}
-            title="Reload employees"
+            title="Delete selected employees"
           >
-            <RefreshCw size={16} /> {loading ? "Loading…" : "Refresh"}
+            <Trash2 size={16} /> Delete Selected{deletableSelectedCount ? ` (${deletableSelectedCount})` : ""}
           </button>
         </div>
       </header>
 
-      {loadError ? (
+      {employeesError ? (
         <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
-          Failed to load employees: <span className="font-mono">{loadError}</span>
+          Failed to load employees: <span className="font-mono">{employeesError}</span>
         </div>
       ) : null}
 
@@ -297,10 +388,72 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
         />
       </div>
 
+      {/* Filters (dropdowns) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-5xl">
+        <div>
+          <select
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value)}
+            className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+            title="Filter by role"
+          >
+            <option value="all">All roles</option>
+            {roleOptions.map((opt) => (
+              <option key={`role:${opt.value}`} value={opt.value}>
+                {opt.value} ({opt.count})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <select
+            value={designationFilter}
+            onChange={(e) => setDesignationFilter(e.target.value)}
+            className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+            title="Filter by designation"
+          >
+            <option value="all">All designations</option>
+            {designationOptions.map((opt) => (
+              <option key={`designation:${opt.value}`} value={opt.value}>
+                {opt.value} ({opt.count})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <select
+            value={bandFilter}
+            onChange={(e) => setBandFilter(e.target.value)}
+            className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+            title="Filter by band"
+          >
+            <option value="all">All bands</option>
+            {bandOptions.map((opt) => (
+              <option key={`band:${opt.value}`} value={opt.value}>
+                {opt.value} ({opt.count})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       <div className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
         <table className="w-full text-left">
           <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-b border-white/5">
             <tr>
+              <th className="p-6 font-black w-[64px]">
+                <input
+                  type="checkbox"
+                  checked={allFilteredSelected}
+                  onChange={toggleSelectAllVisible}
+                  disabled={filtered.length === 0 || filtered.every((emp) => isSelf(emp))}
+                  className="h-4 w-4 accent-purple-600"
+                  aria-label="Select all visible employees"
+                  title="Select all visible"
+                />
+              </th>
               <th className="p-6 font-black">Employee</th>
               <th className="p-6 font-black">Role</th>
               <th className="p-6 font-black">Designation</th>
@@ -311,6 +464,17 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
           <tbody className="divide-y divide-white/5">
             {filtered.map((emp) => (
               <tr key={emp.id} className="hover:bg-white/[0.01] transition-colors">
+                <td className="p-6">
+                  <input
+                    type="checkbox"
+                    checked={selectedIdSet.has(emp.id)}
+                    onChange={() => toggleRowSelected(emp.id)}
+                    disabled={isSelf(emp)}
+                    className="h-4 w-4 accent-purple-600"
+                    aria-label={`Select ${emp.name}`}
+                    title="Select"
+                  />
+                </td>
                 <td className="p-6">
                   <div className="font-bold">{emp.name}</div>
                   <div className="text-xs text-gray-500 font-mono mt-1">{emp.id}</div>
@@ -330,6 +494,7 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
 
                     <button
                       onClick={() => promoteEmployee(emp.id)}
+                      disabled={promotingId === emp.id}
                       className="p-2.5 bg-purple-500/10 text-purple-300 hover:bg-purple-500 hover:text-white rounded-xl transition-all border border-purple-500/20"
                       title="Promote"
                     >
@@ -338,6 +503,7 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
 
                     <button
                       onClick={() => removeEmployee(emp.id)}
+                      disabled={isSelf(emp)}
                       className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
                       title="Remove"
                     >
@@ -348,9 +514,9 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
               </tr>
             ))}
 
-            {!loading && filtered.length === 0 ? (
+            {!employeesLoading && filtered.length === 0 ? (
               <tr>
-                <td className="p-10 text-center text-gray-500" colSpan={5}>
+                <td className="p-10 text-center text-gray-500" colSpan={6}>
                   No employees to show.
                 </td>
               </tr>
@@ -403,12 +569,46 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
               </button>
             </div>
 
-            <form onSubmit={submitAdd} className="mt-6 space-y-4">
-              <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-                  Employee Name *
-                </label>
-                <input
+	            <form onSubmit={submitAdd} className="mt-6 space-y-4">
+	              <div>
+	                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+	                  Employee ID
+	                </label>
+	                <input
+	                  value={addDraft.useNextEmployeeId ? nextEmployeeId : addDraft.employeeId}
+	                  onChange={(e) => setAddDraft((d) => ({ ...d, employeeId: e.target.value, useNextEmployeeId: false }))}
+	                  disabled={addDraft.useNextEmployeeId}
+	                  className={[
+	                    "mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all font-mono",
+	                    addDraft.useNextEmployeeId ? "opacity-70 cursor-not-allowed" : "",
+	                  ].join(" ")}
+	                  placeholder={`e.g., ${nextEmployeeId}`}
+	                />
+	
+	                <label className="mt-3 inline-flex items-center gap-3 select-none cursor-pointer">
+	                  <input
+	                    type="checkbox"
+	                    checked={addDraft.useNextEmployeeId}
+	                    onChange={(e) =>
+	                      setAddDraft((d) => ({
+	                        ...d,
+	                        useNextEmployeeId: e.target.checked,
+	                        employeeId: e.target.checked ? nextEmployeeId : "",
+	                      }))
+	                    }
+	                    className="h-4 w-4 accent-purple-600"
+	                  />
+	                  <span className="text-xs text-gray-300">
+	                    Use next available ID (<span className="font-mono">{nextEmployeeId}</span>)
+	                  </span>
+	                </label>
+	              </div>
+
+	              <div>
+	                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+	                  Employee Name *
+	                </label>
+	                <input
                   value={addDraft.employeeName}
                   onChange={(e) => setAddDraft((d) => ({ ...d, employeeName: e.target.value }))}
                   className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
@@ -505,13 +705,13 @@ export default function EmployeeDirectory({ employees, setEmployees }) {
                 </button>
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={employeesLoading || mutating}
                   className={[
                     "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all",
-                    loading ? "opacity-60 cursor-not-allowed" : "",
+                    employeesLoading || mutating ? "opacity-60 cursor-not-allowed" : "",
                   ].join(" ")}
                 >
-                  {loading ? "Adding…" : "Add employee"}
+                  {mutating ? "Adding…" : "Add employee"}
                 </button>
               </div>
             </form>

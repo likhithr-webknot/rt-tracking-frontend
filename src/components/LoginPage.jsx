@@ -1,14 +1,17 @@
 import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion as Motion, AnimatePresence } from "framer-motion";
 import { Eye, EyeOff, Briefcase, Award, TrendingUp as Profit, Headset, Zap, Copy, Check, Activity } from "lucide-react";
+import { getAuth, login, setAuth } from "../api/auth.js";
 
-export default function LoginPage() {
+export default function LoginPage({ onLoginSuccess }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [metricIndex, setMetricIndex] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   const hrEmail = "hr@webknot.in";
   const metrics = [
@@ -28,7 +31,7 @@ export default function LoginPage() {
       setMetricIndex((prev) => (prev + 1) % metrics.length);
     }, 3500);
     return () => clearInterval(timer);
-  }, []);
+  }, [metrics.length]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(hrEmail);
@@ -64,7 +67,24 @@ export default function LoginPage() {
             <h1 className="text-3xl md:text-4xl font-extrabold tracking-tighter">Login</h1>
             <p className="mt-2 text-sm text-gray-500 font-medium">Professional growth starts here.</p>
 
-            <form className="mt-10 md:mt-12 space-y-6 md:space-y-8" onSubmit={(e) => e.preventDefault()}>
+	            <form
+	              className="mt-10 md:mt-12 space-y-6 md:space-y-8"
+	              onSubmit={async (e) => {
+	                e.preventDefault();
+	                if (!canSubmit || submitting) return;
+	                setSubmitError("");
+	                setSubmitting(true);
+	                try {
+	                  const auth = await login({ email: email.trim(), password });
+	                  setAuth(auth);
+	                  onLoginSuccess?.(getAuth() ?? auth);
+	                } catch (err) {
+	                  setSubmitError(err?.message || "Login failed. Please try again.");
+	                } finally {
+	                  setSubmitting(false);
+	                }
+	              }}
+	            >
               <div className="space-y-1.5 md:space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Corporate Email</label>
                 <input
@@ -92,14 +112,20 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              <button
-                  disabled={!canSubmit}
-                  className="w-full rounded-xl bg-purple-600 py-3 md:py-4 font-black uppercase text-white hover:bg-purple-500 disabled:opacity-20 active:scale-95 transition-all shadow-lg text-sm md:text-base"
-              >
-                Sign In
-              </button>
-            </form>
-          </div>
+	              <button
+	                  disabled={!canSubmit || submitting}
+	                  className="w-full rounded-xl bg-purple-600 py-3 md:py-4 font-black uppercase text-white hover:bg-purple-500 disabled:opacity-20 active:scale-95 transition-all shadow-lg text-sm md:text-base"
+	              >
+	                {submitting ? "Signing In…" : "Sign In"}
+	              </button>
+	
+	              {submitError ? (
+	                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+	                  {submitError}
+	                </div>
+	              ) : null}
+	            </form>
+	          </div>
 
           <div className="flex justify-between items-center text-[10px] text-gray-700 font-bold uppercase tracking-widest">
             <span>© 2026 Webknot</span>
@@ -115,13 +141,13 @@ export default function LoginPage() {
           <div className="absolute h-[50vw] w-[50vw] bg-white/10 rounded-full blur-[120px] animate-pulse" />
 
           <div className="relative z-10 w-full max-w-4xl text-center px-4">
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
+            <Motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/20 text-[10px] font-bold text-white mb-4 uppercase tracking-widest">
                 <Activity size={12} className="text-emerald-400" /> System Synchronized
               </div>
               <h2 className="text-[4rem] lg:text-[6rem] font-black text-white leading-tight tracking-tighter">PRECISION</h2>
               <h2 className="text-[4rem] lg:text-[6rem] font-black text-white/40 leading-[0.5] tracking-tighter">TRACKING</h2>
-            </motion.div>
+            </Motion.div>
 
             <div className="relative flex justify-center items-center w-full max-h-[500px]">
               {/* ViewBox based SVG for perfect screen fit */}
@@ -140,13 +166,13 @@ export default function LoginPage() {
 
                   return (
                       <g key={`vis-${i}`}>
-                        <motion.rect
+                        <Motion.rect
                             x={x} width={barWidth} rx="4" fill="url(#barGrad)" stroke="rgba(255,255,255,0.15)"
                             animate={{ height: [h, h + 20, h], y: [chartBaseY - h, chartBaseY - (h + 20), chartBaseY - h] }}
                             transition={bounceTransition(i)}
                         />
                         {nextH !== undefined && (
-                            <motion.line
+                            <Motion.line
                                 stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="4 4"
                                 animate={{
                                   x1: x + barWidth / 2, y1: [chartBaseY - h, chartBaseY - (h + 20), chartBaseY - h],
@@ -155,7 +181,7 @@ export default function LoginPage() {
                                 transition={bounceTransition(i)}
                             />
                         )}
-                        <motion.circle
+                        <Motion.circle
                             cx={x + barWidth / 2} r="4" fill="white" style={{ filter: "drop-shadow(0 0 8px #fff)" }}
                             animate={{ cy: [chartBaseY - h, chartBaseY - (h + 20), chartBaseY - h], scale: [1, 1.2, 1] }}
                             transition={bounceTransition(i)}
@@ -167,7 +193,7 @@ export default function LoginPage() {
 
               {/* Metric Card - Percentage positioned */}
               <AnimatePresence mode="wait">
-                <motion.div
+                <Motion.div
                     key={metricIndex}
                     initial={{ x: 20, opacity: 0 }}
                     animate={{ x: 0, opacity: 1, y: [0, -10, 0] }}
@@ -184,7 +210,7 @@ export default function LoginPage() {
                       <p className="text-xl lg:text-2xl font-black tracking-tighter whitespace-nowrap">{metrics[metricIndex].value}</p>
                     </div>
                   </div>
-                </motion.div>
+                </Motion.div>
               </AnimatePresence>
             </div>
           </div>
@@ -194,8 +220,8 @@ export default function LoginPage() {
         <AnimatePresence>
           {showAdminModal && (
               <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAdminModal(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-                <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-sm rounded-[2.5rem] bg-[#121212] border border-white/10 p-10 shadow-2xl">
+                <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAdminModal(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
+                <Motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-sm rounded-[2.5rem] bg-[#121212] border border-white/10 p-10 shadow-2xl">
                   <h3 className="text-2xl font-bold text-white tracking-tight">Support</h3>
                   <p className="mt-4 text-gray-400 text-sm">Talent Desk Assistance:</p>
                   <div className="mt-6 flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10 overflow-hidden">
@@ -205,7 +231,7 @@ export default function LoginPage() {
                     </button>
                   </div>
                   <button onClick={() => setShowAdminModal(false)} className="mt-10 w-full py-4 bg-white text-black font-black rounded-xl uppercase tracking-widest active:scale-95 transition-all">Close</button>
-                </motion.div>
+                </Motion.div>
               </div>
           )}
         </AnimatePresence>

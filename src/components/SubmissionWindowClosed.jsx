@@ -1,0 +1,116 @@
+import React, { useMemo } from "react";
+import { Calendar, Clock, Lock, ShieldAlert } from "lucide-react";
+
+function parseLocalDateTime(value) {
+  const v = String(value ?? "").trim();
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatLocal(date) {
+  if (!date) return "—";
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  } catch {
+    return String(date);
+  }
+}
+
+export default function SubmissionWindowClosed({ portalWindow }) {
+  const now = useMemo(() => new Date(), []);
+  const monthLabel = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(now);
+    } catch {
+      return "this month";
+    }
+  }, [now]);
+
+  const start = parseLocalDateTime(portalWindow?.start);
+  const end = parseLocalDateTime(portalWindow?.end);
+
+  return (
+    <div className="min-h-screen bg-[#080808] text-slate-100 font-sans overflow-x-hidden">
+      <div className="max-w-4xl mx-auto px-6 lg:px-12 py-12 lg:py-20">
+        <div className="relative overflow-hidden rounded-[2.5rem] border border-white/10 bg-[#111] shadow-2xl">
+          <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: "radial-gradient(circle at 20% 20%, #a855f7 0, transparent 55%), radial-gradient(circle at 90% 30%, #22c55e 0, transparent 60%)" }} />
+          <div className="relative p-8 sm:p-12">
+            <div className="flex items-start justify-between gap-6 flex-wrap">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-gray-300">
+                  <Lock size={14} className="text-purple-300" /> Submissions Locked
+                </div>
+                <h1 className="mt-4 text-4xl sm:text-5xl font-black uppercase tracking-tighter italic">
+                  Submission Window Closed
+                </h1>
+                <p className="mt-3 text-gray-400">
+                  Submissions are closed for <span className="text-gray-200 font-bold">{monthLabel}</span>.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 min-w-[280px]">
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+                  <Calendar size={14} className="text-gray-400" /> Window Schedule
+                </div>
+                <div className="mt-3 space-y-2 text-sm">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-gray-500">Opens</span>
+                    <span className="font-mono text-gray-200">{formatLocal(start)}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-gray-500">Closes</span>
+                    <span className="font-mono text-gray-200">{portalWindow?.end ? formatLocal(end) : "—"}</span>
+                  </div>
+                </div>
+                <div className="mt-4 text-xs text-gray-500 flex items-center gap-2">
+                  <Clock size={14} className="text-gray-400" />
+                  Check back when the window opens.
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+                  What You Can Do
+                </div>
+                <ul className="mt-3 text-sm text-gray-300 space-y-2">
+                  <li>Prepare your self review and collect certification proofs.</li>
+                  <li>When the window opens, submit in one go.</li>
+                  <li>If this looks incorrect, contact support.</li>
+                </ul>
+              </div>
+
+              <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-6">
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-amber-200">
+                  <ShieldAlert size={14} /> Support
+                </div>
+                <div className="mt-3 text-sm text-amber-100">
+                  If you believe the window should be open, please contact:
+                </div>
+                <div className="mt-2 text-sm font-mono text-amber-100">
+                  hr@webknot.in
+                </div>
+                <div className="mt-4 text-xs text-amber-200/80">
+                  Note: monthly and 6-month aggregations will be handled automatically once the backend workflow is wired.
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-10 text-xs text-gray-600">
+              This gate currently uses the locally stored submission window state.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+

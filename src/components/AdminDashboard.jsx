@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
-import { ArrowUpCircle, Calendar, Clock, Download, Power, Trash2, Users } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUpCircle, Calendar, CheckCircle2, Clock, Download, Play, Power, Square, Trash2, Users, X } from "lucide-react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -10,16 +10,21 @@ import {
   Tooltip
 } from "recharts";
 
+import { promoteEmployee as promoteEmployeeApi } from "../api/employees.js";
+
 function parseLocalInputValue(value) {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function nextBand(band) {
-  const ladder = ["B1", "B2", "B3", "B4", "B5L", "B5H", "B6L", "B6H", "B7", "B8", "B9"];
-  const idx = ladder.indexOf(band);
-  if (idx < 0) return band;
-  return ladder[Math.min(idx + 1, ladder.length - 1)];
+function toLocalInputValue(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  const mm = pad(date.getMonth() + 1);
+  const dd = pad(date.getDate());
+  const hh = pad(date.getHours());
+  const min = pad(date.getMinutes());
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
 }
 
 function StatCard({ label, value, icon }) {
@@ -37,16 +42,40 @@ export default function AdminDashboard({
   setPortalWindow,
   employees,
   setEmployees,
+  reloadEmployees,
+  employeesLoading,
+  employeesError,
   ability6m,
   onGenerateReport,
 }) {
+  const [toast, setToast] = useState(null); // { title: string, message?: string }
+  const toastTimerRef = useRef(null);
+  const [promotingId, setPromotingId] = useState(null);
+  const [now, setNow] = useState(() => new Date());
+
+  function showToast(nextToast) {
+    setToast(nextToast);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
+  }
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 15000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const portalIsOpenNow = useMemo(() => {
     const start = parseLocalInputValue(portalWindow.start);
-    const end = parseLocalInputValue(portalWindow.end);
-    if (!start || !end) return false;
-    const now = new Date();
-    return now >= start && now <= end;
-  }, [portalWindow.start, portalWindow.end]);
+    if (!start) return false;
+
+    const endRaw = String(portalWindow.end ?? "").trim();
+    const end = endRaw ? parseLocalInputValue(endRaw) : null;
+    if (endRaw && !end) return false;
+
+    if (now < start) return false;
+    if (!end) return true; // indefinite window
+    return now <= end;
+  }, [portalWindow.start, portalWindow.end, now]);
 
   const stats = useMemo(() => {
     const totalEmployees = employees.length;
@@ -66,10 +95,20 @@ export default function AdminDashboard({
     };
   }, [employees, ability6m]);
 
-  function promoteEmployee(employeeId) {
-    setEmployees(prev =>
-      prev.map(e => (e.id === employeeId ? { ...e, band: nextBand(e.band) } : e))
-    );
+  async function promoteEmployee(employeeId) {
+    const emp = employees.find((e) => e.id === employeeId);
+    if (!emp) return;
+
+    setPromotingId(employeeId);
+    try {
+      await promoteEmployeeApi(employeeId);
+      await reloadEmployees?.();
+      showToast({ title: "Promotion applied", message: `${emp.name} promoted successfully.` });
+    } catch (err) {
+      showToast({ title: "Promotion failed", message: err?.message || "Please try again." });
+    } finally {
+      setPromotingId(null);
+    }
   }
 
   function removeEmployee(employeeId) {
@@ -99,15 +138,15 @@ export default function AdminDashboard({
         </button>
       </header>
 
-      {/* Submission window */}
-      <section className="bg-[#111] p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
+	      {/* Submission window */}
+	      <section className="bg-[#111] p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <Calendar className="text-purple-400" size={22} />
-            <div>
-              <h3 className="font-black uppercase tracking-tight">Submission Window</h3>
-              <p className="text-gray-500 text-sm mt-1">
-                Set when employees can access the portal.
+	          <div className="flex items-center gap-3">
+	            <Calendar className="text-white" size={22} />
+	            <div>
+	              <h3 className="font-black uppercase tracking-tight">Submission Window</h3>
+	              <p className="text-gray-500 text-sm mt-1">
+	                Set when employees can access the portal.
               </p>
             </div>
           </div>
@@ -120,47 +159,132 @@ export default function AdminDashboard({
           </div>
         </div>
 
-        <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-              Open at
+	        <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
+	          <div className="space-y-2">
+	            <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+	              Open at
             </label>
             <div className="relative">
               <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-              <input
-                type="datetime-local"
-                value={portalWindow.start}
-                onChange={(e) => setPortalWindow(prev => ({ ...prev, start: e.target.value }))}
-                className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
-              />
+	              <input
+	                type="datetime-local"
+	                value={portalWindow.start}
+	                onChange={(e) =>
+	                  setPortalWindow((prev) => ({
+	                    ...prev,
+	                    start: e.target.value,
+	                    meta: { ...(prev.meta ?? {}), lastAction: "manual", updatedAt: Date.now() },
+	                  }))
+	                }
+	                className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
+	              />
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-              Close at
-            </label>
-            <div className="relative">
-              <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-              <input
-                type="datetime-local"
-                value={portalWindow.end}
-                onChange={(e) => setPortalWindow(prev => ({ ...prev, end: e.target.value }))}
-                className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
-              />
-            </div>
-          </div>
+	          <div className="space-y-2">
+	            <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+	              Close at (optional)
+	            </label>
+	            <div className="relative">
+	              <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+		              <input
+		                type="datetime-local"
+		                value={portalWindow.end}
+		                onChange={(e) =>
+		                  setPortalWindow((prev) => ({
+		                    ...prev,
+		                    end: e.target.value,
+		                    meta: { ...(prev.meta ?? {}), lastAction: "manual", updatedAt: Date.now() },
+		                  }))
+		                }
+		                className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
+		                placeholder="Leave blank to keep open"
+		              />
+	            </div>
+	          </div>
 
-          <div className="flex items-end">
-            <button
-              onClick={() => alert("Saved window (demo). Connect this to your backend next.")}
-              className="w-full bg-purple-600 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-purple-500 shadow-xl shadow-purple-900/20 transition-all"
-            >
-              Save window
-            </button>
-          </div>
-        </div>
-      </section>
+			          <div className="flex items-end">
+			            <div className="w-full space-y-4">
+			              <button
+			                onClick={() => {
+			                  if (portalIsOpenNow) {
+			                    const clickedAt = new Date();
+			                    const past = new Date(clickedAt);
+			                    past.setMinutes(past.getMinutes() - 1);
+			                    setPortalWindow((prev) => ({
+			                      ...prev,
+			                      start: toLocalInputValue(past),
+			                      end: toLocalInputValue(past),
+			                      meta: { ...(prev.meta ?? {}), lastAction: "stop", updatedAt: Date.now() },
+			                    }));
+			                    showToast({ title: "Window stopped", message: "Submission window is now closed." });
+			                    return;
+			                  }
+
+			                  const clickedAt = new Date();
+			                  setPortalWindow((prev) => ({
+			                    ...prev,
+			                    start: toLocalInputValue(clickedAt),
+			                    end: "",
+			                    meta: { ...(prev.meta ?? {}), lastAction: "start", updatedAt: Date.now() },
+			                  }));
+			                  showToast({ title: "Window started", message: "Submission window is now open." });
+			                }}
+			                className={[
+			                  "w-full px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all grid place-items-center",
+			                  portalIsOpenNow
+			                    ? "bg-red-500/10 text-red-200 hover:bg-red-500 hover:text-white shadow-xl shadow-red-900/20 border border-red-500/20"
+			                    : "bg-emerald-500 text-black hover:bg-emerald-400 shadow-xl shadow-emerald-900/20",
+			                ].join(" ")}
+			                title={portalIsOpenNow ? "Stop window" : "Start window"}
+			                aria-label={portalIsOpenNow ? "Stop window" : "Start window"}
+			              >
+			                {portalIsOpenNow ? (
+			                  <span className="inline-flex items-center justify-center gap-2">
+			                    <Square size={18} /> Stop the window
+			                  </span>
+			                ) : (
+			                  <span className="inline-flex items-center justify-center gap-2">
+			                    <Play size={18} /> Start window
+			                  </span>
+			                )}
+			              </button>
+
+			              <button
+			                onClick={() => {
+			                  const start = parseLocalInputValue(portalWindow.start);
+			                  const end = parseLocalInputValue(portalWindow.end);
+
+		                  if (!start || !end) {
+		                    showToast({ title: "Invalid schedule", message: "Pick a valid Open at and Close at." });
+		                    return;
+		                  }
+		                  if (end <= start) {
+		                    showToast({ title: "Invalid schedule", message: "Close at must be after Open at." });
+		                    return;
+		                  }
+		                  if (end <= now) {
+		                    showToast({ title: "Invalid schedule", message: "Close at must be in the future." });
+		                    return;
+		                  }
+
+			                  setPortalWindow((prev) => ({
+			                    ...prev,
+			                    start: portalWindow.start,
+			                    end: portalWindow.end,
+			                    meta: { ...(prev.meta ?? {}), lastAction: "schedule", updatedAt: Date.now() },
+			                  }));
+			                  showToast({ title: "Window scheduled", message: "Submission window will auto-close at the end time." });
+			                }}
+		                className="w-full bg-purple-600 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-purple-500 shadow-xl shadow-purple-900/20 transition-all"
+		                title="Validate and run this schedule"
+		              >
+		                Schedule
+		              </button>
+		            </div>
+		          </div>
+		        </div>
+		      </section>
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -209,9 +333,17 @@ export default function AdminDashboard({
         <div className="p-8">
           <h3 className="text-xl font-black uppercase tracking-tight">Employee Management</h3>
           <p className="text-gray-500 text-sm mt-1">
-            Promote bands or remove employees (demo actions).
+            Promote uses the <span className="font-mono">/employees/{'{id}'}/promote</span> API. Remove is still a local demo action.
           </p>
         </div>
+
+        {employeesError ? (
+          <div className="px-8 pb-6">
+            <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+              Failed to load employees: <span className="font-mono">{employeesError}</span>
+            </div>
+          </div>
+        ) : null}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -250,6 +382,7 @@ export default function AdminDashboard({
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => promoteEmployee(emp.id)}
+                        disabled={employeesLoading || promotingId === emp.id}
                         className="p-2.5 bg-purple-500/10 text-purple-300 hover:bg-purple-500 hover:text-white rounded-xl transition-all border border-purple-500/20"
                         title="Promote"
                       >
@@ -270,6 +403,31 @@ export default function AdminDashboard({
           </table>
         </div>
       </section>
+
+      {/* Purple toast (top-right) */}
+      {toast ? (
+        <div className="fixed top-6 right-6 z-[80]">
+          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-purple-600 px-4 py-3 shadow-2xl text-white">
+            <div className="mt-0.5 text-white">
+              <CheckCircle2 size={18} />
+            </div>
+            <div className="min-w-[220px]">
+              <div className="text-sm font-black">{toast.title}</div>
+              {toast.message ? (
+                <div className="text-xs text-white/90 mt-1">{toast.message}</div>
+              ) : null}
+            </div>
+            <button
+              onClick={() => setToast(null)}
+              className="ml-2 rounded-xl p-1 text-white/90 hover:bg-white/10 hover:text-white transition"
+              aria-label="Dismiss notification"
+              title="Dismiss"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
