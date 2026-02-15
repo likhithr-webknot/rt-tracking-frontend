@@ -23,7 +23,7 @@ export default function App() {
 
   useEffect(() => {
     // Gate Employee/Manager portal by the server submission-window state.
-    if (!auth?.accessToken) {
+    if (!auth) {
       setWindowData(null);
       setWindowError("");
       setWindowLoading(false);
@@ -49,6 +49,12 @@ export default function App() {
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!alive) return;
+        if (err?.status === 401 || err?.status === 403) {
+          // Session cookie expired/invalid; send user back to login.
+          clearAuth();
+          setAuthState(null);
+          return;
+        }
         setWindowError(err?.message || "Failed to load submission window status.");
         setWindowData(null);
       } finally {
@@ -67,7 +73,7 @@ export default function App() {
       if (timer) window.clearTimeout(timer);
       if (controller) controller.abort();
     };
-  }, [auth?.accessToken, roleLabel, windowRefreshNonce]);
+  }, [auth, roleLabel, windowRefreshNonce]);
 
   function logout() {
     clearAuth();

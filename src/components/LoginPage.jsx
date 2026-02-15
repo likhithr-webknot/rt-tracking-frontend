@@ -191,36 +191,65 @@ export default function LoginPage({ onLoginSuccess }) {
                   </linearGradient>
                 </defs>
 
-                {chartData.map((h, i) => {
-                  const x = startX + i * spacing;
-                  const nextH = chartData[i + 1];
-                  const nextX = startX + (i + 1) * spacing;
+	                {chartData.map((h, i) => {
+	                  const x = startX + i * spacing;
+	                  const nextH = chartData[i + 1];
+	                  const nextX = startX + (i + 1) * spacing;
+	                  const hVal = Number(h);
+	                  const nextHVal = nextH === undefined ? null : Number(nextH);
+	                  const safeH = Number.isFinite(hVal) ? hVal : 0;
+	                  const safeNextH = nextHVal != null && Number.isFinite(nextHVal) ? nextHVal : null;
+	                  const y = chartBaseY - safeH;
 
-                  return (
-                      <g key={`vis-${i}`}>
-                        <Motion.rect
-                            x={x} width={barWidth} rx="4" fill="url(#barGrad)" stroke="rgba(255,255,255,0.15)"
-                            animate={{ height: [h, h + 20, h], y: [chartBaseY - h, chartBaseY - (h + 20), chartBaseY - h] }}
-                            transition={bounceTransition(i)}
-                        />
-                        {nextH !== undefined && (
-                            <Motion.line
-                                stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="4 4"
-                                animate={{
-                                  x1: x + barWidth / 2, y1: [chartBaseY - h, chartBaseY - (h + 20), chartBaseY - h],
-                                  x2: nextX + barWidth / 2, y2: [chartBaseY - nextH, chartBaseY - (nextH + 20), chartBaseY - nextH]
-                                }}
-                                transition={bounceTransition(i)}
-                            />
-                        )}
-                        <Motion.circle
-                            cx={x + barWidth / 2} r="4" fill="white" style={{ filter: "drop-shadow(0 0 8px #fff)" }}
-                            animate={{ cy: [chartBaseY - h, chartBaseY - (h + 20), chartBaseY - h], scale: [1, 1.2, 1] }}
-                            transition={bounceTransition(i)}
-                        />
-                      </g>
-                  );
-                })}
+	                  return (
+	                      <g key={`vis-${i}`}>
+	                        <Motion.rect
+	                            x={x}
+	                            y={y}
+	                            width={barWidth}
+	                            height={safeH}
+	                            rx="4"
+	                            fill="url(#barGrad)"
+	                            stroke="rgba(255,255,255,0.15)"
+	                            initial={{ height: safeH, y }}
+	                            animate={{ height: [safeH, safeH + 20, safeH], y: [y, y - 20, y] }}
+	                            transition={bounceTransition(i)}
+	                        />
+	                        {safeNextH != null && (
+	                            <Motion.line
+	                                x1={x + barWidth / 2}
+	                                y1={y}
+	                                x2={nextX + barWidth / 2}
+	                                y2={chartBaseY - safeNextH}
+	                                stroke="rgba(255,255,255,0.3)" strokeWidth="2" strokeDasharray="4 4"
+	                                initial={{
+	                                  y1: y,
+	                                  y2: chartBaseY - safeNextH,
+	                                }}
+	                                animate={{
+	                                  y1: [y, y - 20, y],
+	                                  y2: [
+	                                    chartBaseY - safeNextH,
+	                                    chartBaseY - (safeNextH + 20),
+	                                    chartBaseY - safeNextH,
+	                                  ],
+	                                }}
+	                                transition={bounceTransition(i)}
+	                            />
+	                        )}
+	                        <Motion.circle
+	                            cx={x + barWidth / 2}
+	                            cy={y}
+	                            r="4"
+	                            fill="white"
+	                            style={{ filter: "drop-shadow(0 0 8px #fff)" }}
+	                            initial={{ cy: y, scale: 1 }}
+	                            animate={{ cy: [y, y - 20, y], scale: [1, 1.2, 1] }}
+	                            transition={bounceTransition(i)}
+	                        />
+	                      </g>
+	                  );
+	                })}
               </svg>
 
               {/* Metric Card - Percentage positioned */}

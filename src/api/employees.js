@@ -32,6 +32,7 @@ export async function fetchEmployees({ signal } = {}) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/employees/getall"), {
     signal,
+    credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
   });
   if (!res.ok) throw new Error(await readError(res));
@@ -42,6 +43,7 @@ export async function addEmployee(payload) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/employees/add"), {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
     body: JSON.stringify(payload),
   });
@@ -58,6 +60,7 @@ export async function promoteEmployee(employeeId) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl(`/employees/${safeId}/promote`), {
     method: "POST",
+    credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
   });
   if (!res.ok) throw new Error(await readError(res));

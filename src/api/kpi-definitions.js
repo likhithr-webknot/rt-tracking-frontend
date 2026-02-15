@@ -90,6 +90,7 @@ export async function addKpiDefinition(payload) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/kpi-definitions/add"), {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
     body: JSON.stringify(body),
   });
@@ -103,8 +104,9 @@ export async function addKpiDefinition(payload) {
 // GET /kpi-definition/getall
 export async function fetchKpiDefinitions({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/kpi-definition/getall"), {
+  const res = await fetch(buildApiUrl("/kpi-definitions/getall"), {
     signal,
+    credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
   });
   if (!res.ok) throw new Error(await readError(res));
@@ -119,6 +121,7 @@ export async function updateKpiDefinition(payload) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/kpi-definition/update"), {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
     body: JSON.stringify(body),
   });
