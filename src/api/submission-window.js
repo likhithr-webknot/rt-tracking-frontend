@@ -1,4 +1,5 @@
 import { getAuthHeader } from "./auth.js";
+import { buildApiUrl } from "./http.js";
 
 async function readError(res) {
   const text = await res.text().catch(() => "");
@@ -7,7 +8,7 @@ async function readError(res) {
 
 export async function fetchSubmissionWindowCurrent({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch("/submission-window/current", {
+  const res = await fetch(buildApiUrl("/submission-window/current"), {
     signal,
     headers: auth ? { Authorization: auth } : undefined,
   });
@@ -17,7 +18,7 @@ export async function fetchSubmissionWindowCurrent({ signal } = {}) {
 
 export async function scheduleSubmissionWindow({ startAt, endAt }, { signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch("/submission-window/current/schedule", {
+  const res = await fetch(buildApiUrl("/submission-window/current/schedule"), {
     method: "PUT",
     signal,
     headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
@@ -29,7 +30,7 @@ export async function scheduleSubmissionWindow({ startAt, endAt }, { signal } = 
 
 export async function openSubmissionWindowNow({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch("/submission-window/current/open-now", {
+  const res = await fetch(buildApiUrl("/submission-window/current/open-now"), {
     method: "POST",
     signal,
     headers: auth ? { Authorization: auth } : undefined,
@@ -40,7 +41,7 @@ export async function openSubmissionWindowNow({ signal } = {}) {
 
 export async function closeSubmissionWindowNow({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch("/submission-window/current/close-now", {
+  const res = await fetch(buildApiUrl("/submission-window/current/close-now"), {
     method: "POST",
     signal,
     headers: auth ? { Authorization: auth } : undefined,
@@ -48,4 +49,3 @@ export async function closeSubmissionWindowNow({ signal } = {}) {
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
 }
-

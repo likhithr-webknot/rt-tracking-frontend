@@ -1,4 +1,5 @@
 import { getAuthHeader } from "./auth.js";
+import { buildApiUrl } from "./http.js";
 
 async function readError(res) {
   const text = await res.text().catch(() => "");
@@ -87,7 +88,7 @@ export function normalizeKpiDefinition(data, fallback = {}) {
 export async function addKpiDefinition(payload) {
   const body = toAddRequestBody(payload);
   const auth = getAuthHeader();
-  const res = await fetch("/kpi-definitions/add", {
+  const res = await fetch(buildApiUrl("/kpi-definitions/add"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
     body: JSON.stringify(body),
@@ -102,7 +103,7 @@ export async function addKpiDefinition(payload) {
 // GET /kpi-definition/getall
 export async function fetchKpiDefinitions({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch("/kpi-definition/getall", {
+  const res = await fetch(buildApiUrl("/kpi-definition/getall"), {
     signal,
     headers: auth ? { Authorization: auth } : undefined,
   });
@@ -116,7 +117,7 @@ export async function updateKpiDefinition(payload) {
   if (!body.kpiDefinitionId) throw new Error("Missing KPI id for update.");
 
   const auth = getAuthHeader();
-  const res = await fetch("/kpi-definition/update", {
+  const res = await fetch(buildApiUrl("/kpi-definition/update"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
     body: JSON.stringify(body),

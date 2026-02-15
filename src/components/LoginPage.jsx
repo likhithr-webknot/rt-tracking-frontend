@@ -1,17 +1,26 @@
 import { useState, useEffect } from "react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { Eye, EyeOff, Briefcase, Award, TrendingUp as Profit, Headset, Zap, Copy, Check, Activity } from "lucide-react";
-import { getAuth, login, setAuth } from "../api/auth.js";
+import { getAuth, login, setAuth, forgotPassword, resetPassword } from "../api/auth.js";
 
 export default function LoginPage({ onLoginSuccess }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
+  const [showResetModal, setShowResetModal] = useState(false);
   const [metricIndex, setMetricIndex] = useState(0);
   const [copied, setCopied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  const [submitSuccess, setSubmitSuccess] = useState("");
+
+  const [resetEmail, setResetEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [resetSuccess, setResetSuccess] = useState("");
 
   const hrEmail = "hr@webknot.in";
   const metrics = [
@@ -40,6 +49,8 @@ export default function LoginPage({ onLoginSuccess }) {
   };
 
   const canSubmit = email.endsWith("@webknot.in") && password.length >= 8;
+  const canRequestReset = resetEmail.trim().toLowerCase().endsWith("@webknot.in");
+  const passwordsMatch = newPassword.length >= 8 && newPassword === confirmNewPassword;
 
   const bounceTransition = (i) => ({
     duration: 3,
@@ -73,6 +84,7 @@ export default function LoginPage({ onLoginSuccess }) {
 	                e.preventDefault();
 	                if (!canSubmit || submitting) return;
 	                setSubmitError("");
+                  setSubmitSuccess("");
 	                setSubmitting(true);
 	                try {
 	                  const auth = await login({ email: email.trim(), password });
@@ -112,20 +124,40 @@ export default function LoginPage({ onLoginSuccess }) {
                 </div>
               </div>
 
-	              <button
-	                  disabled={!canSubmit || submitting}
-	                  className="w-full rounded-xl bg-purple-600 py-3 md:py-4 font-black uppercase text-white hover:bg-purple-500 disabled:opacity-20 active:scale-95 transition-all shadow-lg text-sm md:text-base"
-	              >
-	                {submitting ? "Signing In…" : "Sign In"}
-	              </button>
-	
-	              {submitError ? (
-	                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
-	                  {submitError}
-	                </div>
-	              ) : null}
-	            </form>
-	          </div>
+		              <button
+		                  disabled={!canSubmit || submitting}
+		                  className="w-full rounded-xl bg-purple-600 py-3 md:py-4 font-black uppercase text-white hover:bg-purple-500 disabled:opacity-20 active:scale-95 transition-all shadow-lg text-sm md:text-base"
+		              >
+		                {submitting ? "Signing In…" : "Sign In"}
+		              </button>
+
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowResetModal(true);
+                        setResetError("");
+                        setResetSuccess("");
+                        setResetEmail(email.trim() || "");
+                      }}
+                      className="text-xs font-black uppercase tracking-widest text-gray-500 hover:text-purple-300 transition-colors"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+		
+		              {submitError ? (
+		                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+		                  {submitError}
+		                </div>
+		              ) : null}
+                  {submitSuccess ? (
+                    <div className="text-sm text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
+                      {submitSuccess}
+                    </div>
+                  ) : null}
+		            </form>
+		          </div>
 
           <div className="flex justify-between items-center text-[10px] text-gray-700 font-bold uppercase tracking-widest">
             <span>© 2026 Webknot</span>
@@ -233,6 +265,122 @@ export default function LoginPage({ onLoginSuccess }) {
                   <button onClick={() => setShowAdminModal(false)} className="mt-10 w-full py-4 bg-white text-black font-black rounded-xl uppercase tracking-widest active:scale-95 transition-all">Close</button>
                 </Motion.div>
               </div>
+          )}
+        </AnimatePresence>
+
+        {/* Reset Password Modal */}
+        <AnimatePresence>
+          {showResetModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <Motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowResetModal(false)}
+                className="absolute inset-0 bg-black/80 backdrop-blur-md"
+              />
+              <Motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="relative w-full max-w-lg rounded-[2.5rem] bg-[#121212] border border-white/10 p-8 sm:p-10 shadow-2xl"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-2xl font-black text-white tracking-tight">Reset Password</h3>
+                    <p className="mt-2 text-sm text-gray-400">Request a reset token and set a new password.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowResetModal(false)}
+                    className="rounded-xl p-2 text-gray-400 hover:text-white hover:bg-white/5 transition"
+                    aria-label="Close"
+                    title="Close"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="mt-8 space-y-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Email</label>
+                    <input
+                      type="email"
+                      value={resetEmail}
+                      onChange={(e) => setResetEmail(e.target.value)}
+                      className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                      placeholder="name@webknot.in"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">New Password</label>
+                      <input
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                        placeholder="NewPass@123"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Confirm</label>
+                      <input
+                        type="password"
+                        value={confirmNewPassword}
+                        onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                        placeholder="Repeat password"
+                      />
+                    </div>
+                  </div>
+
+                  {resetError ? (
+                    <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+                      {resetError}
+                    </div>
+                  ) : null}
+                  {resetSuccess ? (
+                    <div className="text-sm text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
+                      {resetSuccess}
+                    </div>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    disabled={!canRequestReset || !passwordsMatch || resetLoading}
+                    onClick={async () => {
+                      if (!canRequestReset || !passwordsMatch || resetLoading) return;
+                      setResetError("");
+                      setResetSuccess("");
+                      setResetLoading(true);
+                      try {
+                        const tokenRes = await forgotPassword({ email: resetEmail.trim() });
+                        const token = String(tokenRes?.resetToken ?? "").trim();
+                        if (!token) throw new Error("Failed to generate reset token. Please contact support.");
+
+                        const res = await resetPassword({ token, newPassword });
+                        const text = typeof res === "string" ? res : "Password reset successful";
+                        setResetSuccess(text || "Password reset successful");
+                        setPassword("");
+                        setSubmitError("");
+                        setSubmitSuccess("Password reset successful. Please sign in again.");
+                        setEmail(resetEmail.trim());
+                        setShowResetModal(false);
+                      } catch (err) {
+                        setResetError(err?.message || "Password reset failed.");
+                      } finally {
+                        setResetLoading(false);
+                      }
+                    }}
+                    className="w-full rounded-2xl bg-purple-600 py-4 font-black uppercase text-white hover:bg-purple-500 disabled:opacity-30 active:scale-[0.99] transition-all shadow-lg shadow-purple-900/20 text-sm"
+                  >
+                    {resetLoading ? "Resetting…" : "Reset Password"}
+                  </button>
+                </div>
+              </Motion.div>
+            </div>
           )}
         </AnimatePresence>
       </div>

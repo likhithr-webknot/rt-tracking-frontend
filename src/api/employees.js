@@ -1,4 +1,5 @@
 import { getAuthHeader } from "./auth.js";
+import { buildApiUrl } from "./http.js";
 
 export function normalizeEmployees(data) {
   const arr = Array.isArray(data)
@@ -29,7 +30,7 @@ async function readError(res) {
 
 export async function fetchEmployees({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch("/employees/getall", {
+  const res = await fetch(buildApiUrl("/employees/getall"), {
     signal,
     headers: auth ? { Authorization: auth } : undefined,
   });
@@ -39,7 +40,7 @@ export async function fetchEmployees({ signal } = {}) {
 
 export async function addEmployee(payload) {
   const auth = getAuthHeader();
-  const res = await fetch("/employees/add", {
+  const res = await fetch(buildApiUrl("/employees/add"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
     body: JSON.stringify(payload),
@@ -55,7 +56,7 @@ export async function addEmployee(payload) {
 export async function promoteEmployee(employeeId) {
   const safeId = encodeURIComponent(String(employeeId));
   const auth = getAuthHeader();
-  const res = await fetch(`/employees/${safeId}/promote`, {
+  const res = await fetch(buildApiUrl(`/employees/${safeId}/promote`), {
     method: "POST",
     headers: auth ? { Authorization: auth } : undefined,
   });

@@ -1,3 +1,5 @@
+import { buildApiUrl } from "./http.js";
+
 const AUTH_STORAGE_KEY = "rt_tracking_auth_v1";
 
 function safeJsonParse(text) {
@@ -85,7 +87,7 @@ export function getAuthHeader() {
 // Default assumption: POST /auth/login { email, password } -> { accessToken, tokenType, role, portal }
 // If your backend uses a different path/shape, update this single function.
 export async function login({ email, password }) {
-  const res = await fetch("/auth/login", {
+  const res = await fetch(buildApiUrl("/auth/login"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -94,4 +96,28 @@ export async function login({ email, password }) {
   const data = await res.json().catch(() => ({}));
   if (!data?.accessToken) throw new Error("Login failed: missing accessToken.");
   return data;
+}
+
+// POST /auth/forgot-password { email } -> { message, resetToken, expiresAt }
+export async function forgotPassword({ email }) {
+  const res = await fetch(buildApiUrl("/auth/forgot-password"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json().catch(() => ({}));
+}
+
+// POST /auth/reset-password { token, newPassword } -> "Password reset successful"
+export async function resetPassword({ token, newPassword }) {
+  const res = await fetch(buildApiUrl("/auth/reset-password"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, newPassword }),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) return res.json();
+  return res.text().catch(() => "");
 }
