@@ -10,7 +10,6 @@ function App() {
   return (
     <>
       <LoginPage />
-        <div className="p-6 bg-red-500 text-white rounded-xl">Tailwind works</div>
     </>
   )
 }
