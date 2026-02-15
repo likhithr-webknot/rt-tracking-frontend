@@ -1,17 +1,9 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
-import LoginPage from "./components/LoginPage.jsx";
+import AdminControlCenter from './components/AdminControlCenter.jsx';
 
-function App() {
-  const [count, setCount] = useState(0)
-
+export default function App() {
   return (
-    <>
-      <LoginPage />
-    </>
-  )
+    <div className="App">
+      <AdminControlCenter />
+    </div>
+  );
 }
-
-export default App
