@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { Eye, EyeOff, Briefcase, Award, TrendingUp as Profit, Headset, Zap, Copy, Check, Activity } from "lucide-react";
-import { getAuth, login, setAuth, forgotPassword, resetPassword } from "../api/auth.js";
+import { fetchMe, getAuth, login, setAuth, forgotPassword, resetPassword } from "../api/auth.js";
 
 export default function LoginPage({ onLoginSuccess }) {
   const [email, setEmail] = useState("");
@@ -85,14 +85,16 @@ export default function LoginPage({ onLoginSuccess }) {
 	                if (!canSubmit || submitting) return;
 	                setSubmitError("");
                   setSubmitSuccess("");
-	                setSubmitting(true);
-	                try {
-	                  const auth = await login({ email: email.trim(), password });
-	                  setAuth(auth);
-	                  onLoginSuccess?.(getAuth() ?? auth);
-	                } catch (err) {
-	                  setSubmitError(err?.message || "Login failed. Please try again.");
-	                } finally {
+		                setSubmitting(true);
+		                try {
+		                  const auth = await login({ email: email.trim(), password });
+		                  const me = await fetchMe().catch(() => null);
+		                  const nextSession = me || { ...auth, email: email.trim() };
+		                  setAuth(nextSession);
+		                  onLoginSuccess?.(getAuth() || nextSession);
+		                } catch (err) {
+		                  setSubmitError(err?.message || "Login failed. Please try again.");
+		                } finally {
 	                  setSubmitting(false);
 	                }
 	              }}

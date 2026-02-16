@@ -3,11 +3,12 @@ import AdminControlCenter from "./components/AdminControlCenter.jsx";
 import EmployeePortal from "./components/EmployeePortal.jsx";
 import LoginPage from "./components/LoginPage.jsx";
 import SubmissionWindowClosed from "./components/SubmissionWindowClosed.jsx";
-import { clearAuth, getAuth } from "./api/auth.js";
+import { clearAuth, fetchMe, getAuth, setAuth } from "./api/auth.js";
 import { fetchSubmissionWindowCurrent } from "./api/submission-window.js";
 
 export default function App() {
   const [auth, setAuthState] = useState(() => getAuth());
+  const [authChecking, setAuthChecking] = useState(() => !getAuth());
   const [windowData, setWindowData] = useState(null);
   const [windowLoading, setWindowLoading] = useState(false);
   const [windowError, setWindowError] = useState("");
@@ -20,6 +21,37 @@ export default function App() {
     if (role.toLowerCase() === "manager") return "Manager";
     return role;
   }, [auth?.role]);
+
+  useEffect(() => {
+    // Restore session from cookie on refresh/new tab.
+    let alive = true;
+    const controller = new AbortController();
+    async function run() {
+      setAuthChecking(true);
+      try {
+        const me = await fetchMe({ signal: controller.signal });
+        if (!alive) return;
+        if (!me) {
+          setAuthState(getAuth());
+          return;
+        }
+        setAuth(me);
+        setAuthState(getAuth() || me);
+      } catch {
+        if (!alive) return;
+        // If /auth/me fails, fall back to whatever sessionStorage has.
+        setAuthState(getAuth());
+      } finally {
+        const stillAlive = alive;
+        if (stillAlive) setAuthChecking(false);
+      }
+    }
+    run();
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, []);
 
   useEffect(() => {
     // Gate Employee/Manager portal by the server submission-window state.
@@ -78,9 +110,24 @@ export default function App() {
   function logout() {
     clearAuth();
     setAuthState(null);
+    setAuthChecking(false);
     setWindowData(null);
     setWindowError("");
     setWindowLoading(false);
+  }
+
+  if (authChecking && (!auth || (!auth?.email && !auth?.employeeName))) {
+    return (
+      <div className="min-h-screen bg-[#0F0F0F] text-slate-100 grid place-items-center px-6">
+        <div className="text-center">
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Loading</div>
+          <div className="mt-2 text-2xl font-black uppercase tracking-tighter italic">
+            Restoring Session
+          </div>
+          <div className="mt-2 text-sm text-gray-400">Checking authentication…</div>
+        </div>
+      </div>
+    );
   }
 
   if (!auth) {

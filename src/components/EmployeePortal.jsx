@@ -1219,7 +1219,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [recognitionsCount, setRecognitionsCount] = useState(0);
   const [_finalSubmission, setFinalSubmission] = useState(null);
 
-  const authEmail = String(auth?.claims?.sub || "").trim();
+  const authEmail = String(auth?.email || auth?.claims?.sub || "").trim();
   const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
 
   // If the browser duplicates the tab, it may clone in-memory state (including active tab).

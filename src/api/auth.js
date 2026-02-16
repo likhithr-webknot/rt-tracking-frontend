@@ -38,6 +38,12 @@ function loadSessionFromStorage() {
       tokenType: String(parsed.tokenType || "Bearer"),
       role: String(parsed.role || ""),
       portal: typeof parsed.portal === "string" ? parsed.portal : null,
+      email: typeof parsed.email === "string" ? parsed.email : null,
+      employeeId: typeof parsed.employeeId === "string" ? parsed.employeeId : null,
+      employeeName: typeof parsed.employeeName === "string" ? parsed.employeeName : null,
+      stream: typeof parsed.stream === "string" ? parsed.stream : null,
+      band: typeof parsed.band === "string" ? parsed.band : null,
+      managerId: typeof parsed.managerId === "string" ? parsed.managerId : null,
       claims: null,
     };
   } catch {
@@ -100,6 +106,12 @@ export function setAuth(auth) {
     tokenType,
     role: String(obj.role || ""),
     portal: typeof obj.portal === "string" ? obj.portal : null,
+    email: typeof obj.email === "string" ? obj.email : null,
+    employeeId: typeof obj.employeeId === "string" ? obj.employeeId : null,
+    employeeName: typeof obj.employeeName === "string" ? obj.employeeName : null,
+    stream: typeof obj.stream === "string" ? obj.stream : null,
+    band: typeof obj.band === "string" ? obj.band : null,
+    managerId: typeof obj.managerId === "string" ? obj.managerId : null,
     claims,
   };
 
@@ -112,6 +124,12 @@ export function setAuth(auth) {
           tokenType: memoryAuth.tokenType,
           role: memoryAuth.role,
           portal: memoryAuth.portal,
+          email: memoryAuth.email,
+          employeeId: memoryAuth.employeeId,
+          employeeName: memoryAuth.employeeName,
+          stream: memoryAuth.stream,
+          band: memoryAuth.band,
+          managerId: memoryAuth.managerId,
         })
       );
     } catch {
@@ -146,6 +164,17 @@ export async function login({ email, password }) {
   const data = await res.json().catch(() => ({}));
   if (!data || typeof data !== "object") throw new Error("Login failed.");
   return data;
+}
+
+// GET /auth/me -> current employee profile (cookie or Authorization header)
+export async function fetchMe({ signal } = {}) {
+  const res = await fetch(buildApiUrl("/auth/me"), {
+    signal,
+    credentials: "include",
+  });
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(await readError(res));
+  return res.json().catch(() => ({}));
 }
 
 // POST /auth/forgot-password { email } -> { message, resetToken, expiresAt }

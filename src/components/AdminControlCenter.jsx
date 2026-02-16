@@ -95,8 +95,11 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
           <div className="mt-2 font-bold tracking-tight text-white truncate">
             {account?.name || account?.email || "Unknown"}
           </div>
-          <div className="mt-1 text-xs text-purple-300 truncate">
-            {account?.designation || "—"}
+          <div className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-purple-300 truncate">
+            {account?.role || "Employee"}
+          </div>
+          <div className="mt-1 text-xs text-gray-400 truncate">
+            {account?.subtitle || "—"}
           </div>
         </div>
 
@@ -106,7 +109,8 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
               className="h-10 w-10 rounded-2xl border border-white/10 bg-white/[0.03] grid place-items-center"
               title={[
                 account?.name || account?.email || "Unknown",
-                account?.designation || "",
+                account?.role || "Employee",
+                account?.subtitle || "",
                 account?.role || "Employee",
               ].filter(Boolean).join(" • ")}
             >
@@ -724,30 +728,73 @@ export default function AdminControlCenter({ onLogout, auth }) {
   }, [certificationCatalog]);
 
   const account = useMemo(() => {
-    const email = String(auth?.claims?.sub || "").trim() || null;
     const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
+    const rawEmail = String(auth?.email || auth?.claims?.sub || "").trim();
 
-    let name = null;
+    // Cookie-based auth may not expose email in JS unless we persist it ourselves.
+    // Best-effort fallback: if there's exactly one employee with this role, use that record.
+    let email = rawEmail || null;
+    if (!email) {
+      const roleKey = role.toLowerCase();
+      const candidates = employees
+        .filter((e) => String(e?.role || "").trim().toLowerCase() === roleKey)
+        .filter((e) => String(e?.email || "").trim());
+      if (candidates.length === 1) {
+        email = String(candidates[0].email).trim();
+      }
+    }
+
+    let name = String(auth?.employeeName || "").trim() || null;
     let designation = null;
+    let stream = String(auth?.stream || "").trim() || null;
+    let band = String(auth?.band || "").trim() || null;
     if (email) {
       const match = employees.find(
         (e) => String(e?.email || "").trim().toLowerCase() === email.toLowerCase()
       );
       if (match?.name) name = match.name;
       if (match?.designation) designation = match.designation;
+      if (match?.stream) stream = match.stream;
+      if (match?.band) band = match.band;
     }
 
-    return { email, role, name: name || email, designation };
-  }, [auth?.claims?.sub, auth?.claims?.role, auth?.role, employees]);
+    const subtitle =
+      designation ||
+      [stream, band].filter(Boolean).join(" • ") ||
+      null;
+
+    return { email, role, name: name || email, subtitle };
+  }, [auth?.email, auth?.claims?.sub, auth?.role, auth?.claims?.role, auth?.employeeName, auth?.stream, auth?.band, employees]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    console.log("[AdminControlCenter] account debug", {
+      account,
+      auth: {
+        email: auth?.email ?? null,
+        role: auth?.role ?? null,
+        portal: auth?.portal ?? null,
+        hasClaims: Boolean(auth?.claims),
+        claimsSub: auth?.claims?.sub ?? null,
+        claimsRole: auth?.claims?.role ?? null,
+      },
+      employees: {
+        count: Array.isArray(employees) ? employees.length : null,
+        loading: employeesLoading,
+        error: employeesError || null,
+      },
+    });
+  }, [account, auth, employees, employeesLoading, employeesError]);
 
   const currentEmployeeId = useMemo(() => {
-    const email = String(auth?.claims?.sub || "").trim();
+    if (auth?.employeeId) return String(auth.employeeId);
+    const email = String(auth?.email || auth?.claims?.sub || "").trim();
     if (!email) return null;
     const match = employees.find(
       (e) => String(e?.email || "").trim().toLowerCase() === email.toLowerCase()
     );
     return match?.id ?? null;
-  }, [auth?.claims?.sub, employees]);
+  }, [auth?.employeeId, auth?.email, auth?.claims?.sub, employees]);
 
   // Ability trend (demo)
   const ability6m = useMemo(() => ([
