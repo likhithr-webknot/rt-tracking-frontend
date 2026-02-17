@@ -1,10 +1,32 @@
-import { buildApiUrl } from "./http.js";
+import { buildApiUrl, withCsrfHeaders } from "./http.js";
 
 // Keep auth only in memory (no localStorage key).
 // With HttpOnly cookie auth, the access token is not available to JS; we store only non-sensitive session info.
 const LEGACY_AUTH_STORAGE_KEY = "rt_tracking_auth_v1";
 const SESSION_STORAGE_KEY = "rt_tracking_session_v1";
 let memoryAuth = null;
+
+function shouldPersistAccessToken() {
+  const flag = String(import.meta?.env?.VITE_PERSIST_ACCESS_TOKEN ?? "").trim().toLowerCase();
+  if (flag === "1" || flag === "true" || flag === "yes") return true;
+  // Dev default: persist in sessionStorage so refresh doesn't break token-based auth.
+  if (import.meta?.env?.DEV) return true;
+  return false;
+}
+
+function firstNonEmptyString(...values) {
+  for (const v of values) {
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function firstNullableString(...values) {
+  const s = firstNonEmptyString(...values);
+  return s ? s : null;
+}
 
 function cleanupLegacyAuthStorage() {
   if (typeof window === "undefined") return;
@@ -33,14 +55,19 @@ function loadSessionFromStorage() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
+    const accessToken =
+      shouldPersistAccessToken() && typeof parsed.accessToken === "string"
+        ? String(parsed.accessToken || "").trim() || null
+        : null;
     return {
-      accessToken: null,
+      accessToken,
       tokenType: String(parsed.tokenType || "Bearer"),
       role: String(parsed.role || ""),
       portal: typeof parsed.portal === "string" ? parsed.portal : null,
       email: typeof parsed.email === "string" ? parsed.email : null,
       employeeId: typeof parsed.employeeId === "string" ? parsed.employeeId : null,
       employeeName: typeof parsed.employeeName === "string" ? parsed.employeeName : null,
+      designation: typeof parsed.designation === "string" ? parsed.designation : null,
       stream: typeof parsed.stream === "string" ? parsed.stream : null,
       band: typeof parsed.band === "string" ? parsed.band : null,
       managerId: typeof parsed.managerId === "string" ? parsed.managerId : null,
@@ -90,6 +117,13 @@ async function readError(res) {
   );
 }
 
+async function toHttpError(res) {
+  const message = await readError(res);
+  const err = new Error(message);
+  err.status = res.status;
+  return err;
+}
+
 export function getAuth() {
   if (!memoryAuth) memoryAuth = loadSessionFromStorage();
   return memoryAuth;
@@ -97,21 +131,57 @@ export function getAuth() {
 
 export function setAuth(auth) {
   cleanupLegacyAuthStorage();
-  const obj = auth && typeof auth === "object" ? auth : {};
-  const accessToken = obj.accessToken ? String(obj.accessToken) : null;
-  const tokenType = obj.tokenType ? String(obj.tokenType) : "Bearer";
+  const prev = memoryAuth || loadSessionFromStorage() || {};
+  const root = auth && typeof auth === "object" ? auth : {};
+  // Some backends wrap the payload as { data: ... }.
+  const obj =
+    root?.data && typeof root.data === "object" && !Array.isArray(root.data)
+      ? root.data
+      : root;
+
+  const accessTokenRaw =
+    obj.accessToken != null || obj.access_token != null || obj.token != null || obj.jwt != null
+      ? String(obj.accessToken ?? obj.access_token ?? obj.token ?? obj.jwt).trim()
+      : prev?.accessToken
+        ? String(prev.accessToken).trim()
+        : "";
+  const accessToken = accessTokenRaw ? accessTokenRaw : null;
+
+  const tokenType = firstNonEmptyString(obj.tokenType, obj.token_type, prev?.tokenType, "Bearer");
   const claims = accessToken ? decodeJwtPayload(accessToken) : null;
+
+  const role = firstNonEmptyString(obj.role, obj.empRole, obj.userRole, prev?.role);
+  const portal = firstNullableString(obj.portal, prev?.portal);
+  const email = firstNullableString(obj.email, obj.employeeEmail, obj.mail, prev?.email);
+  const employeeId = firstNullableString(obj.employeeId, obj.empId, obj.id, prev?.employeeId);
+  const employeeName = firstNullableString(
+    obj.employeeName,
+    obj.name,
+    obj.fullName,
+    prev?.employeeName
+  );
+  const designation = firstNullableString(
+    obj.designation,
+    obj.title,
+    obj.jobTitle,
+    prev?.designation
+  );
+  const stream = firstNullableString(obj.stream, obj.context, prev?.stream);
+  const band = firstNullableString(obj.band, obj.level, prev?.band);
+  const managerId = firstNullableString(obj.managerId, prev?.managerId);
+
   memoryAuth = {
     accessToken,
     tokenType,
-    role: String(obj.role || ""),
-    portal: typeof obj.portal === "string" ? obj.portal : null,
-    email: typeof obj.email === "string" ? obj.email : null,
-    employeeId: typeof obj.employeeId === "string" ? obj.employeeId : null,
-    employeeName: typeof obj.employeeName === "string" ? obj.employeeName : null,
-    stream: typeof obj.stream === "string" ? obj.stream : null,
-    band: typeof obj.band === "string" ? obj.band : null,
-    managerId: typeof obj.managerId === "string" ? obj.managerId : null,
+    role,
+    portal,
+    email,
+    employeeId,
+    employeeName,
+    designation,
+    stream,
+    band,
+    managerId,
     claims,
   };
 
@@ -121,12 +191,16 @@ export function setAuth(auth) {
       window.sessionStorage.setItem(
         SESSION_STORAGE_KEY,
         JSON.stringify({
+          ...(shouldPersistAccessToken() && memoryAuth.accessToken
+            ? { accessToken: memoryAuth.accessToken }
+            : {}),
           tokenType: memoryAuth.tokenType,
           role: memoryAuth.role,
           portal: memoryAuth.portal,
           email: memoryAuth.email,
           employeeId: memoryAuth.employeeId,
           employeeName: memoryAuth.employeeName,
+          designation: memoryAuth.designation,
           stream: memoryAuth.stream,
           band: memoryAuth.band,
           managerId: memoryAuth.managerId,
@@ -157,10 +231,10 @@ export async function login({ email, password }) {
   const res = await fetch(buildApiUrl("/auth/login"), {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ email, password }),
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await toHttpError(res);
   const data = await res.json().catch(() => ({}));
   if (!data || typeof data !== "object") throw new Error("Login failed.");
   return data;
@@ -168,9 +242,11 @@ export async function login({ email, password }) {
 
 // GET /auth/me -> current employee profile (cookie or Authorization header)
 export async function fetchMe({ signal } = {}) {
+  const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/auth/me"), {
     signal,
     credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
   });
   if (res.status === 401) return null;
   if (!res.ok) throw new Error(await readError(res));
@@ -182,10 +258,10 @@ export async function forgotPassword({ email }) {
   const res = await fetch(buildApiUrl("/auth/forgot-password"), {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ email }),
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await toHttpError(res);
   return res.json().catch(() => ({}));
 }
 
@@ -194,10 +270,10 @@ export async function resetPassword({ token, newPassword }) {
   const res = await fetch(buildApiUrl("/auth/reset-password"), {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ token, newPassword }),
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await toHttpError(res);
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json();
   return res.text().catch(() => "");

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AdminControlCenter from "./components/AdminControlCenter.jsx";
 import EmployeePortal from "./components/EmployeePortal.jsx";
+import ManagerPortal from "./components/ManagerPortal.jsx";
 import LoginPage from "./components/LoginPage.jsx";
 import SubmissionWindowClosed from "./components/SubmissionWindowClosed.jsx";
 import { clearAuth, fetchMe, getAuth, setAuth } from "./api/auth.js";
@@ -16,11 +17,19 @@ export default function App() {
 
   const roleLabel = useMemo(() => {
     const role = String(auth?.role ?? "").trim();
-    if (!role) return "Employee";
-    if (role.toLowerCase() === "admin") return "Admin";
-    if (role.toLowerCase() === "manager") return "Manager";
-    return role;
-  }, [auth?.role]);
+    if (role) {
+      const key = role.toLowerCase();
+      if (key === "admin") return "Admin";
+      if (key === "manager") return "Manager";
+      return role;
+    }
+
+    const portal = String(auth?.portal ?? "").trim().toLowerCase();
+    if (portal.includes("admin")) return "Admin";
+    if (portal.includes("manager")) return "Manager";
+    if (portal.includes("employee")) return "Employee";
+    return "Employee";
+  }, [auth?.portal, auth?.role]);
 
   useEffect(() => {
     // Restore session from cookie on refresh/new tab.
@@ -32,7 +41,9 @@ export default function App() {
         const me = await fetchMe({ signal: controller.signal });
         if (!alive) return;
         if (!me) {
-          setAuthState(getAuth());
+          // Server says no session: clear any client-side cached session and go to login.
+          clearAuth();
+          setAuthState(null);
           return;
         }
         setAuth(me);
@@ -61,7 +72,7 @@ export default function App() {
       setWindowLoading(false);
       return;
     }
-    if (roleLabel === "Admin") return;
+    if (roleLabel !== "Employee") return;
 
     let alive = true;
     let timer = null;
@@ -81,11 +92,21 @@ export default function App() {
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!alive) return;
-        if (err?.status === 401 || err?.status === 403) {
-          // Session cookie expired/invalid; send user back to login.
-          clearAuth();
-          setAuthState(null);
-          return;
+        if (err?.status === 401) {
+          // Some backends return 401 for "not permitted" (not just "not authenticated").
+          // Confirm whether the session is actually gone before forcing a logout.
+          try {
+            const me = await fetchMe({ signal: controller.signal }).catch(() => null);
+            if (!me) {
+              clearAuth();
+              setAuthState(null);
+              return;
+            }
+            setAuth(me);
+            setAuthState(getAuth() || me);
+          } catch {
+            // If we can't verify, keep the session and show an error instead of looping to login.
+          }
         }
         setWindowError(err?.message || "Failed to load submission window status.");
         setWindowData(null);
@@ -143,6 +164,10 @@ export default function App() {
 
   if (roleLabel === "Admin") {
     return <AdminControlCenter onLogout={logout} auth={auth} />;
+  }
+
+  if (roleLabel === "Manager") {
+    return <ManagerPortal onLogout={logout} auth={auth} />;
   }
 
   if (windowLoading && !windowData) {

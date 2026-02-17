@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl } from "./http.js";
+import { buildApiUrl, withCsrfHeaders } from "./http.js";
 
 export function normalizeEmployees(data) {
   const arr = Array.isArray(data)
@@ -25,7 +25,21 @@ export function normalizeEmployees(data) {
 
 async function readError(res) {
   const text = await res.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.message) return String(parsed.message);
+    if (parsed?.error) return String(parsed.error);
+  } catch {
+    // ignore
+  }
   return text || `Request failed: ${res.status} ${res.statusText}`;
+}
+
+async function toHttpError(res) {
+  const message = await readError(res);
+  const err = new Error(message);
+  err.status = res.status;
+  return err;
 }
 
 export async function fetchEmployees({ signal } = {}) {
@@ -35,7 +49,7 @@ export async function fetchEmployees({ signal } = {}) {
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await toHttpError(res);
   return res.json();
 }
 
@@ -44,15 +58,78 @@ export async function addEmployee(payload) {
   const res = await fetch(buildApiUrl("/employees/add"), {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await toHttpError(res);
 
   // Backend may return the created employee, or nothing.
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json();
   return null;
+}
+
+// POST /employees/add-with-manager
+export async function addEmployeeWithManager(payload) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl("/employees/add-with-manager"), {
+    method: "POST",
+    credentials: "include",
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw await toHttpError(res);
+
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) return res.json();
+  return null;
+}
+
+export function normalizeManagers(data) {
+  const arr = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.data)
+      ? data.data
+      : [];
+  return arr.map((m, i) => ({
+    id: String(m.employeeId ?? m.id ?? m.empId ?? `MGR_${i}`),
+    name: String(m.employeeName ?? m.name ?? m.fullName ?? "Unknown"),
+    email: String(m.email ?? m.employeeEmail ?? m.mail ?? ""),
+    role: String(m.empRole ?? m.role ?? "Manager"),
+    designation: String(m.designation ?? m.title ?? m.jobTitle ?? ""),
+    band: String(m.band ?? m.level ?? ""),
+  }));
+}
+
+// GET /employees/managers
+export async function fetchManagers({ signal } = {}) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl("/employees/managers"), {
+    signal,
+    credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+  if (!res.ok) throw await toHttpError(res);
+  return res.json();
+}
+
+// GET /employees/manager/{managerId}/reportees
+export async function fetchManagerReportees(managerId, { signal } = {}) {
+  const safeId = encodeURIComponent(String(managerId));
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl(`/employees/manager/${safeId}/reportees`), {
+    signal,
+    credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+  if (!res.ok) throw await toHttpError(res);
+  return res.json();
 }
 
 export async function promoteEmployee(employeeId) {
@@ -61,9 +138,9 @@ export async function promoteEmployee(employeeId) {
   const res = await fetch(buildApiUrl(`/employees/${safeId}/promote`), {
     method: "POST",
     credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
+    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await toHttpError(res);
 
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json();

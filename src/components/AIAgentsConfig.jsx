@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from "react";
-import { CheckCircle2, Edit3, Eye, EyeOff, KeyRound, Plug, Plus, Trash2, X } from "lucide-react";
+import { Edit3, Eye, EyeOff, KeyRound, Plug, Plus, Trash2, X } from "lucide-react";
+import Toast from "./Toast.jsx";
 
 const LEGACY_STORAGE_KEY = "rt_tracking_ai_agents_config_v1";
 const STORAGE_KEY = "rt_tracking_ai_agents_v1";
@@ -285,8 +286,8 @@ export default function AIAgentsConfig() {
       </section>
 
       {modal.open ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">
@@ -414,30 +415,7 @@ export default function AIAgentsConfig() {
         </div>
       ) : null}
 
-      {/* Purple toast (top-right) */}
-      {toast ? (
-        <div className="fixed top-6 right-6 z-[80]">
-          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-purple-600 px-4 py-3 shadow-2xl text-white">
-            <div className="mt-0.5 text-white">
-              <CheckCircle2 size={18} />
-            </div>
-            <div className="min-w-[220px]">
-              <div className="text-sm font-black">{toast.title}</div>
-              {toast.message ? (
-                <div className="text-xs text-white/90 mt-1">{toast.message}</div>
-              ) : null}
-            </div>
-            <button
-              onClick={() => setToast(null)}
-              className="ml-2 rounded-xl p-1 text-white/90 hover:bg-white/10 hover:text-white transition"
-              aria-label="Dismiss notification"
-              title="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-      ) : null}
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }
