@@ -1,15 +1,21 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Search,
   Trash2,
   ArrowUpCircle,
   Edit3,
   X,
-  CheckCircle2,
   Plus
 } from "lucide-react";
+import Toast from "./Toast.jsx";
+import CursorPagination from "./CursorPagination.jsx";
 
-import { addEmployee, promoteEmployee as promoteEmployeeApi } from "../api/employees.js";
+import {
+  addEmployeeWithManager,
+  fetchManagers,
+  normalizeManagers,
+  promoteEmployee as promoteEmployeeApi
+} from "../api/employees.js";
 
 function computeNextEmployeeId(employees) {
   let maxEmp = -1;
@@ -64,11 +70,13 @@ export default function EmployeeDirectory({
   employeesError,
   currentEmployeeId,
 }) {
+  const pageSize = 10;
   const [query, setQuery] = useState("");
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState([]); // string[]
   const [roleFilter, setRoleFilter] = useState("all"); // "all" | role value
   const [designationFilter, setDesignationFilter] = useState("all"); // "all" | designation value
   const [bandFilter, setBandFilter] = useState("all"); // "all" | band value
+  const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   const [toast, setToast] = useState(null); // { title: string, message?: string }
   const toastTimerRef = useRef(null);
@@ -88,6 +96,10 @@ export default function EmployeeDirectory({
     stream: "",
     managerId: "",
   });
+  const [managers, setManagers] = useState([]);
+  const [managersLoading, setManagersLoading] = useState(false);
+  const [managersError, setManagersError] = useState("");
+  const [managerSearch, setManagerSearch] = useState("");
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -142,21 +154,39 @@ export default function EmployeeDirectory({
     });
   }, [employees, query, roleFilter, designationFilter, bandFilter]);
 
+  useEffect(() => {
+    setPageIndex(0);
+  }, [query, roleFilter, designationFilter, bandFilter]);
+
+  const totalPages = useMemo(() => {
+    const total = Math.ceil(filtered.length / pageSize);
+    return Math.max(1, total);
+  }, [filtered.length]);
+
+  useEffect(() => {
+    setPageIndex((prev) => Math.min(prev, totalPages - 1));
+  }, [totalPages]);
+
   const isSelf = useCallback(
     (emp) => Boolean(currentEmployeeId) && String(emp?.id) === String(currentEmployeeId),
     [currentEmployeeId]
   );
 
+  const visibleEmployees = useMemo(() => {
+    const start = pageIndex * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, pageIndex]);
+
   const selectedIdSet = useMemo(() => new Set(selectedEmployeeIds), [selectedEmployeeIds]);
   const filteredIdSet = useMemo(() => new Set(filtered.map((e) => e.id)), [filtered]);
-  const allFilteredSelected = useMemo(() => {
-    if (filtered.length === 0) return false;
-    for (const emp of filtered) {
+  const allVisibleSelected = useMemo(() => {
+    if (visibleEmployees.length === 0) return false;
+    for (const emp of visibleEmployees) {
       if (isSelf(emp)) continue;
       if (!selectedIdSet.has(emp.id)) return false;
     }
     return true;
-  }, [filtered, isSelf, selectedIdSet]);
+  }, [visibleEmployees, isSelf, selectedIdSet]);
 
   const deletableSelectedCount = useMemo(() => {
     if (!currentEmployeeId) return selectedEmployeeIds.length;
@@ -209,14 +239,14 @@ export default function EmployeeDirectory({
   function toggleSelectAllVisible() {
     setSelectedEmployeeIds((prev) => {
       const set = new Set(prev);
-      const shouldSelectAll = !allFilteredSelected;
+      const shouldSelectAll = !allVisibleSelected;
       if (shouldSelectAll) {
-        for (const emp of filtered) {
+        for (const emp of visibleEmployees) {
           if (isSelf(emp)) continue;
           set.add(emp.id);
         }
       } else {
-        for (const emp of filtered) set.delete(emp.id);
+        for (const emp of visibleEmployees) set.delete(emp.id);
       }
       return Array.from(set);
     });
@@ -285,12 +315,54 @@ export default function EmployeeDirectory({
       stream: "",
       managerId: "",
     });
+    setManagersError("");
+    setManagerSearch("");
     setShowAddModal(true);
   }
 
   function closeAdd() {
     setShowAddModal(false);
   }
+
+  useEffect(() => {
+    if (!showAddModal) return;
+    let mounted = true;
+    const controller = new AbortController();
+    (async () => {
+      setManagersError("");
+      setManagersLoading(true);
+      try {
+        const data = await fetchManagers({ signal: controller.signal });
+        const list = normalizeManagers(data)
+          .filter((m) => String(m?.id || "").trim())
+          .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
+        if (!mounted) return;
+        setManagers(list);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        setManagersError(err?.message || "Failed to load managers.");
+        setManagers([]);
+      } finally {
+        if (mounted) setManagersLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [showAddModal]);
+
+  const filteredManagers = useMemo(() => {
+    const q = String(managerSearch || "").trim().toLowerCase();
+    if (!q) return managers;
+    return managers.filter((m) => {
+      const name = String(m?.name || "").toLowerCase();
+      const id = String(m?.id || "").toLowerCase();
+      const email = String(m?.email || "").toLowerCase();
+      return name.includes(q) || id.includes(q) || email.includes(q);
+    });
+  }, [managers, managerSearch]);
 
   async function submitAdd(e) {
     e.preventDefault();
@@ -324,7 +396,7 @@ export default function EmployeeDirectory({
 
     try {
       setMutating(true);
-      await addEmployee(payload);
+      await addEmployeeWithManager(payload);
 
       showToast({ title: "Employee added", message: `${payload.employeeName} created successfully.` });
 
@@ -446,9 +518,9 @@ export default function EmployeeDirectory({
               <th className="p-6 font-black w-[64px]">
                 <input
                   type="checkbox"
-                  checked={allFilteredSelected}
+                  checked={allVisibleSelected}
                   onChange={toggleSelectAllVisible}
-                  disabled={filtered.length === 0 || filtered.every((emp) => isSelf(emp))}
+                  disabled={visibleEmployees.length === 0 || visibleEmployees.every((emp) => isSelf(emp))}
                   className="h-4 w-4 accent-purple-600"
                   aria-label="Select all visible employees"
                   title="Select all visible"
@@ -462,7 +534,7 @@ export default function EmployeeDirectory({
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {filtered.map((emp) => (
+            {visibleEmployees.map((emp) => (
               <tr key={emp.id} className="hover:bg-white/[0.01] transition-colors">
                 <td className="p-6">
                   <input
@@ -525,35 +597,25 @@ export default function EmployeeDirectory({
         </table>
       </div>
 
-      {/* Purple toast (top-right) */}
-      {toast ? (
-        <div className="fixed top-6 right-6 z-[80]">
-          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-purple-600 px-4 py-3 shadow-2xl text-white">
-            <div className="mt-0.5 text-white">
-              <CheckCircle2 size={18} />
-            </div>
-            <div className="min-w-[220px]">
-              <div className="text-sm font-black">{toast.title}</div>
-              {toast.message ? (
-                <div className="text-xs text-white/90 mt-1">{toast.message}</div>
-              ) : null}
-            </div>
-            <button
-              onClick={() => setToast(null)}
-              className="ml-2 rounded-xl p-1 text-white/90 hover:bg-white/10 hover:text-white transition"
-              aria-label="Dismiss notification"
-              title="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
+      {filtered.length > pageSize ? (
+        <div className="pt-4">
+          <CursorPagination
+            canPrev={pageIndex > 0}
+            canNext={pageIndex < totalPages - 1}
+            onPrev={() => setPageIndex((prev) => Math.max(0, prev - 1))}
+            onNext={() => setPageIndex((prev) => Math.min(totalPages - 1, prev + 1))}
+            loading={employeesLoading}
+            label={`Page ${pageIndex + 1} / ${totalPages}`}
+          />
         </div>
       ) : null}
 
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
+
       {/* Add Employee Modal */}
       {showAddModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Add Employee</h3>
@@ -684,14 +746,38 @@ export default function EmployeeDirectory({
 
                 <div>
                   <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-                    Manager ID
+                    Manager (optional)
                   </label>
                   <input
+                    value={managerSearch}
+                    onChange={(e) => setManagerSearch(e.target.value)}
+                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    placeholder="Search managers by name, id, or email..."
+                  />
+                  <select
                     value={addDraft.managerId}
                     onChange={(e) => setAddDraft((d) => ({ ...d, managerId: e.target.value }))}
-                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
-                    placeholder="e.g., EMP001"
-                  />
+                    disabled={managersLoading}
+                    className={[
+                      "mt-3 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all",
+                      managersLoading ? "opacity-60 cursor-not-allowed" : "",
+                    ].join(" ")}
+                  >
+                    <option value="">No manager</option>
+                    {filteredManagers.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.id}{m.email ? `, ${m.email}` : ""})
+                      </option>
+                    ))}
+                  </select>
+                  {managersLoading ? (
+                    <div className="mt-2 text-xs text-gray-500">Loading managers…</div>
+                  ) : null}
+                  {managersError ? (
+                    <div className="mt-2 text-xs text-red-300">
+                      {managersError}
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -721,8 +807,8 @@ export default function EmployeeDirectory({
 
       {/* Edit Modal (kept as-is below in your file) */}
       {editingEmployee ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Edit Employee</h3>

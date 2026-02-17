@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpCircle, Calendar, CheckCircle2, Clock, Download, Play, Power, Square, Trash2, Users, X } from "lucide-react";
+import { ArrowUpCircle, Calendar, Clock, Download, Play, Power, Square, Trash2, Users, X } from "lucide-react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -9,6 +9,7 @@ import {
   CartesianGrid,
   Tooltip
 } from "recharts";
+import Toast from "./Toast.jsx";
 
 import { promoteEmployee as promoteEmployeeApi } from "../api/employees.js";
 import {
@@ -359,8 +360,8 @@ export default function AdminDashboard({
           </p>
         </div>
 
-        <div className="h-72 w-full">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="w-full">
+          <ResponsiveContainer width="100%" height={288}>
             <LineChart data={ability6m} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#222" vertical={false} />
               <XAxis dataKey="month" stroke="#666" fontSize={12} tickLine={false} axisLine={false} />
@@ -458,30 +459,7 @@ export default function AdminDashboard({
         </div>
       </section>
 
-      {/* Purple toast (top-right) */}
-      {toast ? (
-        <div className="fixed top-6 right-6 z-[80]">
-          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-purple-600 px-4 py-3 shadow-2xl text-white">
-            <div className="mt-0.5 text-white">
-              <CheckCircle2 size={18} />
-            </div>
-            <div className="min-w-[220px]">
-              <div className="text-sm font-black">{toast.title}</div>
-              {toast.message ? (
-                <div className="text-xs text-white/90 mt-1">{toast.message}</div>
-              ) : null}
-            </div>
-            <button
-              onClick={() => setToast(null)}
-              className="ml-2 rounded-xl p-1 text-white/90 hover:bg-white/10 hover:text-white transition"
-              aria-label="Dismiss notification"
-              title="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-      ) : null}
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }

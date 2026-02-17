@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { Eye, EyeOff, Briefcase, Award, TrendingUp as Profit, Headset, Zap, Copy, Check, Activity } from "lucide-react";
 import { fetchMe, getAuth, login, setAuth, forgotPassword, resetPassword } from "../api/auth.js";
+import { fetchPortalAdmin, fetchPortalEmployee, fetchPortalManager } from "../api/portal.js";
 
 export default function LoginPage({ onLoginSuccess }) {
   const [email, setEmail] = useState("");
@@ -48,7 +49,7 @@ export default function LoginPage({ onLoginSuccess }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const canSubmit = email.endsWith("@webknot.in") && password.length >= 8;
+  const canSubmit = email.trim().length >= 5 && password.length >= 8;
   const canRequestReset = resetEmail.trim().toLowerCase().endsWith("@webknot.in");
   const passwordsMatch = newPassword.length >= 8 && newPassword === confirmNewPassword;
 
@@ -85,15 +86,86 @@ export default function LoginPage({ onLoginSuccess }) {
 	                if (!canSubmit || submitting) return;
 	                setSubmitError("");
                   setSubmitSuccess("");
-		                setSubmitting(true);
-		                try {
-		                  const auth = await login({ email: email.trim(), password });
-		                  const me = await fetchMe().catch(() => null);
-		                  const nextSession = me || { ...auth, email: email.trim() };
-		                  setAuth(nextSession);
-		                  onLoginSuccess?.(getAuth() || nextSession);
+			                setSubmitting(true);
+			                try {
+			                  const emailValue = email.trim().toLowerCase();
+			                  const authRes = await login({ email: emailValue, password });
+                      // Prime auth so portal calls can include a bearer token if the backend returns one.
+                      setAuth({ ...authRes, email: emailValue });
+
+                      const inferPortalKind = (obj) => {
+                        const rawPortal = String(obj?.portal ?? "").trim().toLowerCase();
+                        const rawRole = String(obj?.role ?? obj?.empRole ?? obj?.userRole ?? "").trim().toLowerCase();
+                        if (rawPortal.includes("admin") || rawRole === "admin") return "admin";
+                        if (rawPortal.includes("manager") || rawRole === "manager") return "manager";
+                        return "employee";
+                      };
+
+                      // Prefer /auth/me when available, but fall back to the role-specific portal endpoint.
+                      const me = await fetchMe().catch(() => null);
+                      if (me) {
+                        setAuth({ ...me, email: emailValue });
+                        onLoginSuccess?.(getAuth() || me);
+                        return;
+                      }
+
+                      const kind = inferPortalKind(authRes);
+                      const fetchPortal =
+                        kind === "admin"
+                          ? fetchPortalAdmin
+                          : kind === "manager"
+                            ? fetchPortalManager
+                            : fetchPortalEmployee;
+
+                      let portal;
+                      try {
+                        portal = await fetchPortal();
+                      } catch (err) {
+                        if (err?.status === 403) {
+                          throw new Error("Your account is not authorized for this portal.");
+                        }
+                        throw err;
+                      }
+
+                      const root =
+                        portal?.data && typeof portal.data === "object" && !Array.isArray(portal.data)
+                          ? portal.data
+                          : portal;
+
+                      // Try common shapes to extract user info.
+                      const account =
+                        root?.account ||
+                        root?.employee ||
+                        root?.me ||
+                        root?.user ||
+                        root?.profile ||
+                        null;
+
+                      setAuth({
+                        ...(account && typeof account === "object" ? account : {}),
+                        email: emailValue,
+                        portal: kind,
+                        role:
+                          (account && (account.role || account.empRole || account.userRole)) ||
+                          authRes?.role ||
+                          authRes?.empRole ||
+                          (kind === "admin" ? "Admin" : kind === "manager" ? "Manager" : "Employee"),
+                      });
+                      const finalAuth = getAuth();
+                      onLoginSuccess?.(
+                        finalAuth || {
+                          email: emailValue,
+                          portal: kind,
+                          role: kind === "admin" ? "Admin" : kind === "manager" ? "Manager" : "Employee",
+                        }
+                      );
 		                } catch (err) {
-		                  setSubmitError(err?.message || "Login failed. Please try again.");
+		                  const status = err?.status;
+                      if (status === 401) {
+                        setSubmitError("Invalid credentials or session not established.");
+                      } else {
+                        setSubmitError(err?.message || "Login failed. Please try again.");
+                      }
 		                } finally {
 	                  setSubmitting(false);
 	                }
@@ -280,11 +352,11 @@ export default function LoginPage({ onLoginSuccess }) {
         </div>
 
         {/* Support Modal */}
-        <AnimatePresence>
+          <AnimatePresence>
           {showAdminModal && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
                 <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAdminModal(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-                <Motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-sm rounded-[2.5rem] bg-[#121212] border border-white/10 p-10 shadow-2xl">
+                <Motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-sm rounded-[2.5rem] bg-[#121212] border border-white/10 p-8 sm:p-10 shadow-2xl my-6 max-h-[90vh] overflow-y-auto">
                   <h3 className="text-2xl font-bold text-white tracking-tight">Support</h3>
                   <p className="mt-4 text-gray-400 text-sm">Talent Desk Assistance:</p>
                   <div className="mt-6 flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10 overflow-hidden">
@@ -300,9 +372,9 @@ export default function LoginPage({ onLoginSuccess }) {
         </AnimatePresence>
 
         {/* Reset Password Modal */}
-        <AnimatePresence>
+          <AnimatePresence>
           {showResetModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
               <Motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -314,7 +386,7 @@ export default function LoginPage({ onLoginSuccess }) {
                 initial={{ scale: 0.95, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.95, opacity: 0 }}
-                className="relative w-full max-w-lg rounded-[2.5rem] bg-[#121212] border border-white/10 p-8 sm:p-10 shadow-2xl"
+                className="relative w-full max-w-lg rounded-[2.5rem] bg-[#121212] border border-white/10 p-6 sm:p-10 shadow-2xl my-6 max-h-[90vh] overflow-y-auto"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>

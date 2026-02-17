@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from "react";
-import { CheckCircle2, Edit3, Eye, EyeOff, Plus, Search, Trash2, X } from "lucide-react";
+import { Edit3, Eye, EyeOff, Plus, Search, Trash2, X } from "lucide-react";
+import Toast from "./Toast.jsx";
 
 function normalizeCatalogItems(items) {
   const list = Array.isArray(items) ? items : [];
@@ -27,6 +28,7 @@ export default function Certifications({
   onDeleteCertificationFromCatalog,
 }) {
   const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const [showCatalogModal, setShowCatalogModal] = useState(false);
   const [catalogDraft, setCatalogDraft] = useState("");
@@ -150,13 +152,25 @@ export default function Certifications({
                       </button>
 
                       <button
-                        onClick={() => {
-                          onSetCertificationListed?.(item.id, !item.listed);
-                          showToast({
-                            title: item.listed ? "Unlisted" : "Listed",
-                            message: item.name,
-                          });
+                        onClick={async () => {
+                          if (busy) return;
+                          setBusy(true);
+                          try {
+                            await onSetCertificationListed?.(item.id, !item.listed);
+                            showToast({
+                              title: item.listed ? "Unlisted" : "Listed",
+                              message: item.name,
+                            });
+                          } catch (err) {
+                            showToast({
+                              title: "Update failed",
+                              message: err?.message || "Please try again.",
+                            });
+                          } finally {
+                            setBusy(false);
+                          }
                         }}
+                        disabled={busy}
                         className={[
                           "p-2.5 rounded-xl transition-all border",
                           item.listed
@@ -170,12 +184,24 @@ export default function Certifications({
                       </button>
 
                       <button
-                        onClick={() => {
+                        onClick={async () => {
+                          if (busy) return;
                           const ok = window.confirm(`Delete "${item.name}"?`);
                           if (!ok) return;
-                          onDeleteCertificationFromCatalog?.(item.id);
-                          showToast({ title: "Deleted", message: item.name });
+                          setBusy(true);
+                          try {
+                            await onDeleteCertificationFromCatalog?.(item.id);
+                            showToast({ title: "Deleted", message: item.name });
+                          } catch (err) {
+                            showToast({
+                              title: "Delete failed",
+                              message: err?.message || "Please try again.",
+                            });
+                          } finally {
+                            setBusy(false);
+                          }
                         }}
+                        disabled={busy}
                         className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
                         title="Delete"
                         aria-label={`Delete ${item.name}`}
@@ -201,8 +227,8 @@ export default function Certifications({
 
       {/* Add to Catalog Modal */}
       {showCatalogModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Add Certification</h3>
@@ -219,8 +245,9 @@ export default function Certifications({
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
+                if (busy) return;
                 const name = String(catalogDraft || "").trim();
                 if (!name) {
                   showToast({ title: "Missing field", message: "Enter a certification name." });
@@ -231,9 +258,19 @@ export default function Certifications({
                   showToast({ title: "Already exists", message: name });
                   return;
                 }
-                onAddCertificationToCatalog?.(name);
-                showToast({ title: "Added to registry", message: name });
-                closeCatalogModal();
+                setBusy(true);
+                try {
+                  await onAddCertificationToCatalog?.(name);
+                  showToast({ title: "Added to registry", message: name });
+                  closeCatalogModal();
+                } catch (err) {
+                  showToast({
+                    title: "Add failed",
+                    message: err?.message || "Please try again.",
+                  });
+                } finally {
+                  setBusy(false);
+                }
               }}
               className="mt-6 space-y-4"
             >
@@ -259,9 +296,10 @@ export default function Certifications({
                 </button>
                 <button
                   type="submit"
+                  disabled={busy}
                   className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all"
                 >
-                  Add
+                  {busy ? "Working…" : "Add"}
                 </button>
               </div>
             </form>
@@ -271,8 +309,8 @@ export default function Certifications({
 
       {/* Edit Modal */}
       {editModal.open ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Edit Certification</h3>
@@ -289,8 +327,9 @@ export default function Certifications({
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
+                if (busy) return;
                 const nextName = String(editModal.name || "").trim();
                 if (!nextName) {
                   showToast({ title: "Missing field", message: "Enter a certification name." });
@@ -303,9 +342,19 @@ export default function Certifications({
                   showToast({ title: "Already exists", message: nextName });
                   return;
                 }
-                onEditCertificationInCatalog?.(editModal.id, nextName);
-                showToast({ title: "Updated", message: nextName });
-                closeEdit();
+                setBusy(true);
+                try {
+                  await onEditCertificationInCatalog?.(editModal.id, nextName);
+                  showToast({ title: "Updated", message: nextName });
+                  closeEdit();
+                } catch (err) {
+                  showToast({
+                    title: "Update failed",
+                    message: err?.message || "Please try again.",
+                  });
+                } finally {
+                  setBusy(false);
+                }
               }}
               className="mt-6 space-y-4"
             >
@@ -325,15 +374,17 @@ export default function Certifications({
                 <button
                   type="button"
                   onClick={closeEdit}
+                  disabled={busy}
                   className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
+                  disabled={busy}
                   className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all"
                 >
-                  Save
+                  {busy ? "Saving…" : "Save"}
                 </button>
               </div>
             </form>
@@ -341,30 +392,7 @@ export default function Certifications({
         </div>
       ) : null}
 
-      {/* Purple toast (top-right) */}
-      {toast ? (
-        <div className="fixed top-6 right-6 z-[80]">
-          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-purple-600 px-4 py-3 shadow-2xl text-white">
-            <div className="mt-0.5 text-white">
-              <CheckCircle2 size={18} />
-            </div>
-            <div className="min-w-[220px]">
-              <div className="text-sm font-black">{toast.title}</div>
-              {toast.message ? (
-                <div className="text-xs text-white/90 mt-1">{toast.message}</div>
-              ) : null}
-            </div>
-            <button
-              onClick={() => setToast(null)}
-              className="ml-2 rounded-xl p-1 text-white/90 hover:bg-white/10 hover:text-white transition"
-              aria-label="Dismiss notification"
-              title="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-      ) : null}
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }

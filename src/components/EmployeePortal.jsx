@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -11,21 +11,31 @@ import {
   Target,
   X,
 } from "lucide-react";
+import Toast from "./Toast.jsx";
 
-import { fetchEmployees, normalizeEmployees } from "../api/employees.js";
-import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../api/kpi-definitions.js";
+import { fetchMe } from "../api/auth.js";
+import { fetchCertifications, normalizeCertifications } from "../api/certifications.js";
+import { normalizeKpiDefinitions } from "../api/kpi-definitions.js";
+import {
+  fetchMyMonthlySubmission,
+  formatYearMonth,
+  normalizeMonthlySubmission,
+  saveMonthlyDraft,
+  submitMonthlySubmission
+} from "../api/monthly-submissions.js";
+import { fetchPortalEmployee } from "../api/portal.js";
+import CursorPagination from "./CursorPagination.jsx";
+import {
+  fetchEmployeePortalKpiDefinitions,
+  fetchEmployeePortalWebknotValues,
+  normalizeCursorPage,
+  normalizeWebknotValues
+} from "../api/employee-portal.js";
 
-const CERTIFICATION_CATALOG_STORAGE_KEY = "rt_tracking_certification_catalog_v1";
 const AI_AGENTS_STORAGE_KEY = "rt_tracking_ai_agents_v1";
 const AI_AGENTS_LEGACY_KEY = "rt_tracking_ai_agents_config_v1";
-const SUBMISSION_DRAFTS_STORAGE_KEY = "rt_tracking_submission_drafts_v1";
-const FINAL_SUBMISSIONS_STORAGE_KEY = "rt_tracking_final_submissions_v1";
 
-const WEBKNOT_VALUES = [
-  { id: "VAL_001", title: "Own The Outcome", pillar: "Ownership" },
-  { id: "VAL_002", title: "Customers Over Convenience", pillar: "Customer" },
-  { id: "VAL_003", title: "Raise The Bar", pillar: "Excellence" },
-];
+const DEFAULT_PAGE_LIMIT = 10;
 
 function toPercentNumber(weight) {
   const raw = String(weight ?? "").trim();
@@ -35,33 +45,34 @@ function toPercentNumber(weight) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function loadAdminCertificationCatalog() {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(CERTIFICATION_CATALOG_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    const list = Array.isArray(parsed) ? parsed : [];
+function normalizeFilterKey(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
 
-    const seenByName = new Set();
-    const out = [];
-    for (const item of list) {
-      const name = String(item?.name ?? item ?? "").trim();
-      if (!name) continue;
-      const nameKey = name.toLowerCase();
-      if (seenByName.has(nameKey)) continue;
-      seenByName.add(nameKey);
+function isWildcardValue(key) {
+  return key === "" || key === "*" || key === "all" || key === "any";
+}
 
-      const listed = item && typeof item === "object" ? Boolean(item.listed ?? true) : true;
-      out.push({ name, listed });
-    }
+function kpiAppliesToEmployee(kpi, employee) {
+  const empBand = normalizeFilterKey(employee?.band);
+  const empStream = normalizeFilterKey(employee?.stream);
 
-    return out
-      .filter((c) => c.listed)
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-  } catch {
-    return [];
-  }
+  // If employee metadata is missing, do not filter out KPIs.
+  if (!empBand && !empStream) return true;
+
+  const kpiBand = normalizeFilterKey(kpi?.band);
+  const kpiStream = normalizeFilterKey(kpi?.stream);
+
+  const bandOk = isWildcardValue(kpiBand) || !empBand || kpiBand === empBand;
+
+  // Treat "general" as a wildcard stream so global KPIs still show up.
+  const streamOk =
+    isWildcardValue(kpiStream) ||
+    kpiStream === "general" ||
+    !empStream ||
+    kpiStream === empStream;
+
+  return bandOk && streamOk;
 }
 
 function tryParseJson(raw) {
@@ -92,6 +103,143 @@ function loadFirstAIAgent() {
   const apiKey = String(legacy?.apiKey ?? "").trim();
   if (!apiKey) return null;
   return { provider, apiKey };
+}
+
+function normalizeEmployeeFromMe(me, { fallbackEmail, fallbackRole } = {}) {
+  const root = me && typeof me === "object" ? me : {};
+  const obj =
+    root?.data && typeof root.data === "object" && !Array.isArray(root.data)
+      ? root.data
+      : root;
+
+  const email = String(obj.email ?? obj.employeeEmail ?? obj.mail ?? fallbackEmail ?? "").trim() || null;
+  const id = String(obj.employeeId ?? obj.empId ?? obj.id ?? "").trim() || null;
+  const name = String(obj.employeeName ?? obj.name ?? obj.fullName ?? "").trim() || null;
+  const role = String(obj.role ?? obj.empRole ?? obj.userRole ?? fallbackRole ?? "").trim() || "Employee";
+  const designation = String(obj.designation ?? obj.title ?? obj.jobTitle ?? "").trim() || null;
+  const band = String(obj.band ?? obj.level ?? "").trim() || null;
+  const stream = String(obj.stream ?? obj.context ?? "").trim() || null;
+  const managerId = String(obj.managerId ?? "").trim() || null;
+
+  return {
+    id: id || "—",
+    name: name || (email || "Unknown"),
+    email: email || "",
+    role,
+    designation,
+    band,
+    stream,
+    managerId,
+  };
+}
+
+function normalizeEmployeeFromAuth(auth, { fallbackEmail, fallbackRole } = {}) {
+  const obj = auth && typeof auth === "object" ? auth : {};
+  return {
+    id: String(obj.employeeId ?? "").trim() || "—",
+    name: String(obj.employeeName ?? "").trim() || (fallbackEmail || "Unknown"),
+    email: String(fallbackEmail || obj.email || "").trim(),
+    role: String(obj.role || fallbackRole || "Employee").trim() || "Employee",
+    designation: String(obj.designation ?? "").trim() || null,
+    band: String(obj.band ?? "").trim() || null,
+    stream: String(obj.stream ?? "").trim() || null,
+    managerId: String(obj.managerId ?? "").trim() || null,
+  };
+}
+
+function normalizeCertificationsForState(input) {
+  const arr = Array.isArray(input) ? input : [];
+  return arr
+    .map((raw) => {
+      if (typeof raw === "string") return { name: raw, proof: "" };
+      if (!raw || typeof raw !== "object") return null;
+      const name = String(raw.name ?? raw.certificationName ?? raw.title ?? "").trim();
+      if (!name) return null;
+      const proof = String(raw.proof ?? raw.url ?? raw.link ?? raw.credentialId ?? "").trim();
+      return { name, proof };
+    })
+    .filter(Boolean);
+}
+
+function normalizeKpiRatingsForState(input) {
+  if (!input) return {};
+  if (Array.isArray(input)) {
+    const out = {};
+    for (const item of input) {
+      if (!item || typeof item !== "object") continue;
+      const id = String(item.kpiDefinitionId ?? item.kpiId ?? item.id ?? "").trim();
+      if (!id) continue;
+      const num = Number.parseFloat(String(item.rating ?? item.value ?? item.score ?? ""));
+      if (!Number.isFinite(num)) continue;
+      out[id] = Math.round(num * 10) / 10;
+    }
+    return out;
+  }
+  if (typeof input === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(input)) {
+      const id = String(k || "").trim();
+      if (!id) continue;
+      const num = typeof v === "number" ? v : Number.parseFloat(String(v ?? ""));
+      if (!Number.isFinite(num)) continue;
+      out[id] = Math.round(num * 10) / 10;
+    }
+    return out;
+  }
+  return {};
+}
+
+function buildMonthlySubmissionPayload({
+  month,
+  selfReviewText,
+  selectedCertifications,
+  kpiRatings,
+  selectedValues,
+  recognitionsCount,
+}) {
+  const certifications = normalizeCertificationsForState(selectedCertifications)
+    .sort((a, b) =>
+      String(a.name).localeCompare(String(b.name), undefined, { numeric: true })
+    );
+
+  const ratings = normalizeKpiRatingsForState(kpiRatings);
+  const ratingEntries = Object.entries(ratings).sort(([a], [b]) =>
+    String(a).localeCompare(String(b), undefined, { numeric: true })
+  );
+  const stableRatings = Object.fromEntries(ratingEntries);
+
+  const values = Array.isArray(selectedValues)
+    ? Array.from(new Set(selectedValues.map((v) => String(v)))).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true })
+      )
+    : [];
+
+  return {
+    month: String(month || "").trim() || null,
+    selfReviewText: String(selfReviewText || ""),
+    certifications,
+    kpiRatings: stableRatings,
+    webknotValues: values,
+    recognitionsCount:
+      typeof recognitionsCount === "number" && Number.isFinite(recognitionsCount)
+        ? recognitionsCount
+        : Number.parseInt(String(recognitionsCount || "0"), 10) || 0,
+  };
+}
+
+function isFinalSubmissionStatus(status, meta) {
+  const s = String(status || "").trim().toUpperCase();
+  if (s === "SUBMITTED" || s === "APPROVED" || s === "COMPLETED" || s === "FINAL") return true;
+  if (meta?.submittedAt) return true;
+  return false;
+}
+
+function payloadHash(payload) {
+  try {
+    return JSON.stringify(payload ?? {});
+  } catch {
+    return String(Date.now());
+  }
 }
 
 async function enhanceSelfReviewText({ agent, text, signal }) {
@@ -139,93 +287,6 @@ async function enhanceSelfReviewText({ agent, text, signal }) {
   const enhanced = String(data?.choices?.[0]?.message?.content ?? "").trim();
   if (!enhanced) throw new Error("AI returned an empty response.");
   return enhanced;
-}
-
-function loadDraft(email) {
-  if (typeof window === "undefined") return null;
-  const key = String(email || "").trim().toLowerCase();
-  if (!key) return null;
-  try {
-    const parsed = tryParseJson(window.localStorage.getItem(SUBMISSION_DRAFTS_STORAGE_KEY));
-    if (!parsed || typeof parsed !== "object") return null;
-    const draft = parsed[key];
-    if (!draft || typeof draft !== "object") return null;
-
-    const rawCerts = draft.certifications;
-    const certifications = Array.isArray(rawCerts)
-      ? rawCerts
-          .map((c) => {
-            // Backward compat: previously we stored strings.
-            if (typeof c === "string") return { name: c, proof: "" };
-            if (!c || typeof c !== "object") return null;
-            return { name: String(c.name || ""), proof: String(c.proof || "") };
-          })
-          .filter((c) => c && String(c.name || "").trim())
-      : [];
-
-    return {
-      selfReviewText: String(draft.selfReviewText || ""),
-      certifications,
-      kpiRatings: draft.kpiRatings && typeof draft.kpiRatings === "object" ? draft.kpiRatings : {},
-      webknotValues: Array.isArray(draft.webknotValues) ? draft.webknotValues : [],
-      recognitionsCount:
-        typeof draft.recognitionsCount === "number" && Number.isFinite(draft.recognitionsCount)
-          ? draft.recognitionsCount
-          : 0,
-      updatedAt: typeof draft.updatedAt === "number" ? draft.updatedAt : null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function saveDraft(email, draft) {
-  if (typeof window === "undefined") return;
-  const key = String(email || "").trim().toLowerCase();
-  if (!key) return;
-  try {
-    const parsed = tryParseJson(window.localStorage.getItem(SUBMISSION_DRAFTS_STORAGE_KEY));
-    const nextRoot = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    nextRoot[key] = {
-      selfReviewText: String(draft?.selfReviewText || ""),
-      certifications: Array.isArray(draft?.certifications)
-        ? draft.certifications
-            .map((c) => {
-              if (typeof c === "string") return { name: c, proof: "" };
-              if (!c || typeof c !== "object") return null;
-              const name = String(c.name || "").trim();
-              if (!name) return null;
-              return { name, proof: String(c.proof || "") };
-            })
-            .filter(Boolean)
-        : [],
-      kpiRatings:
-        draft?.kpiRatings && typeof draft.kpiRatings === "object" ? draft.kpiRatings : {},
-      webknotValues: Array.isArray(draft?.webknotValues) ? draft.webknotValues : [],
-      recognitionsCount:
-        typeof draft?.recognitionsCount === "number" && Number.isFinite(draft.recognitionsCount)
-          ? draft.recognitionsCount
-          : 0,
-      updatedAt: Date.now(),
-    };
-    window.localStorage.setItem(SUBMISSION_DRAFTS_STORAGE_KEY, JSON.stringify(nextRoot));
-  } catch {
-    // ignore
-  }
-}
-
-function saveFinalSubmission(email, payload) {
-  if (typeof window === "undefined") return;
-  const key = String(email || "").trim().toLowerCase();
-  if (!key) return;
-  try {
-    const parsed = tryParseJson(window.localStorage.getItem(FINAL_SUBMISSIONS_STORAGE_KEY));
-    const nextRoot = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    nextRoot[key] = payload;
-    window.localStorage.setItem(FINAL_SUBMISSIONS_STORAGE_KEY, JSON.stringify(nextRoot));
-  } catch {
-    // ignore
-  }
 }
 
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
@@ -383,6 +444,7 @@ function ProfileTab({ employee, authEmail }) {
           <InfoRow label="Email" value={email} />
           <InfoRow label="Role" value={display?.role || "Employee"} />
           <InfoRow label="Designation" value={display?.designation || "—"} />
+          <InfoRow label="Stream" value={display?.stream || "—"} />
           <InfoRow label="Band" value={display?.band || "—"} />
         </div>
       </section>
@@ -407,7 +469,15 @@ function Placeholder({ title, note }) {
   );
 }
 
-function SelfReviewEditor({ aiAgent, text, setText, showFinalSubmit, onFinalSubmit, canFinalSubmit }) {
+function SelfReviewEditor({
+  aiAgent,
+  text,
+  setText,
+  showFinalSubmit,
+  onFinalSubmit,
+  canFinalSubmit,
+  locked,
+}) {
   const [enhancing, setEnhancing] = useState(false);
   const [toast, setToast] = useState(null); // { title, message? }
   const [toastTimerId, setToastTimerId] = useState(null);
@@ -451,10 +521,10 @@ function SelfReviewEditor({ aiAgent, text, setText, showFinalSubmit, onFinalSubm
                 setEnhancing(false);
               }
             }}
-            disabled={enhancing || !String(text || "").trim() || !aiAgent}
+            disabled={locked || enhancing || !String(text || "").trim() || !aiAgent}
             className={[
               "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
-              enhancing || !String(text || "").trim() || !aiAgent
+              locked || enhancing || !String(text || "").trim() || !aiAgent
                 ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
                 : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
             ].join(" ")}
@@ -474,14 +544,14 @@ function SelfReviewEditor({ aiAgent, text, setText, showFinalSubmit, onFinalSubm
                   showToast({ title: "Submit failed", message: err?.message || "Please try again." });
                 }
               }}
-              disabled={!canFinalSubmit || enhancing}
+              disabled={locked || !canFinalSubmit || enhancing}
               className={[
                 "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
-                !canFinalSubmit || enhancing
+                locked || !canFinalSubmit || enhancing
                   ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
                   : "bg-emerald-500 text-black hover:bg-emerald-400 shadow-xl shadow-emerald-900/20",
               ].join(" ")}
-              title={!canFinalSubmit ? "Complete required fields first" : "Submit your self review"}
+              title={locked ? "This month's review is locked" : (!canFinalSubmit ? "Complete required fields first" : "Submit your self review")}
             >
               <CheckCircle2 size={18} /> Final submit
             </button>
@@ -498,62 +568,61 @@ function SelfReviewEditor({ aiAgent, text, setText, showFinalSubmit, onFinalSubm
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
+        readOnly={locked}
         rows={10}
-        className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl p-4 text-sm focus:border-purple-500 outline-none transition-all resize-none"
+        className={[
+          "w-full bg-[#0c0c0c] border border-white/10 rounded-2xl p-4 text-sm outline-none transition-all resize-none",
+          locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
+        ].join(" ")}
         placeholder="Write your self review here..."
       />
       <div className="text-xs text-gray-500">
         Tip: include accomplishments, impact, collaboration, and next goals.
       </div>
 
-      {toast ? (
-        <div className="fixed top-6 right-6 z-[80]">
-          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-purple-600 px-4 py-3 shadow-2xl text-white">
-            <div className="mt-0.5 text-white">
-              <CheckCircle2 size={18} />
-            </div>
-            <div className="min-w-[220px]">
-              <div className="text-sm font-black">{toast.title}</div>
-              {toast.message ? (
-                <div className="text-xs text-white/90 mt-1">{toast.message}</div>
-              ) : null}
-            </div>
-            <button
-              onClick={() => setToast(null)}
-              className="ml-2 rounded-xl p-1 text-white/90 hover:bg-white/10 hover:text-white transition"
-              aria-label="Dismiss notification"
-              title="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-      ) : null}
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }
 
 function KpisTab({
-  kpis,
+  pageKpis,
+  allKpis,
   ratings,
   setRatings,
   onProceed,
   loading,
   error,
+  fullyLoaded,
+  prefetching,
+  pager,
   aiAgent,
   selfReviewText,
   setSelfReviewText,
+  locked,
 }) {
-  const items = Array.isArray(kpis) ? kpis : [];
+  const items = Array.isArray(pageKpis) ? pageKpis : [];
+  const all = Array.isArray(allKpis) ? allKpis : [];
   const totalWeight = items.reduce((sum, k) => sum + toPercentNumber(k?.weight), 0);
-  const allRated = items.length === 0
+  const allRated = all.length === 0
     ? true
-    : items.every((k) => {
+    : all.every((k) => {
         const v = ratings?.[k.id];
         return typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 5;
       });
   const selfReviewOk = Boolean(String(selfReviewText || "").trim());
-  const canProceed = allRated && selfReviewOk;
+  const canProceed = fullyLoaded && allRated && selfReviewOk;
+  const proceedDisabled = locked ? false : !canProceed;
+  const ratedCount = useMemo(() => {
+    const list = Array.isArray(allKpis) ? allKpis : [];
+    if (list.length === 0) return 0;
+    let count = 0;
+    for (const k of list) {
+      const v = ratings?.[k.id];
+      if (typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 5) count += 1;
+    }
+    return count;
+  }, [allKpis, ratings]);
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -573,6 +642,11 @@ function KpisTab({
       {loading ? (
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
           Loading KPIs…
+        </div>
+      ) : null}
+      {!fullyLoaded && (prefetching || loading) ? (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+          Loading full KPI list for this month…
         </div>
       ) : null}
 
@@ -621,6 +695,7 @@ function KpisTab({
                         step={0.1}
                         value={display}
                         onChange={(e) => {
+                          if (locked) return;
                           const text = String(e.target.value ?? "").trim();
                           const parsed = text === "" ? null : Number.parseFloat(text);
                           setRatings((prev) => {
@@ -635,7 +710,11 @@ function KpisTab({
                             return next;
                           });
                         }}
-                        className="w-40 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                        disabled={locked}
+                        className={[
+                          "w-40 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+                          locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
+                        ].join(" ")}
                         placeholder="e.g., 4.2"
                       />
                     </td>
@@ -661,40 +740,65 @@ function KpisTab({
           text={selfReviewText}
           setText={setSelfReviewText}
           showFinalSubmit={false}
+          locked={locked}
         />
       </section>
 
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="text-sm text-gray-500">
-          All KPI ratings and Self Review are required to proceed.
+          Rated: <span className="font-mono text-gray-200">{ratedCount}</span>
+          /<span className="font-mono text-gray-200">{all.length}</span>
+          {locked ? " (locked)" : null}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <button
             type="button"
             onClick={onProceed}
-            disabled={!canProceed}
+            disabled={proceedDisabled}
             className={[
               "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
-              !canProceed
+              proceedDisabled
                 ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
                 : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
             ].join(" ")}
             title={
-              !allRated
+              locked
+                ? "Proceed"
+                : !allRated
                 ? "Rate all KPIs to proceed"
                 : (!selfReviewOk ? "Write your self review to proceed" : "Proceed")
             }
           >
             Proceed
           </button>
+          <div className="ml-auto">
+            <CursorPagination
+              canPrev={Boolean(pager?.canPrev)}
+              canNext={Boolean(pager?.canNext)}
+              onPrev={pager?.onPrev}
+              onNext={pager?.onNext}
+              loading={Boolean(pager?.loading)}
+              label="KPIs"
+            />
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function ValuesTab({ selectedValues, setSelectedValues, onProceed }) {
+function ValuesTab({
+  items,
+  loading,
+  error,
+  selectedValues,
+  setSelectedValues,
+  onProceed,
+  locked,
+  pager,
+}) {
   const selectedSet = useMemo(() => new Set(Array.isArray(selectedValues) ? selectedValues : []), [selectedValues]);
+  const list = Array.isArray(items) ? items : [];
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -704,6 +808,17 @@ function ValuesTab({ selectedValues, setSelectedValues, onProceed }) {
           Select the values you feel you demonstrated this cycle.
         </p>
       </header>
+
+      {error ? (
+        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+          Failed to load values: <span className="font-mono">{error}</span>
+        </div>
+      ) : null}
+      {loading ? (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+          Loading values…
+        </div>
+      ) : null}
 
       <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
         <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
@@ -725,24 +840,27 @@ function ValuesTab({ selectedValues, setSelectedValues, onProceed }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {WEBKNOT_VALUES.map((v) => {
-                const checked = selectedSet.has(v.id);
+              {list.map((v) => {
+                const id = String(v?.id || "");
+                const checked = selectedSet.has(id);
                 return (
-                  <tr key={v.id} className="hover:bg-white/[0.01] transition-colors">
+                  <tr key={id} className="hover:bg-white/[0.01] transition-colors">
                     <td className="p-6">
-                      <div className="font-bold text-white tracking-tight">{v.title}</div>
+                      <div className="font-bold text-white tracking-tight">{String(v?.title || id)}</div>
                     </td>
-                    <td className="p-6 text-gray-300">{v.pillar}</td>
+                    <td className="p-6 text-gray-300">{String(v?.pillar || "—")}</td>
                     <td className="p-6">
                       <label className="inline-flex items-center gap-3 select-none">
                         <input
                           type="checkbox"
                           checked={checked}
+                          disabled={locked}
                           onChange={(e) => {
+                            if (locked) return;
                             setSelectedValues((prev) => {
                               const list = Array.isArray(prev) ? prev.slice() : [];
-                              const next = list.filter((id) => String(id) !== v.id);
-                              if (e.target.checked) next.push(v.id);
+                              const next = list.filter((x) => String(x) !== id);
+                              if (e.target.checked) next.push(id);
                               return next;
                             });
                           }}
@@ -753,6 +871,14 @@ function ValuesTab({ selectedValues, setSelectedValues, onProceed }) {
                   </tr>
                 );
               })}
+
+              {!loading && list.length === 0 ? (
+                <tr>
+                  <td className="p-10 text-center text-gray-500" colSpan={3}>
+                    No values to show.
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>
@@ -766,6 +892,14 @@ function ValuesTab({ selectedValues, setSelectedValues, onProceed }) {
         >
           Proceed
         </button>
+        <CursorPagination
+          canPrev={Boolean(pager?.canPrev)}
+          canNext={Boolean(pager?.canNext)}
+          onPrev={pager?.onPrev}
+          onNext={pager?.onNext}
+          loading={Boolean(pager?.loading)}
+          label="Values"
+        />
       </div>
     </div>
   );
@@ -776,6 +910,9 @@ function CertificationsTab({
   selectedCertifications,
   setSelectedCertifications,
   onProceed,
+  loading,
+  error,
+  locked,
 }) {
   const [proofModal, setProofModal] = useState({ open: false, name: "" });
   const [proofDraft, setProofDraft] = useState("");
@@ -809,6 +946,18 @@ function CertificationsTab({
         </p>
       </header>
 
+      {error ? (
+        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+          Failed to load certifications: <span className="font-mono">{error}</span>
+        </div>
+      ) : null}
+
+      {loading ? (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+          Loading certifications…
+        </div>
+      ) : null}
+
       <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -837,6 +986,7 @@ function CertificationsTab({
                         type="checkbox"
                         checked={checked}
                         onChange={(e) => {
+                          if (locked) return;
                           if (e.target.checked) {
                             setProofModal({ open: true, name });
                             setProofDraft("");
@@ -850,6 +1000,7 @@ function CertificationsTab({
                             return list.filter((x) => String(x?.name || "").trim().toLowerCase() !== key);
                           });
                         }}
+                        disabled={locked}
                         className="h-4 w-4 accent-purple-500"
                       />
                     </label>
@@ -888,8 +1039,8 @@ function CertificationsTab({
       </section>
 
       {proofModal.open ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Proof of Certification</h3>
@@ -914,6 +1065,10 @@ function CertificationsTab({
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                if (locked) {
+                  closeProofModal();
+                  return;
+                }
                 const proof = String(proofDraft || "").trim();
                 if (!proof) {
                   setProofError("Proof is mandatory. Paste a certificate URL / credential ID.");
@@ -941,10 +1096,15 @@ function CertificationsTab({
                 <input
                   value={proofDraft}
                   onChange={(e) => {
+                    if (locked) return;
                     setProofDraft(e.target.value);
                     setProofError("");
                   }}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  disabled={locked}
+                  className={[
+                    "mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+                    locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
+                  ].join(" ")}
                   placeholder="Paste certificate URL / credential ID"
                 />
                 <div className="mt-2 text-xs text-gray-500">
@@ -962,7 +1122,11 @@ function CertificationsTab({
                 </button>
                 <button
                   type="submit"
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all"
+                  disabled={locked}
+                  className={[
+                    "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
+                    locked ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-500",
+                  ].join(" ")}
                 >
                   Save
                 </button>
@@ -975,7 +1139,7 @@ function CertificationsTab({
   );
 }
 
-function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed }) {
+function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, locked }) {
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header>
@@ -996,10 +1160,15 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed })
             step={1}
             value={Number.isFinite(recognitionsCount) ? recognitionsCount : 0}
             onChange={(e) => {
+              if (locked) return;
               const parsed = Number.parseInt(String(e.target.value || "0"), 10);
               setRecognitionsCount(Number.isFinite(parsed) && parsed >= 0 ? parsed : 0);
             }}
-            className="w-40 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+            disabled={locked}
+            className={[
+              "w-40 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+              locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
+            ].join(" ")}
           />
           <div className="text-sm text-gray-400">
             Enter 0 if none.
@@ -1033,6 +1202,8 @@ function ReviewTab({
   onSaveDraft,
   onFinalSubmit,
   canFinalSubmit,
+  locked,
+  valuesIndex,
 }) {
   const [toast, setToast] = useState(null); // { title, message? }
   const [toastTimerId, setToastTimerId] = useState(null);
@@ -1045,9 +1216,19 @@ function ReviewTab({
   }
 
   const valueLabels = useMemo(() => {
-    const selectedSet = new Set(Array.isArray(selectedValues) ? selectedValues : []);
-    return WEBKNOT_VALUES.filter((v) => selectedSet.has(v.id)).map((v) => v.title);
-  }, [selectedValues]);
+    const idx = valuesIndex && typeof valuesIndex === "object" ? valuesIndex : {};
+    const list = Array.isArray(selectedValues) ? selectedValues : [];
+    const out = [];
+    const seen = new Set();
+    for (const idRaw of list) {
+      const id = String(idRaw || "").trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const title = idx?.[id]?.title ? String(idx[id].title) : id;
+      out.push(title);
+    }
+    return out;
+  }, [selectedValues, valuesIndex]);
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1145,7 +1326,16 @@ function ReviewTab({
       <div className="flex items-center justify-end gap-3 flex-wrap">
         <button
           type="button"
-          onClick={onSaveDraft}
+          onClick={async () => {
+            if (locked) return;
+            try {
+              await onSaveDraft?.();
+              showToast({ title: "Draft saved", message: "Saved to server." });
+            } catch (err) {
+              showToast({ title: "Save failed", message: err?.message || "Please try again." });
+            }
+          }}
+          disabled={locked}
           className="inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
         >
           Save draft
@@ -1153,6 +1343,7 @@ function ReviewTab({
         <button
           type="button"
           onClick={async () => {
+            if (locked) return;
             try {
               await onFinalSubmit?.();
               showToast({ title: "Submitted", message: "Saved for manager review." });
@@ -1160,67 +1351,140 @@ function ReviewTab({
               showToast({ title: "Submit failed", message: err?.message || "Please try again." });
             }
           }}
-          disabled={!canFinalSubmit}
+          disabled={locked || !canFinalSubmit}
           className={[
             "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
-            !canFinalSubmit
+            locked || !canFinalSubmit
               ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
               : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
           ].join(" ")}
-          title={!canFinalSubmit ? "Complete required fields first" : "Final submit"}
+          title={locked ? "This month's review is locked" : (!canFinalSubmit ? "Complete required fields first" : "Final submit")}
         >
           <CheckCircle2 size={18} /> Final submit
         </button>
       </div>
 
-      {toast ? (
-        <div className="fixed top-6 right-6 z-[80]">
-          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-purple-600 px-4 py-3 shadow-2xl text-white">
-            <div className="mt-0.5 text-white">
-              <CheckCircle2 size={18} />
-            </div>
-            <div className="min-w-[220px]">
-              <div className="text-sm font-black">{toast.title}</div>
-              {toast.message ? (
-                <div className="text-xs text-white/90 mt-1">{toast.message}</div>
-              ) : null}
-            </div>
-            <button
-              onClick={() => setToast(null)}
-              className="ml-2 rounded-xl p-1 text-white/90 hover:bg-white/10 hover:text-white transition"
-              aria-label="Dismiss notification"
-              title="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-      ) : null}
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }
 
 export default function EmployeePortal({ onLogout, auth }) {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.innerWidth >= 1024;
+  });
   const [activeTab, setActiveTab] = useState("profile");
 
-  const [employee, setEmployee] = useState(null);
+  const [employee, setEmployee] = useState(() =>
+    normalizeEmployeeFromAuth(auth, {
+      fallbackEmail: String(auth?.email || auth?.claims?.sub || "").trim(),
+      fallbackRole: String(auth?.role || auth?.claims?.role || "").trim() || "Employee",
+    })
+  );
+
+  const [portalBootstrapError, setPortalBootstrapError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [adminCertCatalog, setAdminCertCatalog] = useState(() => loadAdminCertificationCatalog());
+  const [certificationCatalog, setCertificationCatalog] = useState([]);
+  const [certificationsLoading, setCertificationsLoading] = useState(false);
+  const [certificationsError, setCertificationsError] = useState("");
   const [aiAgent, setAiAgent] = useState(() => loadFirstAIAgent());
+  const [submissionMonth, setSubmissionMonth] = useState(() => formatYearMonth(new Date()));
+  const [hydratingSubmission, setHydratingSubmission] = useState(false);
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [draftSaveError, setDraftSaveError] = useState("");
+  const lastSavedDraftHashRef = useRef("");
+  const [submissionMeta, setSubmissionMeta] = useState(null); // { id, month, status, submittedAt, updatedAt }
   const [selfReviewText, setSelfReviewText] = useState("");
   const [selectedCertifications, setSelectedCertifications] = useState([]); // { name, proof }[]
-  const [kpis, setKpis] = useState([]);
-  const [kpisLoading, setKpisLoading] = useState(false);
+  const [kpis, setKpis] = useState([]); // all loaded KPIs (union)
+  const [kpiPage, setKpiPage] = useState({ cursor: null, nextCursor: null, stack: [], items: [] });
+  const [kpisFullyLoaded, setKpisFullyLoaded] = useState(false);
+  const [kpiPageLoading, setKpiPageLoading] = useState(false);
+  const [kpiPrefetching, setKpiPrefetching] = useState(false);
   const [kpisError, setKpisError] = useState("");
   const [kpiRatings, setKpiRatings] = useState({}); // { [kpiId]: number }
+  const [valuesIndex, setValuesIndex] = useState({}); // { [id]: { title, pillar } }
+  const [valuesPage, setValuesPage] = useState({ cursor: null, nextCursor: null, stack: [], items: [] });
+  const [valuesLoading, setValuesLoading] = useState(false);
+  const [valuesPageLoading, setValuesPageLoading] = useState(false);
+  const [valuesError, setValuesError] = useState("");
   const [selectedValues, setSelectedValues] = useState([]); // string[] (value ids)
   const [recognitionsCount, setRecognitionsCount] = useState(0);
-  const [_finalSubmission, setFinalSubmission] = useState(null);
 
   const authEmail = String(auth?.email || auth?.claims?.sub || "").trim();
   const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
+
+  const kpiPrefetchCursorRef = useRef(null);
+
+  const loadKpiPage = useCallback(async ({ cursor, stack }, { signal } = {}) => {
+    setKpisError("");
+    setKpiPageLoading(true);
+    try {
+      const data = await fetchEmployeePortalKpiDefinitions({
+        limit: DEFAULT_PAGE_LIMIT,
+        cursor,
+        signal,
+      });
+      const page = normalizeCursorPage(data);
+      const normalized = normalizeKpiDefinitions(page.items);
+      setKpiPage({ cursor: cursor || null, nextCursor: page.nextCursor, stack: Array.isArray(stack) ? stack : [], items: normalized });
+      setKpis((prev) => {
+        const seen = new Set((prev || []).map((k) => String(k.id)));
+        const out = Array.isArray(prev) ? prev.slice() : [];
+        for (const k of normalized) {
+          const id = String(k?.id || "");
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          out.push(k);
+        }
+        return out;
+      });
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      if (err?.status === 401) {
+        onLogout?.();
+        return;
+      }
+      setKpisError(err?.message || "Failed to load KPIs.");
+    } finally {
+      setKpiPageLoading(false);
+    }
+  }, [onLogout]);
+
+  const loadValuesPage = useCallback(async ({ cursor, stack }, { signal } = {}) => {
+    setValuesError("");
+    setValuesPageLoading(true);
+    try {
+      const data = await fetchEmployeePortalWebknotValues({
+        limit: DEFAULT_PAGE_LIMIT,
+        cursor,
+        signal,
+      });
+      const page = normalizeCursorPage(data);
+      const normalized = normalizeWebknotValues(page.items);
+      setValuesPage({ cursor: cursor || null, nextCursor: page.nextCursor, stack: Array.isArray(stack) ? stack : [], items: normalized });
+      setValuesIndex((prev) => {
+        const next = { ...(prev && typeof prev === "object" ? prev : {}) };
+        for (const v of normalized) {
+          const id = String(v?.id || "").trim();
+          if (!id) continue;
+          next[id] = { title: v.title, pillar: v.pillar };
+        }
+        return next;
+      });
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      if (err?.status === 401) {
+        onLogout?.();
+        return;
+      }
+      setValuesError(err?.message || "Failed to load values.");
+    } finally {
+      setValuesPageLoading(false);
+    }
+  }, [onLogout]);
 
   // If the browser duplicates the tab, it may clone in-memory state (including active tab).
   // This resets the UI to the first tab for the duplicated copy.
@@ -1249,44 +1513,107 @@ export default function EmployeePortal({ onLogout, auth }) {
     } catch {
       // ignore storage errors
     }
-  }, []);
+  }, [onLogout]);
 
   useEffect(() => {
     function onStorage(e) {
-      if (e?.key === CERTIFICATION_CATALOG_STORAGE_KEY) {
-        setAdminCertCatalog(loadAdminCertificationCatalog());
-      }
       if (e?.key === AI_AGENTS_STORAGE_KEY || e?.key === AI_AGENTS_LEGACY_KEY) {
         setAiAgent(loadFirstAIAgent());
       }
     }
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, []);
+  }, [onLogout]);
+
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        setPortalBootstrapError("");
+        const portal = await fetchPortalEmployee({ signal: controller.signal });
+        if (!mounted) return;
+        const root =
+          portal?.data && typeof portal.data === "object" && !Array.isArray(portal.data)
+            ? portal.data
+            : portal;
+
+        const portalEmployee = root?.employee ?? root?.me ?? null;
+        if (portalEmployee && typeof portalEmployee === "object") {
+          const normalized = normalizeEmployeeFromMe(portalEmployee, {
+            fallbackEmail: authEmail,
+            fallbackRole: role,
+          });
+          setEmployee((prev) => (prev?.name || prev?.email ? prev : normalized));
+        }
+
+        const certsRaw =
+          root?.certifications ??
+          root?.certificationCatalog ??
+          root?.catalog ??
+          root?.data?.certifications ??
+          null;
+        if (Array.isArray(certsRaw)) {
+          const next = normalizeCertifications(certsRaw).filter((c) => Boolean(c?.listed));
+          setCertificationCatalog((prev) => (Array.isArray(prev) && prev.length ? prev : next));
+        }
+
+        const submissionRaw =
+          root?.monthlySubmission ?? root?.submission ?? root?.currentSubmission ?? null;
+        const normalizedSubmission = normalizeMonthlySubmission(submissionRaw);
+        if (normalizedSubmission && String(normalizedSubmission.month || "") === String(submissionMonth || "")) {
+          const nextCerts = normalizeCertificationsForState(normalizedSubmission.certifications);
+          const nextRatings = normalizeKpiRatingsForState(normalizedSubmission.kpiRatings);
+          const nextValues = Array.isArray(normalizedSubmission.webknotValues)
+            ? normalizedSubmission.webknotValues.map((v) => String(v))
+            : [];
+
+          setSelfReviewText((prev) => (String(prev || "").trim() ? prev : normalizedSubmission.selfReviewText || ""));
+          setSelectedCertifications((prev) => (Array.isArray(prev) && prev.length ? prev : nextCerts));
+          setKpiRatings((prev) => (prev && Object.keys(prev).length ? prev : nextRatings));
+          setSelectedValues((prev) => (Array.isArray(prev) && prev.length ? prev : nextValues));
+          setRecognitionsCount((prev) => (prev ? prev : (normalizedSubmission.recognitionsCount || 0)));
+        }
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setPortalBootstrapError(err?.message || "Failed to load portal data.");
+      }
+    })();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+    // Intentionally a best-effort call; portal payload shape may vary.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onLogout]);
 
   useEffect(() => {
     let mounted = true;
     const controller = new AbortController();
     async function run() {
-      setKpisError("");
-      setKpisLoading(true);
+      setCertificationsError("");
+      setCertificationsLoading(true);
       try {
-        const data = await fetchKpiDefinitions({ signal: controller.signal });
-        const normalized = normalizeKpiDefinitions(data);
+        const data = await fetchCertifications({ activeOnly: true, signal: controller.signal });
+        const normalized = normalizeCertifications(data).filter((c) => Boolean(c?.listed));
         if (!mounted) return;
-        setKpis(normalized);
+        setCertificationCatalog(normalized);
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!mounted) return;
-        // Fallback demo KPIs if backend blocks/403s.
-        setKpis([
-          { id: "KPI_DEMO_1", title: "Execution & Delivery", stream: "General", band: "", weight: "40%" },
-          { id: "KPI_DEMO_2", title: "Quality & Ownership", stream: "General", band: "", weight: "35%" },
-          { id: "KPI_DEMO_3", title: "Collaboration", stream: "General", band: "", weight: "25%" },
-        ]);
-        setKpisError(err?.message || "Failed to load KPIs.");
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setCertificationsError(err?.message || "Failed to load certifications.");
+        setCertificationCatalog([]);
       } finally {
-        if (mounted) setKpisLoading(false);
+        if (mounted) setCertificationsLoading(false);
       }
     }
     run();
@@ -1294,58 +1621,340 @@ export default function EmployeePortal({ onLogout, auth }) {
       mounted = false;
       controller.abort();
     };
-  }, []);
+  }, [onLogout]);
 
   useEffect(() => {
-    const draft = loadDraft(authEmail);
-    if (!draft) {
-      setSelfReviewText("");
-      setSelectedCertifications([]);
-      setKpiRatings({});
-      setSelectedValues([]);
-      setRecognitionsCount(0);
+    // Load first KPI page on portal init; full list is fetched progressively as the user navigates.
+    let mounted = true;
+    const controller = new AbortController();
+    (async () => {
+      setKpisError("");
+      setKpiPageLoading(true);
+      setKpisFullyLoaded(false);
+      try {
+        const data = await fetchEmployeePortalKpiDefinitions({
+          limit: DEFAULT_PAGE_LIMIT,
+          cursor: null,
+          signal: controller.signal,
+        });
+        const page = normalizeCursorPage(data);
+        const normalized = normalizeKpiDefinitions(page.items);
+        if (!mounted) return;
+        setKpiPage({ cursor: null, nextCursor: page.nextCursor, stack: [], items: normalized });
+        kpiPrefetchCursorRef.current = page.nextCursor;
+        setKpis((prev) => {
+          const seen = new Set((prev || []).map((k) => String(k.id)));
+          const out = Array.isArray(prev) ? prev.slice() : [];
+          for (const k of normalized) {
+            const id = String(k?.id || "");
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            out.push(k);
+          }
+          return out;
+        });
+        if (!page.nextCursor) setKpisFullyLoaded(true);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setKpisError(err?.message || "Failed to load KPIs.");
+        setKpiPage({ cursor: null, nextCursor: null, stack: [], items: [] });
+        kpiPrefetchCursorRef.current = null;
+        setKpis([]);
+        setKpisFullyLoaded(true);
+      } finally {
+        if (mounted) setKpiPageLoading(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [onLogout]);
+
+  useEffect(() => {
+    // Prefetch all remaining KPI pages while the user is on the KPI tab so we can enforce "rate all KPIs".
+    if (activeTab !== "kpis") return;
+    if (kpisFullyLoaded) return;
+    if (kpiPrefetching) return;
+    const startCursor = kpiPrefetchCursorRef.current;
+    if (!startCursor) {
+      setKpisFullyLoaded(true);
       return;
     }
-    setSelfReviewText(draft.selfReviewText || "");
-    setSelectedCertifications(Array.isArray(draft.certifications) ? draft.certifications : []);
-    setKpiRatings(draft.kpiRatings && typeof draft.kpiRatings === "object" ? draft.kpiRatings : {});
-    setSelectedValues(Array.isArray(draft.webknotValues) ? draft.webknotValues : []);
-    setRecognitionsCount(
-      typeof draft.recognitionsCount === "number" && Number.isFinite(draft.recognitionsCount)
-        ? draft.recognitionsCount
-        : 0
-    );
-  }, [authEmail]);
+
+    let alive = true;
+    const controller = new AbortController();
+
+    (async () => {
+      setKpiPrefetching(true);
+      try {
+        let cursor = startCursor;
+        while (alive && cursor) {
+          const data = await fetchEmployeePortalKpiDefinitions({
+            limit: DEFAULT_PAGE_LIMIT,
+            cursor,
+            signal: controller.signal,
+          });
+          const page = normalizeCursorPage(data);
+          const normalized = normalizeKpiDefinitions(page.items);
+          setKpis((prev) => {
+            const seen = new Set((prev || []).map((k) => String(k.id)));
+            const out = Array.isArray(prev) ? prev.slice() : [];
+            for (const k of normalized) {
+              const id = String(k?.id || "");
+              if (!id || seen.has(id)) continue;
+              seen.add(id);
+              out.push(k);
+            }
+            return out;
+          });
+          cursor = page.nextCursor;
+          kpiPrefetchCursorRef.current = cursor;
+        }
+        if (alive) setKpisFullyLoaded(true);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!alive) return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setKpisError(err?.message || "Failed to load KPIs.");
+      } finally {
+        if (alive) setKpiPrefetching(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, [activeTab, kpiPrefetching, kpisFullyLoaded, onLogout]);
 
   useEffect(() => {
-    if (!authEmail) return;
-    saveDraft(authEmail, {
-      selfReviewText,
-      certifications: selectedCertifications,
-      kpiRatings,
-      webknotValues: selectedValues,
-      recognitionsCount,
-    });
-  }, [authEmail, kpiRatings, recognitionsCount, selectedCertifications, selectedValues, selfReviewText]);
+    // Load first Webknot Values page on portal init (for values tab + review labels).
+    let mounted = true;
+    const controller = new AbortController();
+    (async () => {
+      setValuesError("");
+      setValuesLoading(true);
+      try {
+        const data = await fetchEmployeePortalWebknotValues({
+          limit: DEFAULT_PAGE_LIMIT,
+          cursor: null,
+          signal: controller.signal,
+        });
+        const page = normalizeCursorPage(data);
+        const normalized = normalizeWebknotValues(page.items);
+        if (!mounted) return;
+        setValuesPage({ cursor: null, nextCursor: page.nextCursor, stack: [], items: normalized });
+        const idx = {};
+        for (const v of normalized) idx[String(v.id)] = { title: v.title, pillar: v.pillar };
+        setValuesIndex(idx);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setValuesError(err?.message || "Failed to load values.");
+        setValuesPage({ cursor: null, nextCursor: null, stack: [], items: [] });
+        setValuesIndex({});
+      } finally {
+        if (mounted) setValuesLoading(false);
+      }
+    })();
 
-  function saveDraftNow() {
-    if (!authEmail) return;
-    saveDraft(authEmail, {
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [onLogout]);
+
+  useEffect(() => {
+    if (!String(submissionMonth || "").trim()) return;
+    let mounted = true;
+    const controller = new AbortController();
+
+    async function run() {
+      setHydratingSubmission(true);
+      setDraftSaveError("");
+      try {
+        const data = await fetchMyMonthlySubmission({
+          month: submissionMonth,
+          signal: controller.signal,
+        });
+        if (!mounted) return;
+
+        const normalized = normalizeMonthlySubmission(data);
+        if (!normalized) {
+          setSubmissionMeta(null);
+          setSelfReviewText("");
+          setSelectedCertifications([]);
+          setKpiRatings({});
+          setSelectedValues([]);
+          setRecognitionsCount(0);
+          const cleared = buildMonthlySubmissionPayload({
+            month: submissionMonth,
+            selfReviewText: "",
+            selectedCertifications: [],
+            kpiRatings: {},
+            selectedValues: [],
+            recognitionsCount: 0,
+          });
+          lastSavedDraftHashRef.current = payloadHash(cleared);
+          return;
+        }
+
+        setSubmissionMeta({
+          id: normalized.id,
+          month: normalized.month || submissionMonth,
+          status: normalized.status || null,
+          submittedAt: normalized.submittedAt || null,
+          updatedAt: normalized.updatedAt || null,
+        });
+
+        const nextCerts = normalizeCertificationsForState(normalized.certifications);
+        const nextRatings = normalizeKpiRatingsForState(normalized.kpiRatings);
+        const nextValues = Array.isArray(normalized.webknotValues)
+          ? normalized.webknotValues.map((v) => String(v))
+          : [];
+
+        setSelfReviewText(normalized.selfReviewText || "");
+        setSelectedCertifications(nextCerts);
+        setKpiRatings(nextRatings);
+        setSelectedValues(nextValues);
+        setRecognitionsCount(
+          typeof normalized.recognitionsCount === "number" && Number.isFinite(normalized.recognitionsCount)
+            ? normalized.recognitionsCount
+            : 0
+        );
+
+        const loaded = buildMonthlySubmissionPayload({
+          month: normalized.month || submissionMonth,
+          selfReviewText: normalized.selfReviewText || "",
+          selectedCertifications: nextCerts,
+          kpiRatings: nextRatings,
+          selectedValues: nextValues,
+          recognitionsCount: normalized.recognitionsCount,
+        });
+        lastSavedDraftHashRef.current = payloadHash(loaded);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setDraftSaveError(err?.message || "Failed to load your submission.");
+      } finally {
+        if (mounted) setHydratingSubmission(false);
+      }
+    }
+
+    run();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [onLogout, submissionMonth]);
+
+  const locked = useMemo(
+    () => isFinalSubmissionStatus(submissionMeta?.status, submissionMeta),
+    [submissionMeta]
+  );
+
+  useEffect(() => {
+    if (!String(submissionMonth || "").trim()) return;
+    if (hydratingSubmission) return;
+    if (locked) return;
+    const payload = buildMonthlySubmissionPayload({
+      month: submissionMonth,
       selfReviewText,
-      certifications: selectedCertifications,
+      selectedCertifications,
       kpiRatings,
-      webknotValues: selectedValues,
+      selectedValues,
       recognitionsCount,
     });
+    const hash = payloadHash(payload);
+    if (hash === lastSavedDraftHashRef.current) return;
+
+    const id = window.setTimeout(async () => {
+      setDraftSaveError("");
+      setDraftSaving(true);
+      try {
+        await saveMonthlyDraft(payload);
+        lastSavedDraftHashRef.current = hash;
+      } catch (err) {
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setDraftSaveError(err?.message || "Failed to save draft.");
+      } finally {
+        setDraftSaving(false);
+      }
+    }, 900);
+
+    return () => window.clearTimeout(id);
+  }, [
+    hydratingSubmission,
+    kpiRatings,
+    locked,
+    onLogout,
+    recognitionsCount,
+    selectedCertifications,
+    selectedValues,
+    selfReviewText,
+    submissionMonth,
+  ]);
+
+  async function saveDraftNow() {
+    if (!String(submissionMonth || "").trim()) return;
+    if (locked) throw new Error("This month's submission is locked.");
+    const payload = buildMonthlySubmissionPayload({
+      month: submissionMonth,
+      selfReviewText,
+      selectedCertifications,
+      kpiRatings,
+      selectedValues,
+      recognitionsCount,
+    });
+    const hash = payloadHash(payload);
+    setDraftSaveError("");
+    setDraftSaving(true);
+    try {
+      await saveMonthlyDraft(payload);
+      lastSavedDraftHashRef.current = hash;
+    } catch (err) {
+      if (err?.status === 401) {
+        onLogout?.();
+        return;
+      }
+      setDraftSaveError(err?.message || "Failed to save draft.");
+      throw err;
+    } finally {
+      setDraftSaving(false);
+    }
   }
 
   async function finalSubmit() {
+    if (locked) throw new Error("You already submitted this month.");
+    if (!kpisFullyLoaded) throw new Error("Please wait for KPIs to finish loading, then submit.");
     const text = String(selfReviewText || "").trim();
     if (!text) throw new Error("Write your self review first.");
 
-    const kpisOk = kpis.length === 0
+    const visible = Array.isArray(visibleKpis) ? visibleKpis : [];
+    const kpisOk = visible.length === 0
       ? true
-      : kpis.every((k) => {
+      : visible.every((k) => {
           const v = kpiRatings?.[k.id];
           return typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 5;
         });
@@ -1361,40 +1970,69 @@ export default function EmployeePortal({ onLogout, auth }) {
     if (!certsOk) throw new Error("Add proof for all selected certifications.");
 
     const payload = {
-      employee: employee
-        ? {
-            id: employee.id,
-            name: employee.name,
-            email: employee.email,
-            role: employee.role,
-            designation: employee.designation,
-            band: employee.band,
-          }
-        : {
-            id: null,
-            name: authEmail || "Unknown",
-            email: authEmail || null,
-            role,
-            designation: null,
-            band: null,
-          },
-      selfReviewText: text,
-      certifications: Array.isArray(selectedCertifications) ? selectedCertifications : [],
-      kpiRatings: kpiRatings && typeof kpiRatings === "object" ? kpiRatings : {},
-      webknotValues: Array.isArray(selectedValues) ? selectedValues : [],
-      recognitionsCount: Number.isFinite(recognitionsCount) ? recognitionsCount : 0,
+      ...buildMonthlySubmissionPayload({
+        month: submissionMonth,
+        selfReviewText: text,
+        selectedCertifications,
+        kpiRatings,
+        selectedValues,
+        recognitionsCount,
+      }),
       submittedAt: new Date().toISOString(),
     };
 
-    setFinalSubmission(payload);
-    saveFinalSubmission(authEmail, payload);
+    setDraftSaveError("");
+    setDraftSaving(true);
+    try {
+      const res = await submitMonthlySubmission(payload);
+      const normalized = normalizeMonthlySubmission(res);
+      const now = new Date().toISOString();
+      setSubmissionMeta({
+        id: normalized?.id ?? submissionMeta?.id ?? null,
+        month: normalized?.month ?? submissionMonth,
+        status: normalized?.status ?? submissionMeta?.status ?? null,
+        submittedAt: normalized?.submittedAt ?? submissionMeta?.submittedAt ?? payload.submittedAt ?? now,
+        updatedAt: normalized?.updatedAt ?? now,
+      });
+      lastSavedDraftHashRef.current = payloadHash(
+        buildMonthlySubmissionPayload({
+          month: submissionMonth,
+          selfReviewText,
+          selectedCertifications,
+          kpiRatings,
+          selectedValues,
+          recognitionsCount,
+        })
+      );
+    } catch (err) {
+      if (err?.status === 401) {
+        onLogout?.();
+        return;
+      }
+      throw err;
+    } finally {
+      setDraftSaving(false);
+    }
   }
 
+  const visibleKpis = useMemo(() => {
+    const list = Array.isArray(kpis) ? kpis : [];
+    return list.filter((k) => kpiAppliesToEmployee(k, employee));
+  }, [employee, kpis]);
+
+  const visibleKpiPage = useMemo(() => {
+    const list = Array.isArray(kpiPage?.items) ? kpiPage.items : [];
+    return list.filter((k) => kpiAppliesToEmployee(k, employee));
+  }, [employee, kpiPage?.items]);
+
   const canFinalSubmit = useMemo(() => {
+    if (locked) return false;
+    if (!kpisFullyLoaded) return false;
     const textOk = Boolean(String(selfReviewText || "").trim());
-    const kpisOk = kpis.length === 0
+    const visible = Array.isArray(visibleKpis) ? visibleKpis : [];
+    const kpisOk = visible.length === 0
       ? true
-      : kpis.every((k) => {
+      : visible.every((k) => {
           const v = kpiRatings?.[k.id];
           return typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 5;
         });
@@ -1406,7 +2044,7 @@ export default function EmployeePortal({ onLogout, auth }) {
         })
       : true;
     return textOk && kpisOk && certsOk;
-  }, [kpiRatings, kpis, selectedCertifications, selfReviewText]);
+  }, [kpiRatings, kpisFullyLoaded, locked, selectedCertifications, selfReviewText, visibleKpis]);
 
   useEffect(() => {
     let mounted = true;
@@ -1416,18 +2054,26 @@ export default function EmployeePortal({ onLogout, auth }) {
       setError("");
       setLoading(true);
       try {
-        const data = await fetchEmployees({ signal: controller.signal });
-        const employees = normalizeEmployees(data);
-        const match = authEmail
-          ? employees.find((e) => String(e?.email || "").trim().toLowerCase() === authEmail.toLowerCase())
-          : null;
+        const me = await fetchMe({ signal: controller.signal });
         if (!mounted) return;
-        setEmployee(match || null);
+        if (!me) {
+          setEmployee(
+            normalizeEmployeeFromAuth(auth, { fallbackEmail: authEmail, fallbackRole: role })
+          );
+          return;
+        }
+        setEmployee(normalizeEmployeeFromMe(me, { fallbackEmail: authEmail, fallbackRole: role }));
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!mounted) return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
         setError(err?.message || "Failed to load profile.");
-        setEmployee(null);
+        setEmployee(
+          normalizeEmployeeFromAuth(auth, { fallbackEmail: authEmail, fallbackRole: role })
+        );
       } finally {
         if (mounted) setLoading(false);
       }
@@ -1438,13 +2084,59 @@ export default function EmployeePortal({ onLogout, auth }) {
       mounted = false;
       controller.abort();
     };
-  }, [authEmail]);
+  }, [auth, authEmail, onLogout, role]);
 
   const account = useMemo(() => {
-    const name = employee?.name || authEmail || "Unknown";
-    const designation = employee?.designation || null;
+    const name = employee?.name || String(auth?.employeeName || "").trim() || authEmail || "Unknown";
+    const designation =
+      employee?.designation || String(auth?.designation || "").trim() || null;
     return { name, email: authEmail, role, designation };
-  }, [authEmail, employee?.designation, employee?.name, role]);
+  }, [auth?.designation, auth?.employeeName, authEmail, employee?.designation, employee?.name, role]);
+
+  const kpiPager = useMemo(() => {
+    const stack = Array.isArray(kpiPage?.stack) ? kpiPage.stack : [];
+    const cursor = kpiPage?.cursor ?? null;
+    const nextCursor = kpiPage?.nextCursor ?? null;
+    return {
+      canPrev: stack.length > 0,
+      canNext: Boolean(nextCursor),
+      loading: kpiPageLoading,
+      onPrev: () => {
+        if (stack.length === 0) return;
+        const prevCursor = stack[stack.length - 1] ?? null;
+        const nextStack = stack.slice(0, -1);
+        loadKpiPage({ cursor: prevCursor, stack: nextStack }).catch(() => {});
+      },
+      onNext: () => {
+        if (!nextCursor) return;
+        const nextStack = stack.concat([cursor]);
+        loadKpiPage({ cursor: nextCursor, stack: nextStack }).catch(() => {});
+      },
+    };
+  }, [kpiPage?.cursor, kpiPage?.nextCursor, kpiPage?.stack, kpiPageLoading, loadKpiPage]);
+
+  const valuesPager = useMemo(() => {
+    const stack = Array.isArray(valuesPage?.stack) ? valuesPage.stack : [];
+    const cursor = valuesPage?.cursor ?? null;
+    const nextCursor = valuesPage?.nextCursor ?? null;
+    const busy = valuesLoading || valuesPageLoading;
+    return {
+      canPrev: stack.length > 0,
+      canNext: Boolean(nextCursor),
+      loading: busy,
+      onPrev: () => {
+        if (stack.length === 0) return;
+        const prevCursor = stack[stack.length - 1] ?? null;
+        const nextStack = stack.slice(0, -1);
+        loadValuesPage({ cursor: prevCursor, stack: nextStack }).catch(() => {});
+      },
+      onNext: () => {
+        if (!nextCursor) return;
+        const nextStack = stack.concat([cursor]);
+        loadValuesPage({ cursor: nextCursor, stack: nextStack }).catch(() => {});
+      },
+    };
+  }, [loadValuesPage, valuesLoading, valuesPage?.cursor, valuesPage?.nextCursor, valuesPage?.stack, valuesPageLoading]);
 
   const main = (() => {
     if (activeTab === "profile") {
@@ -1470,14 +2162,19 @@ export default function EmployeePortal({ onLogout, auth }) {
     if (activeTab === "kpis") {
       return (
         <KpisTab
-          kpis={kpis}
+          pageKpis={visibleKpiPage}
+          allKpis={visibleKpis}
           ratings={kpiRatings}
           setRatings={setKpiRatings}
-          loading={kpisLoading}
+          loading={kpiPageLoading}
           error={kpisError}
+          fullyLoaded={kpisFullyLoaded}
+          prefetching={kpiPrefetching}
+          pager={kpiPager}
           aiAgent={aiAgent}
           selfReviewText={selfReviewText}
           setSelfReviewText={setSelfReviewText}
+          locked={locked}
           onProceed={() => setActiveTab("values")}
         />
       );
@@ -1485,8 +2182,13 @@ export default function EmployeePortal({ onLogout, auth }) {
     if (activeTab === "values") {
       return (
         <ValuesTab
+          items={valuesPage.items}
+          loading={valuesLoading || valuesPageLoading}
+          error={valuesError}
           selectedValues={selectedValues}
           setSelectedValues={setSelectedValues}
+          pager={valuesPager}
+          locked={locked}
           onProceed={() => setActiveTab("certifications")}
         />
       );
@@ -1494,10 +2196,13 @@ export default function EmployeePortal({ onLogout, auth }) {
     if (activeTab === "certifications") {
       return (
         <CertificationsTab
-          catalog={adminCertCatalog}
+          catalog={certificationCatalog}
           selectedCertifications={selectedCertifications}
           setSelectedCertifications={setSelectedCertifications}
           onProceed={() => setActiveTab("recognitions")}
+          loading={certificationsLoading}
+          error={certificationsError}
+          locked={locked}
         />
       );
     }
@@ -1506,6 +2211,7 @@ export default function EmployeePortal({ onLogout, auth }) {
         <RecognitionsTab
           recognitionsCount={recognitionsCount}
           setRecognitionsCount={setRecognitionsCount}
+          locked={locked}
           onProceed={() => setActiveTab("review")}
         />
       );
@@ -1516,7 +2222,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           employee={employee}
           authEmail={authEmail}
           role={role}
-          kpis={kpis}
+          kpis={visibleKpis}
           kpiRatings={kpiRatings}
           selfReviewText={selfReviewText}
           selectedValues={selectedValues}
@@ -1525,6 +2231,8 @@ export default function EmployeePortal({ onLogout, auth }) {
           onSaveDraft={saveDraftNow}
           onFinalSubmit={finalSubmit}
           canFinalSubmit={canFinalSubmit}
+          locked={locked}
+          valuesIndex={valuesIndex}
         />
       );
     }
@@ -1543,6 +2251,58 @@ export default function EmployeePortal({ onLogout, auth }) {
       />
 
       <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? "ml-64" : "ml-20"} p-6 lg:p-12`}>
+        {portalBootstrapError ? (
+          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+            {portalBootstrapError}
+          </div>
+        ) : null}
+        {locked ? (
+          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+            This month's self review is locked (already submitted). No further edits or submissions are allowed.
+          </div>
+        ) : null}
+        <div className="max-w-4xl mx-auto mb-6 flex items-end justify-between gap-4 flex-wrap">
+          <div className="space-y-1">
+            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+              Month
+            </div>
+            <input
+              type="month"
+              value={submissionMonth}
+              onChange={(e) => {
+                const next = String(e.target.value || "").trim();
+                if (!next) return;
+                setSubmissionMonth(next);
+              }}
+              className="bg-[#111] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all text-gray-200"
+              aria-label="Select submission month"
+              title="Select submission month"
+            />
+          </div>
+
+          <div className="text-right">
+            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+              Draft
+            </div>
+            <div className="mt-1 text-xs text-gray-300">
+              {locked
+                ? "Locked"
+                : hydratingSubmission
+                ? "Loading…"
+                : draftSaving
+                  ? "Saving…"
+                  : draftSaveError
+                    ? "Not saved"
+                    : "Saved"}
+            </div>
+            {draftSaveError ? (
+              <div className="mt-1 text-[10px] font-mono text-red-300 max-w-[260px] break-words">
+                {draftSaveError}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
         {main}
       </main>
     </div>

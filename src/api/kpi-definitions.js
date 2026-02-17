@@ -1,9 +1,23 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl } from "./http.js";
+import { buildApiUrl, withCsrfHeaders } from "./http.js";
 
 async function readError(res) {
   const text = await res.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.message) return String(parsed.message);
+    if (parsed?.error) return String(parsed.error);
+  } catch {
+    // ignore
+  }
   return text || `Request failed: ${res.status} ${res.statusText}`;
+}
+
+async function toHttpError(res) {
+  const message = await readError(res);
+  const err = new Error(message);
+  err.status = res.status;
+  return err;
 }
 
 export function normalizeKpiDefinitions(data) {
@@ -91,10 +105,13 @@ export async function addKpiDefinition(payload) {
   const res = await fetch(buildApiUrl("/kpi-definitions/add"), {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await toHttpError(res);
 
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json();
@@ -109,7 +126,7 @@ export async function fetchKpiDefinitions({ signal } = {}) {
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await toHttpError(res);
   return res.json();
 }
 
@@ -122,10 +139,13 @@ export async function updateKpiDefinition(payload) {
   const res = await fetch(buildApiUrl("/kpi-definition/update"), {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await readError(res));
+  if (!res.ok) throw await toHttpError(res);
 
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json();

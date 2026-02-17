@@ -1,8 +1,15 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl } from "./http.js";
+import { buildApiUrl, withCsrfHeaders } from "./http.js";
 
 async function readError(res) {
   const text = await res.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.message) return String(parsed.message);
+    if (parsed?.error) return String(parsed.error);
+  } catch {
+    // ignore
+  }
   return text || `Request failed: ${res.status} ${res.statusText}`;
 }
 
@@ -30,7 +37,10 @@ export async function scheduleSubmissionWindow({ startAt, endAt }, { signal } = 
     method: "PUT",
     signal,
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
     body: JSON.stringify({ startAt, endAt }),
   });
   if (!res.ok) throw await toHttpError(res);
@@ -43,7 +53,7 @@ export async function openSubmissionWindowNow({ signal } = {}) {
     method: "POST",
     signal,
     credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
+    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
   });
   if (!res.ok) throw await toHttpError(res);
   return res.json();
@@ -55,7 +65,7 @@ export async function closeSubmissionWindowNow({ signal } = {}) {
     method: "POST",
     signal,
     credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
+    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
   });
   if (!res.ok) throw await toHttpError(res);
   return res.json();

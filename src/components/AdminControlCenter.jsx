@@ -1,16 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LayoutDashboard, Users, Settings, LogOut, ChevronLeft, ChevronRight,
-  CheckCircle2, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X
+  ClipboardCheck, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X
 } from "lucide-react";
 
 import AdminDashboard from "./AdminDashboard.jsx";
+import AdminSubmissions from "./AdminSubmissions.jsx";
 import AIAgentsConfig from "./AIAgentsConfig.jsx";
 import Certifications from "./Certifications.jsx";
 import EmployeeDirectory from "./EmployeeDirectory.jsx";
 import KPIRegistry from "./KPIRegistry.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
 import WebknotValueDirectory from "./WebknotValueDirectory.jsx";
+import Toast from "./Toast.jsx";
 import { fetchEmployees, normalizeEmployees } from "../api/employees.js";
 import {
   addKpiDefinition,
@@ -20,12 +22,22 @@ import {
   updateKpiDefinition
 } from "../api/kpi-definitions.js";
 import { fetchSubmissionWindowCurrent } from "../api/submission-window.js";
+import {
+  addCertification,
+  deleteCertification,
+  fetchCertifications,
+  normalizeCertifications,
+  updateCertification
+} from "../api/certifications.js";
+import { fetchPortalAdmin } from "../api/portal.js";
+import { fetchValues, addValue, updateValue, deleteValue as deleteValueApi } from "../api/webknotValueApi.js";
 
 // --- SUB-COMPONENT: SIDEBAR ---
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
   const isAdmin = String(account?.role || "").trim().toLowerCase() === "admin";
   const navItems = [
     { id: 'dashboard', icon: <LayoutDashboard size={20} />, label: "Dashboard" },
+    { id: 'submissions', icon: <ClipboardCheck size={20} />, label: "Monthly Submissions" },
     { id: 'directory', icon: <Users size={20} />, label: "Employee Directory" },
     { id: 'kpi', icon: <Target size={20} />, label: "KPI Directory" },
     { id: 'certifications', icon: <Award size={20} />, label: "Certifications" },
@@ -302,7 +314,10 @@ function applyEmployeeExtras(employees, extras) {
 
 // --- MAIN PORTAL ---
 export default function AdminControlCenter({ onLogout, auth }) {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.innerWidth >= 1024;
+  });
   const [activeTab, setActiveTab] = useState("dashboard");
   const isAdmin = String(auth?.role || auth?.claims?.role || "").trim().toLowerCase() === "admin";
 
@@ -317,28 +332,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [editingKpiId, setEditingKpiId] = useState(null);
   const [kpiSaving, setKpiSaving] = useState(false);
 
-  // Webknot Values (local for now)
+  // Webknot Values (from API)
   const [valuesSearchQuery, setValuesSearchQuery] = useState("");
-  const [values, setValues] = useState([
-    {
-      id: "VAL_001",
-      title: "Own The Outcome",
-      pillar: "Ownership",
-      description: "Take responsibility, close loops, and ship with pride.",
-    },
-    {
-      id: "VAL_002",
-      title: "Customers Over Convenience",
-      pillar: "Customer",
-      description: "Optimize for customer value even when it is harder.",
-    },
-    {
-      id: "VAL_003",
-      title: "Raise The Bar",
-      pillar: "Excellence",
-      description: "Set high standards and keep improving the system.",
-    },
-  ]);
+  const [values, setValues] = useState([]);
+  const [valuesLoading, setValuesLoading] = useState(false);
+  const [valuesError, setValuesError] = useState("");
   const [showValueModal, setShowValueModal] = useState(false);
   const [valueModalMode, setValueModalMode] = useState("add"); // "add" | "edit"
   const [editingValueId, setEditingValueId] = useState(null);
@@ -350,15 +348,61 @@ export default function AdminControlCenter({ onLogout, auth }) {
     const { items } = loadCertificationCatalogFromStorage();
     return Array.isArray(items) ? items : [];
   });
+  const [certificationsLoading, setCertificationsLoading] = useState(false);
+  const [certificationsError, setCertificationsError] = useState("");
 
   const [toast, setToast] = useState(null); // { title: string, message?: string }
   const toastTimerRef = useRef(null);
 
-  function showToast(nextToast) {
+  const showToast = useCallback((nextToast) => {
     setToast(nextToast);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
-  }
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        await fetchPortalAdmin({ signal: controller.signal });
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        if (err?.status === 401) onLogout?.();
+      }
+    })();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [onLogout]);
+
+  const reloadCertifications = useCallback(async ({ signal } = {}) => {
+    setCertificationsError("");
+    setCertificationsLoading(true);
+    try {
+      const data = await fetchCertifications({ activeOnly: false, signal });
+      setCertificationCatalog(normalizeCertifications(data));
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      setCertificationsError(err?.message || "Failed to load certifications.");
+      throw err;
+    } finally {
+      setCertificationsLoading(false);
+    }
+  }, [onLogout, showToast]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    reloadCertifications({ signal: controller.signal }).catch(() => {});
+    return () => controller.abort();
+  }, [reloadCertifications]);
 
   function openKpiModal() {
     setKpiModalMode("add");
@@ -412,7 +456,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
   async function submitValue(e) {
     e.preventDefault();
     const payload = {
-      id: editingValueId,
       title: valueDraft.title.trim(),
       pillar: valueDraft.pillar.trim(),
       description: valueDraft.description.trim(),
@@ -425,15 +468,42 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
     setValueSaving(true);
     try {
-      const id = valueModalMode === "edit" ? String(payload.id) : `VAL_${Date.now()}`;
-      const next = { id, title: payload.title, pillar: payload.pillar, description: payload.description };
+      let res;
+      if (valueModalMode === "edit") {
+        res = await updateValue(String(editingValueId), payload);
+      } else {
+        res = await addValue(payload);
+      }
+      
+      const normalized = res && typeof res === "object" ? res : payload;
+      const id = String(normalized?.id ?? normalized?.valueId ?? Date.now());
+      const next = { 
+        id, 
+        title: normalized?.title ?? payload.title, 
+        pillar: normalized?.pillar ?? payload.pillar,
+        description: normalized?.description ?? payload.description 
+      };
+      
       setValues((prev) => {
         const idx = prev.findIndex((x) => String(x.id) === String(id));
         if (idx === -1) return [next, ...prev];
         return prev.map((x) => (String(x.id) === String(id) ? next : x));
       });
+      
       showToast({ title: valueModalMode === "edit" ? "Value updated" : "Value added", message: next.title });
       setShowValueModal(false);
+      
+      await reloadValues().catch(() => {});
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      showToast({
+        title: valueModalMode === "edit" ? "Update failed" : "Add failed",
+        message: err?.message || "Please try again.",
+      });
     } finally {
       setValueSaving(false);
     }
@@ -443,8 +513,22 @@ export default function AdminControlCenter({ onLogout, auth }) {
     if (!v) return;
     const ok = window.confirm(`Delete "${v.title}"?`);
     if (!ok) return;
-    setValues((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
-    showToast({ title: "Value deleted", message: v.title });
+    
+    (async () => {
+      try {
+        await deleteValueApi(String(v.id));
+        setValues((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
+        showToast({ title: "Value deleted", message: v.title });
+        await reloadValues().catch(() => {});
+      } catch (err) {
+        if (err?.status === 401) {
+          showToast({ title: "Session expired", message: "Please login again." });
+          onLogout?.();
+          return;
+        }
+        showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+      }
+    })();
   }
 
   async function submitKpi(e) {
@@ -509,6 +593,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
       // Prefer server truth if the backend returns a minimal payload.
       await reloadKpis().catch(() => {});
     } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
       showToast({
         title: kpiModalMode === "edit" ? "Update KPI failed" : "Add KPI failed",
         message: err?.message || "Please try again.",
@@ -526,19 +615,52 @@ export default function AdminControlCenter({ onLogout, auth }) {
       setKpis(normalizeKpiDefinitions(data));
     } catch (err) {
       if (err?.name === "AbortError") return;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
       const message = err?.message || "Failed to load KPIs.";
       setKpisError(message);
       throw err;
     } finally {
       setKpisLoading(false);
     }
-  }, []);
+  }, [onLogout, showToast]);
+
+  const reloadValues = useCallback(async ({ signal } = {}) => {
+    setValuesError("");
+    setValuesLoading(true);
+    try {
+      const data = await fetchValues(false);
+      const normalized = Array.isArray(data) ? data : [];
+      setValues(normalized.sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true })));
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      const message = err?.message || "Failed to load values.";
+      setValuesError(message);
+      throw err;
+    } finally {
+      setValuesLoading(false);
+    }
+  }, [onLogout, showToast]);
 
   useEffect(() => {
     const controller = new AbortController();
     reloadKpis({ signal: controller.signal }).catch(() => {});
     return () => controller.abort();
   }, [reloadKpis]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    reloadValues({ signal: controller.signal }).catch(() => {});
+    return () => controller.abort();
+  }, [reloadValues]);
 
   // Portal Window state (server)
   const [portalWindow, setPortalWindow] = useState(() => defaultPortalWindow());
@@ -558,12 +680,17 @@ export default function AdminControlCenter({ onLogout, auth }) {
       });
     } catch (err) {
       if (err?.name === "AbortError") return;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
       setPortalWindowError(err?.message || "Failed to load submission window.");
       throw err;
     } finally {
       setPortalWindowLoading(false);
     }
-  }, []);
+  }, [onLogout, showToast]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -591,13 +718,18 @@ export default function AdminControlCenter({ onLogout, auth }) {
       setEmployees(applyEmployeeExtras(base, extras));
     } catch (err) {
       if (err?.name === "AbortError") return;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
       const message = err?.message || "Failed to load employees.";
       setEmployeesError(message);
       throw err;
     } finally {
       setEmployeesLoading(false);
     }
-  }, []);
+  }, [onLogout, showToast]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -609,60 +741,74 @@ export default function AdminControlCenter({ onLogout, auth }) {
     saveCertificationCatalogToStorage(certificationCatalog);
   }, [certificationCatalog]);
 
-  const addCertificationToCatalog = useCallback((name) => {
+  const addCertificationToCatalog = useCallback(async (name) => {
     const cert = String(name ?? "").trim();
     if (!cert) return;
-    setCertificationCatalog((prev) => {
-      const key = cert.toLowerCase();
-      const existing = prev.find((c) => String(c?.name ?? "").trim().toLowerCase() === key);
-      if (existing) {
-        // If it exists but was unlisted, relist it.
-        return prev.map((c) =>
-          String(c?.id) === String(existing.id)
-            ? { ...c, name: cert, listed: true, updatedAt: Date.now() }
-            : c
-        );
+    try {
+      await addCertification({ name: cert, listed: true });
+      await reloadCertifications().catch(() => {});
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
       }
-      const next = { id: makeCertificationId(cert), name: cert, listed: true, createdAt: Date.now() };
-      return [next, ...prev];
-    });
-  }, []);
+      throw err;
+    }
+  }, [onLogout, reloadCertifications, showToast]);
 
-  const editCertificationInCatalog = useCallback((id, nextName) => {
+  const editCertificationInCatalog = useCallback(async (id, nextName) => {
     const targetId = String(id ?? "").trim();
     const name = String(nextName ?? "").trim();
     if (!targetId || !name) return;
+    const current = certificationCatalog.find((c) => String(c?.id) === targetId) || null;
+    const listed = current ? Boolean(current.listed) : true;
+    try {
+      await updateCertification(targetId, { name, listed });
+      await reloadCertifications().catch(() => {});
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+      }
+      throw err;
+    }
+  }, [certificationCatalog, onLogout, reloadCertifications, showToast]);
 
-    setCertificationCatalog((prev) => {
-      const nextKey = name.toLowerCase();
-      const duplicate = prev.find(
-        (c) =>
-          String(c?.id) !== targetId &&
-          String(c?.name ?? "").trim().toLowerCase() === nextKey
-      );
-      if (duplicate) return prev;
-
-      return prev.map((c) =>
-        String(c?.id) === targetId ? { ...c, name, updatedAt: Date.now() } : c
-      );
-    });
-  }, []);
-
-  const setCertificationListed = useCallback((id, listed) => {
+  const setCertificationListed = useCallback(async (id, listed) => {
     const targetId = String(id ?? "").trim();
     if (!targetId) return;
-    setCertificationCatalog((prev) =>
-      prev.map((c) =>
-        String(c?.id) === targetId ? { ...c, listed: Boolean(listed), updatedAt: Date.now() } : c
-      )
-    );
-  }, []);
+    const current = certificationCatalog.find((c) => String(c?.id) === targetId) || null;
+    const name = String(current?.name ?? "").trim();
+    if (!name) {
+      await reloadCertifications().catch(() => {});
+      throw new Error("Missing certification name.");
+    }
+    try {
+      await updateCertification(targetId, { name, listed: Boolean(listed) });
+      await reloadCertifications().catch(() => {});
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+      }
+      throw err;
+    }
+  }, [certificationCatalog, onLogout, reloadCertifications, showToast]);
 
-  const deleteCertificationFromCatalog = useCallback((id) => {
+  const deleteCertificationFromCatalog = useCallback(async (id) => {
     const targetId = String(id ?? "").trim();
     if (!targetId) return;
-    setCertificationCatalog((prev) => prev.filter((c) => String(c?.id) !== targetId));
-  }, []);
+    try {
+      await deleteCertification(targetId);
+      await reloadCertifications().catch(() => {});
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+      }
+      throw err;
+    }
+  }, [onLogout, reloadCertifications, showToast]);
 
   const _incrementEmployeeRecognitions = useCallback((employeeId) => {
     const id = String(employeeId);
@@ -766,26 +912,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
     return { email, role, name: name || email, subtitle };
   }, [auth?.email, auth?.claims?.sub, auth?.role, auth?.claims?.role, auth?.employeeName, auth?.stream, auth?.band, employees]);
 
-  useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    console.log("[AdminControlCenter] account debug", {
-      account,
-      auth: {
-        email: auth?.email ?? null,
-        role: auth?.role ?? null,
-        portal: auth?.portal ?? null,
-        hasClaims: Boolean(auth?.claims),
-        claimsSub: auth?.claims?.sub ?? null,
-        claimsRole: auth?.claims?.role ?? null,
-      },
-      employees: {
-        count: Array.isArray(employees) ? employees.length : null,
-        loading: employeesLoading,
-        error: employeesError || null,
-      },
-    });
-  }, [account, auth, employees, employeesLoading, employeesError]);
-
   const currentEmployeeId = useMemo(() => {
     if (auth?.employeeId) return String(auth.employeeId);
     const email = String(auth?.email || auth?.claims?.sub || "").trim();
@@ -854,14 +980,30 @@ export default function AdminControlCenter({ onLogout, auth }) {
           />
         )}
 
+        {activeTab === "submissions" && (
+          <AdminSubmissions onLogout={onLogout} />
+        )}
+
         {activeTab === "certifications" && (
-          <Certifications
-            certificationCatalog={certificationCatalog}
-            onAddCertificationToCatalog={addCertificationToCatalog}
-            onEditCertificationInCatalog={editCertificationInCatalog}
-            onSetCertificationListed={setCertificationListed}
-            onDeleteCertificationFromCatalog={deleteCertificationFromCatalog}
-          />
+          <>
+            {certificationsError ? (
+              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+                Failed to load certifications: <span className="font-mono">{certificationsError}</span>
+              </div>
+            ) : null}
+            {certificationsLoading ? (
+              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+                Loading certifications…
+              </div>
+            ) : null}
+            <Certifications
+              certificationCatalog={certificationCatalog}
+              onAddCertificationToCatalog={addCertificationToCatalog}
+              onEditCertificationInCatalog={editCertificationInCatalog}
+              onSetCertificationListed={setCertificationListed}
+              onDeleteCertificationFromCatalog={deleteCertificationFromCatalog}
+            />
+          </>
         )}
 
         {activeTab === "directory" && (
@@ -889,14 +1031,26 @@ export default function AdminControlCenter({ onLogout, auth }) {
         )}
 
         {activeTab === "values" && (
-          <WebknotValueDirectory
-            values={values}
-            searchQuery={valuesSearchQuery}
-            setSearchQuery={setValuesSearchQuery}
-            onAddValue={openValueModal}
-            onEditValue={openEditValueModal}
-            onDeleteValue={deleteValue}
-          />
+          <>
+            {valuesError ? (
+              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+                Failed to load values: <span className="font-mono">{valuesError}</span>
+              </div>
+            ) : null}
+            {valuesLoading ? (
+              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+                Loading values…
+              </div>
+            ) : null}
+            <WebknotValueDirectory
+              values={values}
+              searchQuery={valuesSearchQuery}
+              setSearchQuery={setValuesSearchQuery}
+              onAddValue={openValueModal}
+              onEditValue={openEditValueModal}
+              onDeleteValue={deleteValue}
+            />
+          </>
         )}
 
         {activeTab === "agents" && isAdmin ? <AIAgentsConfig /> : null}
@@ -906,8 +1060,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
       {/* KPI Modal */}
       {showKPIModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">
@@ -1007,8 +1161,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
       {/* Values Modal */}
       {showValueModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm grid place-items-center p-6 z-[60]">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-6">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">
@@ -1094,30 +1248,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
         </div>
       ) : null}
 
-      {/* Purple toast (top-right) */}
-      {toast ? (
-        <div className="fixed top-6 right-6 z-[80]">
-          <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-purple-600 px-4 py-3 shadow-2xl text-white">
-            <div className="mt-0.5 text-white">
-              <CheckCircle2 size={18} />
-            </div>
-            <div className="min-w-[220px]">
-              <div className="text-sm font-black">{toast.title}</div>
-              {toast.message ? (
-                <div className="text-xs text-white/90 mt-1">{toast.message}</div>
-              ) : null}
-            </div>
-            <button
-              onClick={() => setToast(null)}
-              className="ml-2 rounded-xl p-1 text-white/90 hover:bg-white/10 hover:text-white transition"
-              aria-label="Dismiss notification"
-              title="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-      ) : null}
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }
