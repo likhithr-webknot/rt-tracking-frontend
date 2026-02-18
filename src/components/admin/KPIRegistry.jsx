@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Edit3, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
+import CursorPagination from "../shared/CursorPagination.jsx";
 
 export default function KPIRegistry({
   kpis,
@@ -10,6 +11,7 @@ export default function KPIRegistry({
   loading,
   error,
   onReload,
+  pager,
 }) {
   const [selectedBands, setSelectedBands] = useState([]); // band strings; empty means "all"
 
@@ -228,6 +230,19 @@ export default function KPIRegistry({
           </tbody>
         </table>
       </div>
+
+      {pager && (pager.canPrev || pager.canNext) ? (
+        <div className="pt-4">
+          <CursorPagination
+            canPrev={Boolean(pager.canPrev)}
+            canNext={Boolean(pager.canNext)}
+            onPrev={pager.onPrev}
+            onNext={pager.onNext}
+            loading={Boolean(pager.loading)}
+            label={pager.label}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

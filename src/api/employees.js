@@ -42,9 +42,13 @@ async function toHttpError(res) {
   return err;
 }
 
-export async function fetchEmployees({ signal } = {}) {
+export async function fetchEmployees({ limit = null, cursor = null, signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/employees/getall"), {
+  const qs = new URLSearchParams();
+  if (limit != null) qs.set("limit", String(limit));
+  if (cursor) qs.set("cursor", String(cursor));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await fetch(buildApiUrl(`/employees/getall${suffix}`), {
     signal,
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,

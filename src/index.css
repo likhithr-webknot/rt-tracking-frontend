@@ -1,3 +1,4 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
 
@@ -5,6 +6,47 @@
 @layer base {
   body {
     margin: 0;
+    font-family: "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 400;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  .font-black,
+  .font-extrabold {
+    font-weight: 700 !important;
+  }
+
+  .font-bold {
+    font-weight: 600 !important;
+  }
+
+  .italic {
+    font-style: normal !important;
+  }
+
+  .tracking-widest,
+  [class*="tracking-[0.2em]"] {
+    letter-spacing: 0.08em !important;
   }
 
   /* Improve visibility of the native calendar icon on dark inputs (Chrome/Safari). */

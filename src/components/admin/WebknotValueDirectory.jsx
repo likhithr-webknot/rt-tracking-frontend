@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { Edit3, Plus, Search, Trash2 } from "lucide-react";
+import CursorPagination from "../shared/CursorPagination.jsx";
 
 export default function WebknotValueDirectory({
   values,
@@ -8,6 +9,7 @@ export default function WebknotValueDirectory({
   onAddValue,
   onEditValue,
   onDeleteValue,
+  pager,
 }) {
   const filtered = useMemo(() => {
     const q = String(searchQuery || "").trim().toLowerCase();
@@ -112,6 +114,19 @@ export default function WebknotValueDirectory({
           </tbody>
         </table>
       </div>
+
+      {pager && (pager.canPrev || pager.canNext) ? (
+        <div className="pt-4">
+          <CursorPagination
+            canPrev={Boolean(pager.canPrev)}
+            canNext={Boolean(pager.canNext)}
+            onPrev={pager.onPrev}
+            onNext={pager.onNext}
+            loading={Boolean(pager.loading)}
+            label={pager.label}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -119,9 +119,13 @@ export async function addKpiDefinition(payload) {
 }
 
 // GET /kpi-definition/getall
-export async function fetchKpiDefinitions({ signal } = {}) {
+export async function fetchKpiDefinitions({ limit = null, cursor = null, signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/kpi-definitions/getall"), {
+  const qs = new URLSearchParams();
+  if (limit != null) qs.set("limit", String(limit));
+  if (cursor) qs.set("cursor", String(cursor));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await fetch(buildApiUrl(`/kpi-definitions/getall${suffix}`), {
     signal,
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,

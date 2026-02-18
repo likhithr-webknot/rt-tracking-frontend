@@ -151,9 +151,13 @@ async function toHttpError(res) {
     return err;
 }
 
-export async function fetchValues(activeOnly = true, { signal } = {}) {
+export async function fetchValues(activeOnly = true, { limit = null, cursor = null, signal } = {}) {
     const auth = getAuthHeader();
-    const res = await fetch(buildApiUrl(`/webknot-values/list?activeOnly=${activeOnly}`), {
+    const qs = new URLSearchParams();
+    qs.set("activeOnly", String(activeOnly));
+    if (limit != null) qs.set("limit", String(limit));
+    if (cursor) qs.set("cursor", String(cursor));
+    const res = await fetch(buildApiUrl(`/webknot-values/list?${qs.toString()}`), {
         signal,
         credentials: "include",
         headers: auth ? { Authorization: auth } : undefined,
