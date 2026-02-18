@@ -9,14 +9,14 @@ import {
   CartesianGrid,
   Tooltip
 } from "recharts";
-import Toast from "./Toast.jsx";
+import Toast from "../shared/Toast.jsx";
 
-import { promoteEmployee as promoteEmployeeApi } from "../api/employees.js";
+import { promoteEmployee as promoteEmployeeApi } from "../../api/employees.js";
 import {
   closeSubmissionWindowNow,
   openSubmissionWindowNow,
   scheduleSubmissionWindow,
-} from "../api/submission-window.js";
+} from "../../api/submission-window.js";
 
 function parseLocalInputValue(value) {
   const d = new Date(value);

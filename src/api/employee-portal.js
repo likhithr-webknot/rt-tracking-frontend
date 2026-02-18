@@ -83,20 +83,105 @@ export async function fetchEmployeePortalWebknotValues({ limit = 10, cursor = nu
   return res.json().catch(() => ({}));
 }
 
+function toCleanString(value, depth = 0) {
+  if (value == null) return "";
+  if (depth > 3) return "";
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => toCleanString(v, depth + 1))
+      .filter(Boolean)
+      .join(", ");
+  }
+  const t = typeof value;
+  if (t === "string") return value.trim();
+  if (t === "number" || t === "boolean" || t === "bigint") return String(value);
+  if (t === "object") {
+    const obj = value;
+    const candidates = [
+      obj?.title,
+      obj?.name,
+      obj?.label,
+      obj?.value,
+      obj?.text,
+      obj?.code,
+      obj?.id,
+    ];
+    for (const c of candidates) {
+      const s = toCleanString(c, depth + 1);
+      if (s) return s;
+    }
+    return "";
+  }
+  return "";
+}
+
+function pickDeep(obj, keys, depth = 0) {
+  if (!obj || typeof obj !== "object") return "";
+  if (depth > 3) return "";
+  const keyList = Array.isArray(keys) ? keys : [];
+
+  const actualKeys = Object.keys(obj);
+  const lowerToActual = new Map(actualKeys.map((k) => [k.toLowerCase(), k]));
+  for (const k of keyList) {
+    const s1 = toCleanString(obj[k], depth + 1);
+    if (s1) return s1;
+    const mapped = lowerToActual.get(String(k).toLowerCase());
+    if (mapped && mapped !== k) {
+      const s2 = toCleanString(obj[mapped], depth + 1);
+      if (s2) return s2;
+    }
+  }
+
+  for (const v of Object.values(obj)) {
+    if (!v || typeof v !== "object") continue;
+    const s = pickDeep(v, keyList, depth + 1);
+    if (s) return s;
+  }
+  return "";
+}
+
+function makeFallbackId(title, index) {
+  const base = toCleanString(title).toLowerCase();
+  const slug = base
+    ? base
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80)
+    : "";
+  return slug || `value_${index}`;
+}
+
 export function normalizeWebknotValues(items) {
   const arr = Array.isArray(items) ? items : [];
   const out = [];
   const seen = new Set();
-  for (const raw of arr) {
-    const obj = raw && typeof raw === "object" ? raw : null;
-    const id = String(obj?.id ?? obj?.valueId ?? obj?.code ?? raw ?? "").trim();
-    const title = String(obj?.title ?? obj?.name ?? obj?.value ?? obj?.label ?? "").trim();
-    const pillar = String(obj?.pillar ?? obj?.category ?? obj?.group ?? "").trim();
-    const stableId = id || (title ? title.toLowerCase() : "");
+  for (let i = 0; i < arr.length; i++) {
+    const raw = arr[i];
+    const obj = raw && typeof raw === "object" ? raw : {};
+    const id =
+      pickDeep(obj, ["id", "valueId", "webknotValueId", "code", "key"]) ||
+      toCleanString(raw);
+
+    const title =
+      pickDeep(obj, ["title", "valueTitle", "valueName", "name", "value", "label"]) || "";
+
+    const pillar =
+      pickDeep(obj, [
+        "pillar",
+        "valuePillar",
+        "valuePillarName",
+        "pillarName",
+        "pillarType",
+        "category",
+        "group",
+        "domain",
+      ]) || "";
+
+    const stableId = id || makeFallbackId(title, i);
     if (!stableId) continue;
     if (seen.has(stableId)) continue;
     seen.add(stableId);
-    out.push({ id: stableId, title: title || stableId, pillar: pillar || "—" });
+    out.push({ id: stableId, title: title || stableId, pillar: pillar || title || "—" });
   }
   return out;
 }

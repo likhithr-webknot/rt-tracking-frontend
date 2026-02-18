@@ -4,6 +4,7 @@ import { buildApiUrl, withCsrfHeaders } from "./http.js";
 // With HttpOnly cookie auth, the access token is not available to JS; we store only non-sensitive session info.
 const LEGACY_AUTH_STORAGE_KEY = "rt_tracking_auth_v1";
 const SESSION_STORAGE_KEY = "rt_tracking_session_v1";
+const MANUAL_LOGOUT_STORAGE_KEY = "rt_tracking_manual_logout_v1";
 let memoryAuth = null;
 
 function shouldPersistAccessToken() {
@@ -216,6 +217,33 @@ export function clearAuth() {
   memoryAuth = null;
   cleanupLegacyAuthStorage();
   cleanupSessionStorage();
+}
+
+export function markManualLogout() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(MANUAL_LOGOUT_STORAGE_KEY, "1");
+  } catch {
+    // ignore
+  }
+}
+
+export function clearManualLogoutMark() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(MANUAL_LOGOUT_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function hasManualLogoutMark() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(MANUAL_LOGOUT_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 export function getAuthHeader() {

@@ -50,6 +50,11 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      '/webknot-values': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        secure: false,
+      },
       '/ui': {
         target: 'http://localhost:8080',
         changeOrigin: true,

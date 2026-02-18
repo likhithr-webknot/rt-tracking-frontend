@@ -6,7 +6,7 @@ import {
   fetchAdminAllSubmissions,
   formatYearMonth,
   normalizeMonthlySubmission
-} from "../api/monthly-submissions.js";
+} from "../../api/monthly-submissions.js";
 
 function normalizeAdminSubmissions(data) {
   const arr = Array.isArray(data)

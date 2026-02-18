@@ -1,18 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, LogOut, RefreshCw, Users, X } from "lucide-react";
 
-import { fetchMe } from "../api/auth.js";
-import { fetchPortalManager } from "../api/portal.js";
-import { fetchManagerReportees, normalizeEmployees } from "../api/employees.js";
+import { fetchMe } from "../../api/auth.js";
+import { fetchPortalManager } from "../../api/portal.js";
+import { fetchManagerReportees, normalizeEmployees } from "../../api/employees.js";
 import {
   fetchManagerTeamSubmissions,
   formatYearMonth,
   normalizeMonthlySubmission,
   saveMonthlyDraft,
   submitMonthlySubmission
-} from "../api/monthly-submissions.js";
-import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../api/kpi-definitions.js";
-import Toast from "./Toast.jsx";
+} from "../../api/monthly-submissions.js";
+import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions.js";
+import Toast from "../shared/Toast.jsx";
 
 const MANAGER_REVIEW_DRAFT_KEY = "rt_tracking_manager_review_draft_v1";
 
@@ -542,7 +542,16 @@ export default function ManagerPortal({ onLogout, auth }) {
                   <div>
                     <div className="text-xs font-black uppercase tracking-widest text-gray-500">Webknot Values</div>
                     <div className="mt-2 space-y-2">
-                      {Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
+                      {selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object" && Object.keys(selectedRow.payload.webknotValueRatings).length ? (
+                        Object.entries(selectedRow.payload.webknotValueRatings)
+                          .sort(([a], [b]) => String(a).localeCompare(String(b), undefined, { numeric: true }))
+                          .map(([id, rating]) => (
+                            <div key={String(id || "")} className="flex items-center justify-between gap-4">
+                              <div className="text-sm text-gray-200">{String(id || "")}</div>
+                              <div className="text-sm font-mono text-purple-200">{String(rating ?? "—")}</div>
+                            </div>
+                          ))
+                      ) : Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
                         selectedRow.payload.webknotValues.map((v) => (
                           <div key={String(v || "")} className="text-sm text-gray-200">
                             {String(v || "")}
@@ -650,6 +659,10 @@ export default function ManagerPortal({ onLogout, auth }) {
                           selfReviewText: String(employeePayload.selfReviewText || ""),
                           certifications: Array.isArray(employeePayload.certifications) ? employeePayload.certifications : [],
                           webknotValues: Array.isArray(employeePayload.webknotValues) ? employeePayload.webknotValues : [],
+                          webknotValueRatings:
+                            employeePayload.webknotValueRatings && typeof employeePayload.webknotValueRatings === "object"
+                              ? employeePayload.webknotValueRatings
+                              : undefined,
                           recognitionsCount: Number(employeePayload.recognitionsCount || 0) || 0,
                           kpiRatings: managerRatings,
                         };

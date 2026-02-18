@@ -12,25 +12,25 @@ import EmployeeDirectory from "./EmployeeDirectory.jsx";
 import KPIRegistry from "./KPIRegistry.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
 import WebknotValueDirectory from "./WebknotValueDirectory.jsx";
-import Toast from "./Toast.jsx";
-import { fetchEmployees, normalizeEmployees } from "../api/employees.js";
+import Toast from "../shared/Toast.jsx";
+import { fetchEmployees, normalizeEmployees } from "../../api/employees.js";
 import {
   addKpiDefinition,
   fetchKpiDefinitions,
   normalizeKpiDefinition,
   normalizeKpiDefinitions,
   updateKpiDefinition
-} from "../api/kpi-definitions.js";
-import { fetchSubmissionWindowCurrent } from "../api/submission-window.js";
+} from "../../api/kpi-definitions.js";
+import { fetchSubmissionWindowCurrent } from "../../api/submission-window.js";
 import {
   addCertification,
   deleteCertification,
   fetchCertifications,
   normalizeCertifications,
   updateCertification
-} from "../api/certifications.js";
-import { fetchPortalAdmin } from "../api/portal.js";
-import { fetchValues, addValue, updateValue, deleteValue as deleteValueApi } from "../api/webknotValueApi.js";
+} from "../../api/certifications.js";
+import { fetchPortalAdmin } from "../../api/portal.js";
+import { fetchValues, addValue, updateValue, deleteValue as deleteValueApi, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
 
 // --- SUB-COMPONENT: SIDEBAR ---
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
@@ -462,7 +462,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     };
 
     if (!payload.title || !payload.pillar || !payload.description) {
-      showToast({ title: "Missing fields", message: "Fill title, pillar, and description." });
+      showToast({ title: "Missing fields", message: "Fill value, evaluation criteria, and description." });
       return;
     }
 
@@ -632,8 +632,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
     setValuesError("");
     setValuesLoading(true);
     try {
-      const data = await fetchValues(false);
-      const normalized = Array.isArray(data) ? data : [];
+      const data = await fetchValues(false, { signal });
+      const normalized = normalizeWebknotValuesList(data);
       setValues(normalized.sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true })));
     } catch (err) {
       if (err?.name === "AbortError") return;
@@ -1203,7 +1203,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
               <div>
                 <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-                  Pillar *
+                  Evaluation Criteria *
                 </label>
                 <input
                   value={valueDraft.pillar}

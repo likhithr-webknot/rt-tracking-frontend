@@ -1,4 +1,10 @@
+import { getAppSettings } from "../utils/appSettings.js";
+
 export function getApiBaseUrl() {
+  const runtime = getAppSettings()?.apiBaseUrl;
+  const runtimeBase = String(runtime ?? "").trim();
+  if (runtimeBase) return runtimeBase.endsWith("/") ? runtimeBase.slice(0, -1) : runtimeBase;
+
   // If set, calls go directly to backend (e.g. http://localhost:8080).
   // If empty, calls use same-origin paths (Vite dev proxy handles backend routing).
   const raw = (import.meta?.env?.VITE_API_BASE_URL ?? "").toString().trim();
@@ -57,8 +63,8 @@ export function hasCsrfCookie() {
   );
 }
 
-export async function ensureCsrfCookie({ signal, headers } = {}) {
-  if (hasCsrfCookie()) return true;
+export async function ensureCsrfCookie({ signal, headers, forceRefresh = false } = {}) {
+  if (!forceRefresh && hasCsrfCookie()) return true;
 
   // Try a few safe GET endpoints that should set the CSRF cookie (Spring CookieCsrfTokenRepository).
   // Ignore all failures; we only care whether a cookie appears after any request.

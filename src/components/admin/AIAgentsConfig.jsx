@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from "react";
 import { Edit3, Eye, EyeOff, KeyRound, Plug, Plus, Trash2, X } from "lucide-react";
-import Toast from "./Toast.jsx";
+import Toast from "../shared/Toast.jsx";
 
 const LEGACY_STORAGE_KEY = "rt_tracking_ai_agents_config_v1";
 const STORAGE_KEY = "rt_tracking_ai_agents_v1";
