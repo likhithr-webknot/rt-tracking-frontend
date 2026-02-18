@@ -30,7 +30,10 @@ import {
   updateCertification
 } from "../../api/certifications.js";
 import { fetchPortalAdmin } from "../../api/portal.js";
+import { normalizeCursorPage } from "../../api/employee-portal.js";
 import { fetchValues, addValue, updateValue, deleteValue as deleteValueApi, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
+
+const DIRECTORY_PAGE_SIZE = 10;
 
 // --- SUB-COMPONENT: SIDEBAR ---
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
@@ -328,6 +331,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [kpis, setKpis] = useState([]);
   const [kpisLoading, setKpisLoading] = useState(false);
   const [kpisError, setKpisError] = useState("");
+  const [kpisCursor, setKpisCursor] = useState(null);
+  const [kpisNextCursor, setKpisNextCursor] = useState(null);
+  const [kpisCursorStack, setKpisCursorStack] = useState([]);
   const [kpiDraft, setKpiDraft] = useState({ title: "", stream: "", band: "", weight: "" });
   const [editingKpiId, setEditingKpiId] = useState(null);
   const [kpiSaving, setKpiSaving] = useState(false);
@@ -337,6 +343,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [values, setValues] = useState([]);
   const [valuesLoading, setValuesLoading] = useState(false);
   const [valuesError, setValuesError] = useState("");
+  const [valuesCursor, setValuesCursor] = useState(null);
+  const [valuesNextCursor, setValuesNextCursor] = useState(null);
+  const [valuesCursorStack, setValuesCursorStack] = useState([]);
   const [showValueModal, setShowValueModal] = useState(false);
   const [valueModalMode, setValueModalMode] = useState("add"); // "add" | "edit"
   const [editingValueId, setEditingValueId] = useState(null);
@@ -607,12 +616,21 @@ export default function AdminControlCenter({ onLogout, auth }) {
     }
   }
 
-  const reloadKpis = useCallback(async ({ signal } = {}) => {
+  const reloadKpis = useCallback(async ({ signal, cursor = kpisCursor, pageAction = "stay" } = {}) => {
     setKpisError("");
     setKpisLoading(true);
     try {
-      const data = await fetchKpiDefinitions({ signal });
-      setKpis(normalizeKpiDefinitions(data));
+      const data = await fetchKpiDefinitions({ limit: DIRECTORY_PAGE_SIZE, cursor, signal });
+      const page = normalizeCursorPage(data);
+      setKpis(normalizeKpiDefinitions(page.items));
+      setKpisNextCursor(page.nextCursor);
+      setKpisCursor(cursor ?? null);
+      setKpisCursorStack((prev) => {
+        if (pageAction === "next") return [...prev, kpisCursor ?? null];
+        if (pageAction === "prev") return prev.slice(0, -1);
+        if (pageAction === "reset") return [];
+        return prev;
+      });
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err?.status === 401) {
@@ -626,15 +644,24 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setKpisLoading(false);
     }
-  }, [onLogout, showToast]);
+  }, [kpisCursor, onLogout, showToast]);
 
-  const reloadValues = useCallback(async ({ signal } = {}) => {
+  const reloadValues = useCallback(async ({ signal, cursor = valuesCursor, pageAction = "stay" } = {}) => {
     setValuesError("");
     setValuesLoading(true);
     try {
-      const data = await fetchValues(false, { signal });
-      const normalized = normalizeWebknotValuesList(data);
+      const data = await fetchValues(false, { limit: DIRECTORY_PAGE_SIZE, cursor, signal });
+      const page = normalizeCursorPage(data);
+      const normalized = normalizeWebknotValuesList(page.items);
       setValues(normalized.sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true })));
+      setValuesNextCursor(page.nextCursor);
+      setValuesCursor(cursor ?? null);
+      setValuesCursorStack((prev) => {
+        if (pageAction === "next") return [...prev, valuesCursor ?? null];
+        if (pageAction === "prev") return prev.slice(0, -1);
+        if (pageAction === "reset") return [];
+        return prev;
+      });
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err?.status === 401) {
@@ -648,7 +675,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setValuesLoading(false);
     }
-  }, [onLogout, showToast]);
+  }, [onLogout, showToast, valuesCursor]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -707,15 +734,27 @@ export default function AdminControlCenter({ onLogout, auth }) {
   ])
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [employeesError, setEmployeesError] = useState("");
+  const [employeesCursor, setEmployeesCursor] = useState(null);
+  const [employeesNextCursor, setEmployeesNextCursor] = useState(null);
+  const [employeesCursorStack, setEmployeesCursorStack] = useState([]);
 
-  const reloadEmployees = useCallback(async ({ signal } = {}) => {
+  const reloadEmployees = useCallback(async ({ signal, cursor = employeesCursor, pageAction = "stay" } = {}) => {
     setEmployeesError("");
     setEmployeesLoading(true);
     try {
-      const data = await fetchEmployees({ signal });
-      const base = normalizeEmployees(data);
+      const data = await fetchEmployees({ limit: DIRECTORY_PAGE_SIZE, cursor, signal });
+      const page = normalizeCursorPage(data);
+      const base = normalizeEmployees(page.items);
       const extras = loadEmployeeExtras();
       setEmployees(applyEmployeeExtras(base, extras));
+      setEmployeesNextCursor(page.nextCursor);
+      setEmployeesCursor(cursor ?? null);
+      setEmployeesCursorStack((prev) => {
+        if (pageAction === "next") return [...prev, employeesCursor ?? null];
+        if (pageAction === "prev") return prev.slice(0, -1);
+        if (pageAction === "reset") return [];
+        return prev;
+      });
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err?.status === 401) {
@@ -729,13 +768,58 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setEmployeesLoading(false);
     }
-  }, [onLogout, showToast]);
+  }, [employeesCursor, onLogout, showToast]);
 
   useEffect(() => {
     const controller = new AbortController();
     reloadEmployees({ signal: controller.signal }).catch(() => {});
     return () => controller.abort();
   }, [reloadEmployees]);
+
+  const employeePager = useMemo(() => ({
+    canPrev: employeesCursorStack.length > 0,
+    canNext: Boolean(employeesNextCursor),
+    onPrev: () => {
+      const prevCursor = employeesCursorStack[employeesCursorStack.length - 1] ?? null;
+      reloadEmployees({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
+    },
+    onNext: () => {
+      if (!employeesNextCursor) return;
+      reloadEmployees({ cursor: employeesNextCursor, pageAction: "next" }).catch(() => {});
+    },
+    loading: employeesLoading,
+    label: `Page ${employeesCursorStack.length + 1}`,
+  }), [employeesCursorStack, employeesNextCursor, employeesLoading, reloadEmployees]);
+
+  const kpiPager = useMemo(() => ({
+    canPrev: kpisCursorStack.length > 0,
+    canNext: Boolean(kpisNextCursor),
+    onPrev: () => {
+      const prevCursor = kpisCursorStack[kpisCursorStack.length - 1] ?? null;
+      reloadKpis({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
+    },
+    onNext: () => {
+      if (!kpisNextCursor) return;
+      reloadKpis({ cursor: kpisNextCursor, pageAction: "next" }).catch(() => {});
+    },
+    loading: kpisLoading,
+    label: `Page ${kpisCursorStack.length + 1}`,
+  }), [kpisCursorStack, kpisNextCursor, kpisLoading, reloadKpis]);
+
+  const valuesPager = useMemo(() => ({
+    canPrev: valuesCursorStack.length > 0,
+    canNext: Boolean(valuesNextCursor),
+    onPrev: () => {
+      const prevCursor = valuesCursorStack[valuesCursorStack.length - 1] ?? null;
+      reloadValues({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
+    },
+    onNext: () => {
+      if (!valuesNextCursor) return;
+      reloadValues({ cursor: valuesNextCursor, pageAction: "next" }).catch(() => {});
+    },
+    loading: valuesLoading,
+    label: `Page ${valuesCursorStack.length + 1}`,
+  }), [reloadValues, valuesCursorStack, valuesLoading, valuesNextCursor]);
 
   useEffect(() => {
     saveCertificationCatalogToStorage(certificationCatalog);
@@ -1014,6 +1098,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
             employeesLoading={employeesLoading}
             employeesError={employeesError}
             currentEmployeeId={currentEmployeeId}
+            pager={employeePager}
           />
         )}
 
@@ -1026,7 +1111,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
             onEditKpi={openEditKpiModal}
             loading={kpisLoading}
             error={kpisError}
-            onReload={() => reloadKpis().catch(() => {})}
+            onReload={() => reloadKpis({ pageAction: "stay" }).catch(() => {})}
+            pager={kpiPager}
           />
         )}
 
@@ -1049,6 +1135,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               onAddValue={openValueModal}
               onEditValue={openEditValueModal}
               onDeleteValue={deleteValue}
+              pager={valuesPager}
             />
           </>
         )}

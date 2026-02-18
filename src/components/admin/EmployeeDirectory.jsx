@@ -69,14 +69,13 @@ export default function EmployeeDirectory({
   employeesLoading,
   employeesError,
   currentEmployeeId,
+  pager,
 }) {
-  const pageSize = 10;
   const [query, setQuery] = useState("");
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState([]); // string[]
   const [roleFilter, setRoleFilter] = useState("all"); // "all" | role value
   const [designationFilter, setDesignationFilter] = useState("all"); // "all" | designation value
   const [bandFilter, setBandFilter] = useState("all"); // "all" | band value
-  const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   const [toast, setToast] = useState(null); // { title: string, message?: string }
   const toastTimerRef = useRef(null);
@@ -154,28 +153,12 @@ export default function EmployeeDirectory({
     });
   }, [employees, query, roleFilter, designationFilter, bandFilter]);
 
-  useEffect(() => {
-    setPageIndex(0);
-  }, [query, roleFilter, designationFilter, bandFilter]);
-
-  const totalPages = useMemo(() => {
-    const total = Math.ceil(filtered.length / pageSize);
-    return Math.max(1, total);
-  }, [filtered.length]);
-
-  useEffect(() => {
-    setPageIndex((prev) => Math.min(prev, totalPages - 1));
-  }, [totalPages]);
-
   const isSelf = useCallback(
     (emp) => Boolean(currentEmployeeId) && String(emp?.id) === String(currentEmployeeId),
     [currentEmployeeId]
   );
 
-  const visibleEmployees = useMemo(() => {
-    const start = pageIndex * pageSize;
-    return filtered.slice(start, start + pageSize);
-  }, [filtered, pageIndex]);
+  const visibleEmployees = filtered;
 
   const selectedIdSet = useMemo(() => new Set(selectedEmployeeIds), [selectedEmployeeIds]);
   const filteredIdSet = useMemo(() => new Set(filtered.map((e) => e.id)), [filtered]);
@@ -597,15 +580,15 @@ export default function EmployeeDirectory({
         </table>
       </div>
 
-      {filtered.length > pageSize ? (
+      {pager && (pager.canPrev || pager.canNext) ? (
         <div className="pt-4">
           <CursorPagination
-            canPrev={pageIndex > 0}
-            canNext={pageIndex < totalPages - 1}
-            onPrev={() => setPageIndex((prev) => Math.max(0, prev - 1))}
-            onNext={() => setPageIndex((prev) => Math.min(totalPages - 1, prev + 1))}
-            loading={employeesLoading}
-            label={`Page ${pageIndex + 1} / ${totalPages}`}
+            canPrev={Boolean(pager.canPrev)}
+            canNext={Boolean(pager.canNext)}
+            onPrev={pager.onPrev}
+            onNext={pager.onNext}
+            loading={Boolean(pager.loading)}
+            label={pager.label}
           />
         </div>
       ) : null}
