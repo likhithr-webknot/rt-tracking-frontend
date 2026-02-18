@@ -45,7 +45,7 @@ export default function WebknotValueDirectory({
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search by value, pillar, or description..."
+          placeholder="Search by value, evaluation criteria, or description..."
           className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
         />
       </div>
@@ -55,7 +55,7 @@ export default function WebknotValueDirectory({
           <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-b border-white/5">
             <tr>
               <th className="p-6 font-black">Value</th>
-              <th className="p-6 font-black">Pillar</th>
+              <th className="p-6 font-black">Evaluation Criteria</th>
               <th className="p-6 font-black">Description</th>
               <th className="p-6 text-right font-black px-8">Actions</th>
             </tr>
@@ -95,10 +95,17 @@ export default function WebknotValueDirectory({
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 ? (
+            {filtered.length === 0 && values.length > 0 ? (
               <tr>
                 <td className="p-10 text-center text-gray-500" colSpan={4}>
                   No values match your search.
+                </td>
+              </tr>
+            ) : null}
+            {values.length === 0 ? (
+              <tr>
+                <td className="p-10 text-center text-gray-500" colSpan={4}>
+                  No values yet. Click "Add New Value" to create one.
                 </td>
               </tr>
             ) : null}

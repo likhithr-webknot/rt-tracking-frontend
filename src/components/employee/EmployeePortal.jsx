@@ -11,31 +11,45 @@ import {
   Target,
   X,
 } from "lucide-react";
-import Toast from "./Toast.jsx";
+import Toast from "../shared/Toast.jsx";
 
-import { fetchMe } from "../api/auth.js";
-import { fetchCertifications, normalizeCertifications } from "../api/certifications.js";
-import { normalizeKpiDefinitions } from "../api/kpi-definitions.js";
+import { fetchMe } from "../../api/auth.js";
+import { fetchCertifications, normalizeCertifications } from "../../api/certifications.js";
+import { normalizeKpiDefinitions } from "../../api/kpi-definitions.js";
 import {
   fetchMyMonthlySubmission,
   formatYearMonth,
   normalizeMonthlySubmission,
   saveMonthlyDraft,
   submitMonthlySubmission
-} from "../api/monthly-submissions.js";
-import { fetchPortalEmployee } from "../api/portal.js";
-import CursorPagination from "./CursorPagination.jsx";
+} from "../../api/monthly-submissions.js";
+import { fetchPortalEmployee } from "../../api/portal.js";
+import CursorPagination from "../shared/CursorPagination.jsx";
 import {
   fetchEmployeePortalKpiDefinitions,
   fetchEmployeePortalWebknotValues,
   normalizeCursorPage,
   normalizeWebknotValues
-} from "../api/employee-portal.js";
+} from "../../api/employee-portal.js";
+import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
+import { getAppSettings } from "../../utils/appSettings.js";
 
 const AI_AGENTS_STORAGE_KEY = "rt_tracking_ai_agents_v1";
 const AI_AGENTS_LEGACY_KEY = "rt_tracking_ai_agents_config_v1";
 
 const DEFAULT_PAGE_LIMIT = 10;
+
+function getEmployeeValuesPageSize() {
+  const n = Number.parseInt(String(getAppSettings()?.employeeValuesPageSize ?? DEFAULT_PAGE_LIMIT), 10);
+  if (!Number.isFinite(n)) return DEFAULT_PAGE_LIMIT;
+  return Math.min(100, Math.max(5, n));
+}
+
+function getDraftAutosaveDelayMs() {
+  const n = Number.parseInt(String(getAppSettings()?.draftAutosaveDelayMs ?? 900), 10);
+  if (!Number.isFinite(n)) return 900;
+  return Math.min(5000, Math.max(500, n));
+}
 
 function toPercentNumber(weight) {
   const raw = String(weight ?? "").trim();
@@ -51,6 +65,21 @@ function normalizeFilterKey(value) {
 
 function isWildcardValue(key) {
   return key === "" || key === "*" || key === "all" || key === "any";
+}
+
+function isPlaceholderValueTitle(value, id) {
+  const t = String(value ?? "").trim().toLowerCase();
+  const i = String(id ?? "").trim().toLowerCase();
+  if (!t) return true;
+  if (t === "[object object]") return true;
+  if (/^value_?\d+$/.test(t)) return true;
+  if (t === i && /^value_?\d+$/.test(i)) return true;
+  return false;
+}
+
+function hasReadableValueItems(items) {
+  if (!Array.isArray(items) || items.length === 0) return false;
+  return items.some((v) => !isPlaceholderValueTitle(v?.title, v?.id));
 }
 
 function kpiAppliesToEmployee(kpi, employee) {
@@ -189,6 +218,44 @@ function normalizeKpiRatingsForState(input) {
   return {};
 }
 
+function normalizeWebknotValueRatingsForState(input) {
+  if (!input) return {};
+  const out = {};
+
+  const assign = (idRaw, ratingRaw, fallback = null) => {
+    const id = String(idRaw ?? "").trim();
+    if (!id) return;
+    const parsed =
+      ratingRaw == null || ratingRaw === ""
+        ? fallback
+        : typeof ratingRaw === "number"
+          ? ratingRaw
+          : Number.parseFloat(String(ratingRaw));
+    if (!Number.isFinite(parsed)) return;
+    const rounded = Math.round(parsed * 10) / 10;
+    if (rounded < 1 || rounded > 5) return;
+    out[id] = rounded;
+  };
+
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (item && typeof item === "object") {
+        const id = item.valueId ?? item.webknotValueId ?? item.id ?? item.code ?? item.key ?? item.value ?? item.title ?? item.name;
+        const rating = item.rating ?? item.valueRating ?? item.score ?? item.value;
+        assign(id, rating, 1);
+        continue;
+      }
+      assign(item, null, 1);
+    }
+    return out;
+  }
+
+  if (typeof input === "object") {
+    for (const [k, v] of Object.entries(input)) assign(k, v);
+  }
+  return out;
+}
+
 function buildMonthlySubmissionPayload({
   month,
   selfReviewText,
@@ -208,11 +275,12 @@ function buildMonthlySubmissionPayload({
   );
   const stableRatings = Object.fromEntries(ratingEntries);
 
-  const values = Array.isArray(selectedValues)
-    ? Array.from(new Set(selectedValues.map((v) => String(v)))).sort((a, b) =>
-        a.localeCompare(b, undefined, { numeric: true })
-      )
-    : [];
+  const valueRatings = normalizeWebknotValueRatingsForState(selectedValues);
+  const valueRatingEntries = Object.entries(valueRatings).sort(([a], [b]) =>
+    String(a).localeCompare(String(b), undefined, { numeric: true })
+  );
+  const stableValueRatings = Object.fromEntries(valueRatingEntries);
+  const values = valueRatingEntries.map(([id]) => String(id));
 
   return {
     month: String(month || "").trim() || null,
@@ -220,6 +288,7 @@ function buildMonthlySubmissionPayload({
     certifications,
     kpiRatings: stableRatings,
     webknotValues: values,
+    webknotValueRatings: stableValueRatings,
     recognitionsCount:
       typeof recognitionsCount === "number" && Number.isFinite(recognitionsCount)
         ? recognitionsCount
@@ -797,8 +866,22 @@ function ValuesTab({
   locked,
   pager,
 }) {
-  const selectedSet = useMemo(() => new Set(Array.isArray(selectedValues) ? selectedValues : []), [selectedValues]);
-  const list = Array.isArray(items) ? items : [];
+  const valueRatings = useMemo(
+    () => normalizeWebknotValueRatingsForState(selectedValues),
+    [selectedValues]
+  );
+  const list = useMemo(() => (Array.isArray(items) ? items : []), [items]);
+  const ratedCount = useMemo(() => {
+    if (!list.length) return 0;
+    let count = 0;
+    for (const v of list) {
+      const id = String(v?.id || "").trim();
+      if (!id) continue;
+      const r = valueRatings?.[id];
+      if (typeof r === "number" && Number.isFinite(r) && r >= 1 && r <= 5) count += 1;
+    }
+    return count;
+  }, [list, valueRatings]);
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -825,7 +908,7 @@ function ValuesTab({
           <div>
             <h3 className="text-xl font-black uppercase tracking-tight">Values</h3>
             <p className="text-gray-500 text-sm mt-1">
-              Selected: <span className="font-mono">{selectedSet.size}</span>
+              Rated: <span className="font-mono">{ratedCount}</span> / {list.length}
             </p>
           </div>
         </div>
@@ -835,36 +918,68 @@ function ValuesTab({
             <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
               <tr>
                 <th className="p-6 font-black">Value</th>
-                <th className="p-6 font-black">Pillar</th>
-                <th className="p-6 font-black">Selected</th>
+                <th className="p-6 font-black">Evaluation Criteria</th>
+                <th className="p-6 font-black">Your Rating (1-5)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {list.map((v) => {
                 const id = String(v?.id || "");
-                const checked = selectedSet.has(id);
+                const value = valueRatings?.[id];
+                const display = typeof value === "number" && Number.isFinite(value) ? value : "";
+                const pillar = String(v?.pillar || "—");
+                const isPillarMissing = !pillar || pillar === "—";
                 return (
                   <tr key={id} className="hover:bg-white/[0.01] transition-colors">
                     <td className="p-6">
                       <div className="font-bold text-white tracking-tight">{String(v?.title || id)}</div>
+                      <div className="text-[10px] text-gray-500 font-bold uppercase mt-1 font-mono">{id}</div>
                     </td>
-                    <td className="p-6 text-gray-300">{String(v?.pillar || "—")}</td>
+                    <td className="p-6">
+                      <span
+                        className={[
+                          "inline-flex text-[10px] font-black uppercase px-3 py-1 rounded-lg border",
+                          isPillarMissing
+                            ? "bg-white/5 text-gray-400 border-white/10"
+                            : "bg-blue-500/10 text-blue-400 border-blue-500/20",
+                        ].join(" ")}
+                      >
+                        {pillar || "—"}
+                      </span>
+                    </td>
                     <td className="p-6">
                       <label className="inline-flex items-center gap-3 select-none">
                         <input
-                          type="checkbox"
-                          checked={checked}
+                          type="number"
+                          min={1}
+                          max={5}
+                          step={0.1}
+                          value={display}
                           disabled={locked}
                           onChange={(e) => {
                             if (locked) return;
+                            const text = String(e.target.value ?? "").trim();
+                            const parsed = text === "" ? null : Number.parseFloat(text);
                             setSelectedValues((prev) => {
-                              const list = Array.isArray(prev) ? prev.slice() : [];
-                              const next = list.filter((x) => String(x) !== id);
-                              if (e.target.checked) next.push(id);
+                              const next = normalizeWebknotValueRatingsForState(prev);
+                              if (parsed == null || !Number.isFinite(parsed)) {
+                                delete next[id];
+                                return next;
+                              }
+                              const rounded = Math.round(parsed * 10) / 10;
+                              if (rounded < 1 || rounded > 5) {
+                                delete next[id];
+                                return next;
+                              }
+                              next[id] = rounded;
                               return next;
                             });
                           }}
-                          className="h-4 w-4 accent-purple-500"
+                          className={[
+                            "w-32 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+                            locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
+                          ].join(" ")}
+                          placeholder="e.g., 4.2"
                         />
                       </label>
                     </td>
@@ -1215,18 +1330,20 @@ function ReviewTab({
     setToastTimerId(id);
   }
 
-  const valueLabels = useMemo(() => {
+  const valueRatings = useMemo(() => {
     const idx = valuesIndex && typeof valuesIndex === "object" ? valuesIndex : {};
-    const list = Array.isArray(selectedValues) ? selectedValues : [];
+    const ratings = normalizeWebknotValueRatingsForState(selectedValues);
     const out = [];
-    const seen = new Set();
-    for (const idRaw of list) {
+    for (const [idRaw, ratingRaw] of Object.entries(ratings)) {
       const id = String(idRaw || "").trim();
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
+      const rating = typeof ratingRaw === "number" && Number.isFinite(ratingRaw)
+        ? Math.round(ratingRaw * 10) / 10
+        : null;
+      if (!id || rating == null) continue;
       const title = idx?.[id]?.title ? String(idx[id].title) : id;
-      out.push(title);
+      out.push({ id, title, rating });
     }
+    out.sort((a, b) => String(a.title).localeCompare(String(b.title), undefined, { numeric: true }));
     return out;
   }, [selectedValues, valuesIndex]);
 
@@ -1283,16 +1400,17 @@ function ReviewTab({
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Webknot Values
         </div>
-        {valueLabels.length ? (
-          <div className="flex flex-wrap gap-2">
-            {valueLabels.map((t) => (
-              <span key={t} className="text-xs px-3 py-1 rounded-full border border-white/10 bg-white/[0.03] text-gray-200">
-                {t}
-              </span>
+        {valueRatings.length ? (
+          <div className="space-y-2">
+            {valueRatings.map((row) => (
+              <div key={row.id} className="flex items-center justify-between gap-4">
+                <div className="text-sm text-gray-200">{row.title}</div>
+                <div className="text-sm font-mono text-purple-200">{row.rating.toFixed(1)}</div>
+              </div>
             ))}
           </div>
         ) : (
-          <div className="text-sm text-gray-500">None selected.</div>
+          <div className="text-sm text-gray-500">No value ratings.</div>
         )}
       </section>
 
@@ -1410,7 +1528,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [valuesLoading, setValuesLoading] = useState(false);
   const [valuesPageLoading, setValuesPageLoading] = useState(false);
   const [valuesError, setValuesError] = useState("");
-  const [selectedValues, setSelectedValues] = useState([]); // string[] (value ids)
+  const [selectedValues, setSelectedValues] = useState({}); // { [valueId]: rating }
   const [recognitionsCount, setRecognitionsCount] = useState(0);
 
   const authEmail = String(auth?.email || auth?.claims?.sub || "").trim();
@@ -1458,13 +1576,25 @@ export default function EmployeePortal({ onLogout, auth }) {
     setValuesPageLoading(true);
     try {
       const data = await fetchEmployeePortalWebknotValues({
-        limit: DEFAULT_PAGE_LIMIT,
+        limit: getEmployeeValuesPageSize(),
         cursor,
         signal,
       });
       const page = normalizeCursorPage(data);
-      const normalized = normalizeWebknotValues(page.items);
-      setValuesPage({ cursor: cursor || null, nextCursor: page.nextCursor, stack: Array.isArray(stack) ? stack : [], items: normalized });
+      let normalized = normalizeWebknotValues(page.items);
+      let nextCursor = page.nextCursor;
+
+      if (!hasReadableValueItems(normalized)) {
+        const fallbackRaw = await fetchValues(true, { signal });
+        normalized = normalizeWebknotValuesList(fallbackRaw).map((v) => ({
+          id: String(v?.id || ""),
+          title: String(v?.title || v?.id || ""),
+          pillar: String(v?.pillar || "—"),
+        }));
+        nextCursor = null;
+      }
+
+      setValuesPage({ cursor: cursor || null, nextCursor, stack: Array.isArray(stack) ? stack : [], items: normalized });
       setValuesIndex((prev) => {
         const next = { ...(prev && typeof prev === "object" ? prev : {}) };
         for (const v of normalized) {
@@ -1564,14 +1694,17 @@ export default function EmployeePortal({ onLogout, auth }) {
         if (normalizedSubmission && String(normalizedSubmission.month || "") === String(submissionMonth || "")) {
           const nextCerts = normalizeCertificationsForState(normalizedSubmission.certifications);
           const nextRatings = normalizeKpiRatingsForState(normalizedSubmission.kpiRatings);
-          const nextValues = Array.isArray(normalizedSubmission.webknotValues)
-            ? normalizedSubmission.webknotValues.map((v) => String(v))
-            : [];
+          const nextValues = normalizeWebknotValueRatingsForState(
+            normalizedSubmission.webknotValueRatings ?? normalizedSubmission.webknotValues
+          );
 
           setSelfReviewText((prev) => (String(prev || "").trim() ? prev : normalizedSubmission.selfReviewText || ""));
           setSelectedCertifications((prev) => (Array.isArray(prev) && prev.length ? prev : nextCerts));
           setKpiRatings((prev) => (prev && Object.keys(prev).length ? prev : nextRatings));
-          setSelectedValues((prev) => (Array.isArray(prev) && prev.length ? prev : nextValues));
+          setSelectedValues((prev) => {
+            const existing = normalizeWebknotValueRatingsForState(prev);
+            return Object.keys(existing).length ? existing : nextValues;
+          });
           setRecognitionsCount((prev) => (prev ? prev : (normalizedSubmission.recognitionsCount || 0)));
         }
       } catch (err) {
@@ -1746,14 +1879,26 @@ export default function EmployeePortal({ onLogout, auth }) {
       setValuesLoading(true);
       try {
         const data = await fetchEmployeePortalWebknotValues({
-          limit: DEFAULT_PAGE_LIMIT,
+          limit: getEmployeeValuesPageSize(),
           cursor: null,
           signal: controller.signal,
         });
         const page = normalizeCursorPage(data);
-        const normalized = normalizeWebknotValues(page.items);
+        let normalized = normalizeWebknotValues(page.items);
+        let nextCursor = page.nextCursor;
+
+        if (!hasReadableValueItems(normalized)) {
+          const fallbackRaw = await fetchValues(true, { signal: controller.signal });
+          normalized = normalizeWebknotValuesList(fallbackRaw).map((v) => ({
+            id: String(v?.id || ""),
+            title: String(v?.title || v?.id || ""),
+            pillar: String(v?.pillar || "—"),
+          }));
+          nextCursor = null;
+        }
+
         if (!mounted) return;
-        setValuesPage({ cursor: null, nextCursor: page.nextCursor, stack: [], items: normalized });
+        setValuesPage({ cursor: null, nextCursor, stack: [], items: normalized });
         const idx = {};
         for (const v of normalized) idx[String(v.id)] = { title: v.title, pillar: v.pillar };
         setValuesIndex(idx);
@@ -1799,14 +1944,14 @@ export default function EmployeePortal({ onLogout, auth }) {
           setSelfReviewText("");
           setSelectedCertifications([]);
           setKpiRatings({});
-          setSelectedValues([]);
+          setSelectedValues({});
           setRecognitionsCount(0);
           const cleared = buildMonthlySubmissionPayload({
             month: submissionMonth,
             selfReviewText: "",
             selectedCertifications: [],
             kpiRatings: {},
-            selectedValues: [],
+            selectedValues: {},
             recognitionsCount: 0,
           });
           lastSavedDraftHashRef.current = payloadHash(cleared);
@@ -1823,9 +1968,9 @@ export default function EmployeePortal({ onLogout, auth }) {
 
         const nextCerts = normalizeCertificationsForState(normalized.certifications);
         const nextRatings = normalizeKpiRatingsForState(normalized.kpiRatings);
-        const nextValues = Array.isArray(normalized.webknotValues)
-          ? normalized.webknotValues.map((v) => String(v))
-          : [];
+        const nextValues = normalizeWebknotValueRatingsForState(
+          normalized.webknotValueRatings ?? normalized.webknotValues
+        );
 
         setSelfReviewText(normalized.selfReviewText || "");
         setSelectedCertifications(nextCerts);
@@ -1886,6 +2031,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     const hash = payloadHash(payload);
     if (hash === lastSavedDraftHashRef.current) return;
 
+    const delayMs = getDraftAutosaveDelayMs();
     const id = window.setTimeout(async () => {
       setDraftSaveError("");
       setDraftSaving(true);
@@ -1901,7 +2047,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       } finally {
         setDraftSaving(false);
       }
-    }, 900);
+    }, delayMs);
 
     return () => window.clearTimeout(id);
   }, [

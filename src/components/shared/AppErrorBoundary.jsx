@@ -1,5 +1,5 @@
 import React from "react";
-import { clearAuth } from "../api/auth.js";
+import { clearAuth } from "../../api/auth.js";
 
 export default class AppErrorBoundary extends React.Component {
   constructor(props) {

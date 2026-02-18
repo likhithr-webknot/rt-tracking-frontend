@@ -7,15 +7,15 @@ import {
   X,
   Plus
 } from "lucide-react";
-import Toast from "./Toast.jsx";
-import CursorPagination from "./CursorPagination.jsx";
+import Toast from "../shared/Toast.jsx";
+import CursorPagination from "../shared/CursorPagination.jsx";
 
 import {
   addEmployeeWithManager,
   fetchManagers,
   normalizeManagers,
   promoteEmployee as promoteEmployeeApi
-} from "../api/employees.js";
+} from "../../api/employees.js";
 
 function computeNextEmployeeId(employees) {
   let maxEmp = -1;

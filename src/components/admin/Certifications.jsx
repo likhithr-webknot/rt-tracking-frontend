@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from "react";
 import { Edit3, Eye, EyeOff, Plus, Search, Trash2, X } from "lucide-react";
-import Toast from "./Toast.jsx";
+import Toast from "../shared/Toast.jsx";
 
 function normalizeCatalogItems(items) {
   const list = Array.isArray(items) ? items : [];

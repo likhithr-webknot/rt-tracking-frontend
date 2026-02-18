@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import AdminControlCenter from "./components/AdminControlCenter.jsx";
-import EmployeePortal from "./components/EmployeePortal.jsx";
-import ManagerPortal from "./components/ManagerPortal.jsx";
-import LoginPage from "./components/LoginPage.jsx";
-import SubmissionWindowClosed from "./components/SubmissionWindowClosed.jsx";
-import { clearAuth, fetchMe, getAuth, setAuth } from "./api/auth.js";
+import AdminControlCenter from "./components/admin/AdminControlCenter.jsx";
+import EmployeePortal from "./components/employee/EmployeePortal.jsx";
+import ManagerPortal from "./components/manager/ManagerPortal.jsx";
+import LoginPage from "./components/auth/LoginPage.jsx";
+import SubmissionWindowClosed from "./components/employee/SubmissionWindowClosed.jsx";
+import {
+  clearAuth,
+  clearManualLogoutMark,
+  fetchMe,
+  getAuth,
+  hasManualLogoutMark,
+  markManualLogout,
+  setAuth,
+} from "./api/auth.js";
 import { fetchSubmissionWindowCurrent } from "./api/submission-window.js";
 
 export default function App() {
@@ -37,6 +45,12 @@ export default function App() {
     const controller = new AbortController();
     async function run() {
       setAuthChecking(true);
+      if (hasManualLogoutMark()) {
+        clearAuth();
+        setAuthState(null);
+        setAuthChecking(false);
+        return;
+      }
       try {
         const me = await fetchMe({ signal: controller.signal });
         if (!alive) return;
@@ -129,6 +143,7 @@ export default function App() {
   }, [auth, roleLabel, windowRefreshNonce]);
 
   function logout() {
+    markManualLogout();
     clearAuth();
     setAuthState(null);
     setAuthChecking(false);
@@ -155,6 +170,7 @@ export default function App() {
     return (
       <LoginPage
         onLoginSuccess={(nextAuth) => {
+          clearManualLogoutMark();
           setAuthState(nextAuth);
           setWindowRefreshNonce((n) => n + 1);
         }}

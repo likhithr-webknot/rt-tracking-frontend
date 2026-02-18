@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import { Eye, EyeOff, Briefcase, Award, TrendingUp as Profit, Headset, Zap, Copy, Check, Activity } from "lucide-react";
-import { fetchMe, getAuth, login, setAuth, forgotPassword, resetPassword } from "../api/auth.js";
-import { fetchPortalAdmin, fetchPortalEmployee, fetchPortalManager } from "../api/portal.js";
+import { fetchMe, getAuth, login, setAuth, forgotPassword, resetPassword } from "../../api/auth.js";
+import { fetchPortalAdmin, fetchPortalEmployee, fetchPortalManager } from "../../api/portal.js";
 
 export default function LoginPage({ onLoginSuccess }) {
   const [email, setEmail] = useState("");
