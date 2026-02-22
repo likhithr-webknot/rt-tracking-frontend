@@ -35,10 +35,10 @@ function toLocalInputValue(date) {
 
 function StatCard({ label, value, icon }) {
   return (
-    <div className="bg-[#111] p-8 rounded-[2rem] border border-white/5 relative overflow-hidden group shadow-2xl">
+    <div className="rt-panel p-8 relative overflow-hidden group">
       <div className="absolute -right-2 -top-2 opacity-10 transform rotate-12">{icon}</div>
-      <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] mb-1">{label}</p>
-      <p className="text-4xl font-black mb-1">{value}</p>
+      <p className="rt-kicker mb-1">{label}</p>
+      <p className="text-4xl font-black mb-1 text-[rgb(var(--text))]">{value}</p>
     </div>
   );
 }
@@ -97,7 +97,7 @@ export default function AdminDashboard({
     if (endRaw && !end) return false;
 
     if (now < start) return false;
-    if (!end) return true; // indefinite window
+    if (!end) return true;
     return now <= end;
   }, [portalWindow?.manualClosed, portalWindow.start, portalWindow.end, now]);
 
@@ -118,6 +118,22 @@ export default function AdminDashboard({
       avg6m,
     };
   }, [employees, ability6m]);
+
+  const adminInsights = useMemo(() => {
+    const submissionRate = stats.totalEmployees
+      ? Math.round((stats.employeesSubmitted / stats.totalEmployees) * 100)
+      : 0;
+    const managerSubmissionRate = stats.totalManagers
+      ? Math.round((stats.managersSubmitted / stats.totalManagers) * 100)
+      : 0;
+    const pendingEmployees = employees.filter((e) => !e.submitted);
+    return {
+      submissionRate,
+      managerSubmissionRate,
+      pendingCount: pendingEmployees.length,
+      pendingPreview: pendingEmployees.slice(0, 5),
+    };
+  }, [employees, stats.employeesSubmitted, stats.managersSubmitted, stats.totalEmployees, stats.totalManagers]);
 
   async function promoteEmployee(employeeId) {
     const emp = employees.find((e) => e.id === employeeId);
@@ -143,12 +159,12 @@ export default function AdminDashboard({
     <div className="space-y-10 max-w-7xl mx-auto">
       <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-black uppercase tracking-tighter italic">
+          <h2 className="rt-title">
             Operational Command
           </h2>
           <div className="mt-2 flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${portalIsOpenNow ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+            <span className="rt-kicker">
               Portal is {portalIsOpenNow ? "OPEN" : "CLOSED"} for employees
             </span>
           </div>
@@ -156,20 +172,20 @@ export default function AdminDashboard({
 
         <button
           onClick={onGenerateReport}
-          className="inline-flex items-center gap-2 rounded-2xl bg-white text-black px-6 py-3 font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+          className="rt-btn-ghost inline-flex items-center gap-2 text-xs uppercase tracking-widest"
         >
           <Download size={18} /> Generate report
         </button>
       </header>
 
 	      {/* Submission window */}
-	      <section className="bg-[#111] p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
+        <section className="rt-panel p-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
 	          <div className="flex items-center gap-3">
-	            <Calendar className="text-white" size={22} />
+              <Calendar className="text-[rgb(var(--text))]" size={22} />
 	            <div>
-	              <h3 className="font-black uppercase tracking-tight">Submission Window</h3>
-	              <p className="text-gray-500 text-sm mt-1">
+                <h3 className="font-black tracking-tight">Submission Window</h3>
+                <p className="text-slate-500 text-sm mt-1">
 	                Set when employees can access the portal.
               </p>
             </div>
@@ -177,7 +193,7 @@ export default function AdminDashboard({
 
           <div className="flex items-center gap-2">
             <Power className={`${portalIsOpenNow ? "text-emerald-400" : "text-red-400"}`} size={18} />
-            <span className="text-xs font-black uppercase tracking-widest text-gray-400">
+            <span className="text-xs font-black uppercase tracking-widest text-slate-500">
               Active now: {portalIsOpenNow ? "Yes" : "No"}
             </span>
           </div>
@@ -185,11 +201,11 @@ export default function AdminDashboard({
 
 	        <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
 	          <div className="space-y-2">
-	            <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+              <label className="rt-kicker">
 	              Open at
             </label>
             <div className="relative">
-              <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+                <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={18} />
 	              <input
 	                type="datetime-local"
 	                value={portalWindow.start}
@@ -200,17 +216,17 @@ export default function AdminDashboard({
 	                    meta: { ...(prev.meta ?? {}), lastAction: "manual", updatedAt: Date.now() },
 	                  }))
 	                }
-	                className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="w-full rt-input py-4 pl-12 pr-4 text-sm"
 	              />
             </div>
           </div>
 
 	          <div className="space-y-2">
-	            <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+              <label className="rt-kicker">
 	              Close at (optional)
 	            </label>
 	            <div className="relative">
-	              <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+                <Clock className="absolute left-4 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={18} />
 		              <input
 		                type="datetime-local"
 		                value={portalWindow.end}
@@ -221,7 +237,7 @@ export default function AdminDashboard({
 		                    meta: { ...(prev.meta ?? {}), lastAction: "manual", updatedAt: Date.now() },
 		                  }))
 		                }
-		                className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    className="w-full rt-input py-4 pl-12 pr-4 text-sm"
 		                placeholder="Leave blank to keep open"
 		              />
 	            </div>
@@ -316,7 +332,7 @@ export default function AdminDashboard({
 		                    }
 		                  })();
 			                }}
-		                className="w-full bg-purple-600 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-purple-500 shadow-xl shadow-purple-900/20 transition-all"
+                    className="w-full rt-btn-primary px-8 py-4 font-black text-xs uppercase tracking-widest"
 		                title="Validate and run this schedule"
 		                disabled={portalWindowBusy || portalWindowLoading}
 		              >
@@ -349,13 +365,56 @@ export default function AdminDashboard({
         <StatCard label="Avg Ability (6 months)" value={stats.avg6m} icon={<ArrowUpCircle className="text-fuchsia-400" />} />
       </div>
 
+      <section className="rt-panel p-8">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h3 className="text-xl font-black tracking-tight">Admin Insights</h3>
+            <p className="text-slate-500 text-sm mt-1">Submission health and pending workload at a glance.</p>
+          </div>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Employee Submission Rate</div>
+            <div className="mt-2 text-2xl font-black text-[rgb(var(--text))]">{adminInsights.submissionRate}%</div>
+          </div>
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Manager Submission Rate</div>
+            <div className="mt-2 text-2xl font-black text-[rgb(var(--text))]">{adminInsights.managerSubmissionRate}%</div>
+          </div>
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Pending Employees</div>
+            <div className="mt-2 text-2xl font-black text-[rgb(var(--text))]">{adminInsights.pendingCount}</div>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Pending Preview</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {adminInsights.pendingPreview.length ? (
+              adminInsights.pendingPreview.map((emp) => (
+                <span
+                  key={emp.id}
+                  className="inline-flex items-center gap-2 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-1.5 text-xs text-[rgb(var(--text))]"
+                >
+                  <span className="font-semibold">{emp.name}</span>
+                  <span className="font-mono text-slate-500">{emp.id}</span>
+                </span>
+              ))
+            ) : (
+              <div className="text-sm text-emerald-500">No pending employees. Great work.</div>
+            )}
+          </div>
+        </div>
+      </section>
+
       {/* 6-month chart */}
-      <section className="bg-[#111] p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
+      <section className="rt-panel p-8">
         <div className="mb-6">
-          <h3 className="text-xl font-black uppercase tracking-tight">
+          <h3 className="text-xl font-black tracking-tight">
             Average Ability Trend (6 months)
           </h3>
-          <p className="text-gray-500 text-sm mt-1">
+          <p className="text-slate-500 text-sm mt-1">
             Demo numbers for now — we’ll compute from real submissions later.
           </p>
         </div>
@@ -368,12 +427,14 @@ export default function AdminDashboard({
               <YAxis stroke="#666" fontSize={12} tickLine={false} axisLine={false} domain={[0, 5]} />
               <Tooltip
                 contentStyle={{ backgroundColor: '#0c0c0c', border: '1px solid #333', borderRadius: '12px' }}
+                labelStyle={{ color: '#e5e7eb', fontWeight: 700 }}
+                itemStyle={{ color: '#93c5fd' }}
                 cursor={{ stroke: 'rgba(255,255,255,0.12)' }}
               />
               <Line
                 type="monotone"
                 dataKey="avg"
-                stroke="#a855f7"
+                stroke="#007acc"
                 strokeWidth={3}
                 dot={{ r: 4, strokeWidth: 2, fill: "#0c0c0c" }}
                 activeDot={{ r: 6 }}
@@ -384,17 +445,14 @@ export default function AdminDashboard({
       </section>
 
       {/* Employee management (dashboard view) */}
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel overflow-hidden">
         <div className="p-8">
-          <h3 className="text-xl font-black uppercase tracking-tight">Employee Management</h3>
-          <p className="text-gray-500 text-sm mt-1">
-            Promote uses the <span className="font-mono">/employees/{'{id}'}/promote</span> API. Remove is still a local demo action.
-          </p>
+          <h3 className="text-xl font-black tracking-tight">Employee Management</h3>
         </div>
 
         {employeesError ? (
           <div className="px-8 pb-6">
-            <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+            <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
               Failed to load employees: <span className="font-mono">{employeesError}</span>
             </div>
           </div>
@@ -402,7 +460,7 @@ export default function AdminDashboard({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">Employee</th>
                 <th className="p-6 font-black">Role</th>
@@ -411,19 +469,19 @@ export default function AdminDashboard({
                 <th className="p-6 text-right font-black px-8">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {employees.map(emp => (
-                <tr key={emp.id} className="hover:bg-white/[0.01] transition-colors">
+                <tr key={emp.id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                   <td className="p-6">
-                    <div className="font-bold text-white tracking-tight">{emp.name}</div>
-                    <div className="text-xs text-gray-500 font-mono mt-1">{emp.id}</div>
+                    <div className="font-bold text-[rgb(var(--text))] tracking-tight">{emp.name}</div>
+                    <div className="text-xs text-slate-500 font-mono mt-1">{emp.id}</div>
                   </td>
                   <td className="p-6">
-                    <span className="text-[10px] font-black uppercase px-3 py-1 bg-white/5 text-gray-300 rounded-lg border border-white/10">
+                    <span className="text-[10px] font-black uppercase px-3 py-1 bg-[rgb(var(--surface-2))] text-[rgb(var(--text))] rounded-lg border border-[rgb(var(--border))]">
                       {emp.role}
                     </span>
                   </td>
-                  <td className="p-6 font-mono text-purple-300">{emp.band}</td>
+                  <td className="p-6 font-mono text-blue-400">{emp.band}</td>
                   <td className="p-6">
                     <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-lg border ${
                       emp.submitted
@@ -438,7 +496,7 @@ export default function AdminDashboard({
                       <button
                         onClick={() => promoteEmployee(emp.id)}
                         disabled={employeesLoading || promotingId === emp.id}
-                        className="p-2.5 bg-purple-500/10 text-purple-300 hover:bg-purple-500 hover:text-white rounded-xl transition-all border border-purple-500/20"
+                        className="p-2.5 bg-blue-500/10 text-blue-500 hover:bg-blue-500 hover:text-white rounded-xl transition-all border border-blue-500/20"
                         title="Promote"
                       >
                         <ArrowUpCircle size={18} />

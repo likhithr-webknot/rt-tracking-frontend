@@ -65,6 +65,66 @@ function normalizeWebknotValueRatings(input) {
   return out;
 }
 
+function normalizeKpiRatings(input) {
+  const out = {};
+  const assign = (idRaw, ratingRaw, fallback = null) => {
+    const id = String(idRaw ?? "").trim();
+    if (!id) return;
+    const parsed =
+      ratingRaw == null || ratingRaw === ""
+        ? fallback
+        : typeof ratingRaw === "number"
+          ? ratingRaw
+          : Number.parseFloat(String(ratingRaw));
+    if (!Number.isFinite(parsed)) return;
+    const rounded = Math.round(parsed * 10) / 10;
+    if (rounded < 1 || rounded > 5) return;
+    out[id] = rounded;
+  };
+
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    for (const [k, v] of Object.entries(input)) assign(k, v);
+    return out;
+  }
+
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (item && typeof item === "object") {
+        const id = item.kpiId ?? item.id ?? item.code ?? item.key ?? item.title ?? item.name;
+        const rating = item.rating ?? item.kpiRating ?? item.score ?? item.value;
+        assign(id, rating, 1);
+        continue;
+      }
+      assign(item, null, 1);
+    }
+  }
+
+  return out;
+}
+
+function toRequestPayload(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const next = { ...source };
+
+  const normalizedKpis = normalizeKpiRatings(source.kpiRatings ?? source.kpis ?? source.kpiSelfRatings);
+  next.kpiRatings = Object.entries(normalizedKpis).map(([kpiId, rating]) => ({
+    kpiId,
+    rating,
+  }));
+
+  const normalizedValues = normalizeWebknotValueRatings(
+    source.webknotValueRatings ?? source.valuesRatings ?? source.valueRatings ?? source.webknotValues
+  );
+  if (Object.keys(normalizedValues).length) {
+    next.webknotValueRatings = Object.entries(normalizedValues).map(([valueId, rating]) => ({
+      valueId,
+      rating,
+    }));
+  }
+
+  return next;
+}
+
 export function normalizeMonthlySubmission(data) {
   if (!data || typeof data !== "object") return null;
   const obj =
@@ -103,8 +163,7 @@ export function normalizeMonthlySubmission(data) {
       ? recognitionsCountRaw
       : Number.parseInt(String(recognitionsCountRaw || "0"), 10) || 0;
   const certifications = Array.isArray(payload.certifications) ? payload.certifications : [];
-  const kpiRatings =
-    payload.kpiRatings && typeof payload.kpiRatings === "object" ? payload.kpiRatings : {};
+  const kpiRatings = normalizeKpiRatings(payload.kpiRatings);
 
   const submittedAt = obj.submittedAt ?? obj.submittedOn ?? null;
   const updatedAt = obj.updatedAt ?? obj.lastUpdatedAt ?? null;
@@ -138,7 +197,7 @@ export async function saveMonthlyDraft(payload, { signal } = {}) {
       signal,
       credentials: "include",
       headers: withCsrfHeaders(baseHeaders),
-      body: JSON.stringify(payload ?? {}),
+      body: JSON.stringify(toRequestPayload(payload)),
     });
   }
 
@@ -170,7 +229,7 @@ export async function submitMonthlySubmission(payload, { signal } = {}) {
       signal,
       credentials: "include",
       headers: withCsrfHeaders(baseHeaders),
-      body: JSON.stringify(payload ?? {}),
+      body: JSON.stringify(toRequestPayload(payload)),
     });
   }
 

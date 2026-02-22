@@ -5,6 +5,7 @@ import { fetchMe } from "../../api/auth.js";
 import { fetchPortalManager } from "../../api/portal.js";
 import { fetchManagerReportees, normalizeEmployees } from "../../api/employees.js";
 import {
+  fetchMyMonthlySubmission,
   fetchManagerTeamSubmissions,
   formatYearMonth,
   normalizeMonthlySubmission,
@@ -12,7 +13,10 @@ import {
   submitMonthlySubmission
 } from "../../api/monthly-submissions.js";
 import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions.js";
+import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
+import { getAppSettings } from "../../utils/appSettings.js";
 import Toast from "../shared/Toast.jsx";
+import ThemeToggle from "../shared/ThemeToggle.jsx";
 
 const MANAGER_REVIEW_DRAFT_KEY = "rt_tracking_manager_review_draft_v1";
 
@@ -79,15 +83,186 @@ function normalizeTeamSubmissions(data) {
     .filter(Boolean);
 }
 
+function normalizeSelfKpiRatings(input) {
+  if (!input || typeof input !== "object") return {};
+  const out = {};
+  for (const [idRaw, valueRaw] of Object.entries(input)) {
+    const id = String(idRaw || "").trim();
+    if (!id) continue;
+    const parsed =
+      typeof valueRaw === "number" ? valueRaw : Number.parseFloat(String(valueRaw ?? ""));
+    if (!Number.isFinite(parsed)) continue;
+    const rounded = Math.round(parsed * 10) / 10;
+    if (rounded < 1 || rounded > 5) continue;
+    out[id] = rounded;
+  }
+  return out;
+}
+
+function normalizeFilterKey(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isWildcardValue(key) {
+  return key === "" || key === "*" || key === "all" || key === "any";
+}
+
+function kpiAppliesToManager(kpi, managerProfile) {
+  const managerBand = normalizeFilterKey(managerProfile?.band);
+  const managerStream = normalizeFilterKey(managerProfile?.stream);
+
+  if (!managerBand && !managerStream) return true;
+
+  const kpiBand = normalizeFilterKey(kpi?.band);
+  const kpiStream = normalizeFilterKey(kpi?.stream);
+
+  const bandOk = isWildcardValue(kpiBand) || !managerBand || kpiBand === managerBand;
+  const streamOk =
+    isWildcardValue(kpiStream) ||
+    kpiStream === "general" ||
+    !managerStream ||
+    kpiStream === managerStream;
+
+  return bandOk && streamOk;
+}
+
+function formatOneDecimalDisplay(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "";
+  return (Math.round(value * 10) / 10).toFixed(1);
+}
+
+function normalizeSelfValueRatings(input) {
+  if (!input) return {};
+  const out = {};
+
+  const assign = (idRaw, ratingRaw, fallback = null) => {
+    const id = String(idRaw ?? "").trim();
+    if (!id) return;
+    const parsed =
+      ratingRaw == null || ratingRaw === ""
+        ? fallback
+        : typeof ratingRaw === "number"
+          ? ratingRaw
+          : Number.parseFloat(String(ratingRaw));
+    if (!Number.isFinite(parsed)) return;
+    const rounded = Math.round(parsed * 10) / 10;
+    if (rounded < 1 || rounded > 5) return;
+    out[id] = rounded;
+  };
+
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (item && typeof item === "object") {
+        const id =
+          item.valueId ?? item.webknotValueId ?? item.id ?? item.code ?? item.key ?? item.value ?? item.title ?? item.name;
+        const rating = item.rating ?? item.valueRating ?? item.score ?? item.value;
+        assign(id, rating, 1);
+        continue;
+      }
+      assign(item, null, 1);
+    }
+    return out;
+  }
+
+  if (typeof input === "object") {
+    for (const [k, v] of Object.entries(input)) assign(k, v);
+  }
+
+  return out;
+}
+
+function buildManagerSelfSubmissionPayload({
+  month,
+  selfReviewText,
+  kpiRatings,
+  selectedValues,
+  allowedKpiIds,
+}) {
+  const normalizedKpisRaw = normalizeSelfKpiRatings(kpiRatings);
+  const allowedSet = new Set(
+    Array.isArray(allowedKpiIds) ? allowedKpiIds.map((id) => String(id || "").trim()).filter(Boolean) : []
+  );
+  const normalizedKpis =
+    allowedSet.size > 0
+      ? Object.fromEntries(
+          Object.entries(normalizedKpisRaw).filter(([id]) => allowedSet.has(String(id || "").trim()))
+        )
+      : normalizedKpisRaw;
+  const kpiEntries = Object.entries(normalizedKpis).sort(([a], [b]) =>
+    String(a).localeCompare(String(b), undefined, { numeric: true })
+  );
+  const stableKpiRatings = Object.fromEntries(kpiEntries);
+
+  const normalizedValues = normalizeSelfValueRatings(selectedValues);
+  const valueEntries = Object.entries(normalizedValues).sort(([a], [b]) =>
+    String(a).localeCompare(String(b), undefined, { numeric: true })
+  );
+  const stableValueRatings = Object.fromEntries(valueEntries);
+  const webknotValues = valueEntries.map(([id]) => String(id));
+
+  return {
+    month: String(month || "").trim() || null,
+    selfReviewText: String(selfReviewText || ""),
+    certifications: [],
+    kpiRatings: stableKpiRatings,
+    webknotValues,
+    webknotValueRatings: stableValueRatings,
+    recognitionsCount: 0,
+  };
+}
+
+function isFinalSubmissionStatus(status, meta) {
+  const s = String(status || "").trim().toUpperCase();
+  if (s === "SUBMITTED" || s === "APPROVED" || s === "COMPLETED" || s === "FINAL") return true;
+  if (meta?.submittedAt) return true;
+  return false;
+}
+
+function payloadHash(payload) {
+  try {
+    return JSON.stringify(payload ?? {});
+  } catch {
+    return String(Date.now());
+  }
+}
+
+function getDraftAutosaveDelayMs() {
+  const n = Number.parseInt(String(getAppSettings()?.draftAutosaveDelayMs ?? 900), 10);
+  if (!Number.isFinite(n)) return 900;
+  return Math.min(5000, Math.max(500, n));
+}
+
+function preventWheelInputChange(e) {
+  e.currentTarget.blur();
+}
+
 export default function ManagerPortal({ onLogout, auth }) {
   const [month, setMonth] = useState(() => formatYearMonth(new Date()));
   const [managerId, setManagerId] = useState(() => String(auth?.employeeId || "").trim() || "");
+  const [managerBand, setManagerBand] = useState(() => String(auth?.band || "").trim());
+  const [managerStream, setManagerStream] = useState(() => String(auth?.stream || "").trim());
   const [filter, setFilter] = useState("NEEDS_REVIEW"); // NEEDS_REVIEW | ALL | SUBMITTED
+  const [activeTab, setActiveTab] = useState("team"); // team | reportees | self-review
+  const [selectedReporteeId, setSelectedReporteeId] = useState("");
+  const [managerSelfReviewText, setManagerSelfReviewText] = useState("");
+  const [managerSelfKpiRatings, setManagerSelfKpiRatings] = useState({});
+  const [managerSelfValueRatings, setManagerSelfValueRatings] = useState({});
+  const [savingSelfReview, setSavingSelfReview] = useState(false);
+  const [managerDraftSaving, setManagerDraftSaving] = useState(false);
+  const [managerDraftError, setManagerDraftError] = useState("");
+  const [selfRatingValidationError, setSelfRatingValidationError] = useState("");
+  const [hydratingSelfSubmission, setHydratingSelfSubmission] = useState(false);
+  const [selfSubmissionMeta, setSelfSubmissionMeta] = useState(null);
 
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
+  const lastSavedSelfDraftHashRef = useRef("");
 
   const [kpiIndex, setKpiIndex] = useState({}); // { [id]: { title, weight } }
+  const [selfKpis, setSelfKpis] = useState([]);
+  const [selfKpisLoading, setSelfKpisLoading] = useState(false);
+  const [selfValues, setSelfValues] = useState([]);
+  const [selfValuesLoading, setSelfValuesLoading] = useState(false);
 
   const [reportees, setReportees] = useState([]);
   const [reporteesLoading, setReporteesLoading] = useState(false);
@@ -107,6 +282,58 @@ export default function ManagerPortal({ onLogout, auth }) {
     setToast(next);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2400);
+  }
+
+  function handleSelfRatingChange(kind, id, rawValue) {
+    if (selfReviewLocked) return;
+
+    const raw = String(rawValue ?? "").trim();
+    if (raw === "") {
+      setSelfRatingValidationError("");
+      if (kind === "kpi") {
+        setManagerSelfKpiRatings((prev) => {
+          const next = { ...(prev || {}) };
+          delete next[id];
+          return next;
+        });
+      } else {
+        setManagerSelfValueRatings((prev) => {
+          const next = { ...(prev || {}) };
+          delete next[id];
+          return next;
+        });
+      }
+      return;
+    }
+
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed)) {
+      setSelfRatingValidationError("Enter a valid rating between 1 and 5.");
+      return;
+    }
+
+    const rounded = Math.round(parsed * 10) / 10;
+    if (rounded > 5) {
+      setSelfRatingValidationError("Rating cannot be more than 5.");
+      return;
+    }
+    if (rounded < 1) {
+      setSelfRatingValidationError("Rating cannot be less than 1.");
+      return;
+    }
+
+    setSelfRatingValidationError("");
+    if (kind === "kpi") {
+      setManagerSelfKpiRatings((prev) => ({
+        ...(prev || {}),
+        [id]: rounded,
+      }));
+    } else {
+      setManagerSelfValueRatings((prev) => ({
+        ...(prev || {}),
+        [id]: rounded,
+      }));
+    }
   }
 
   function closeReviewModal() {
@@ -155,13 +382,25 @@ export default function ManagerPortal({ onLogout, auth }) {
     let mounted = true;
     const controller = new AbortController();
     (async () => {
-      // Ensure we have the current manager's employeeId.
-      if (String(managerId || "").trim()) return;
+      const hasManagerId = Boolean(String(managerId || "").trim());
+      const hasManagerBand = Boolean(String(managerBand || "").trim());
+      const hasManagerStream = Boolean(String(managerStream || "").trim());
+      if (hasManagerId && hasManagerBand && hasManagerStream) return;
       try {
         const me = await fetchMe({ signal: controller.signal });
         if (!mounted) return;
-        const id = String(me?.employeeId ?? me?.empId ?? me?.id ?? "").trim();
+        const root = me && typeof me === "object" ? me : {};
+        const obj =
+          root?.data && typeof root.data === "object" && !Array.isArray(root.data)
+            ? root.data
+            : root;
+
+        const id = String(obj?.employeeId ?? obj?.empId ?? obj?.id ?? "").trim();
+        const band = String(obj?.band ?? obj?.level ?? "").trim();
+        const stream = String(obj?.stream ?? obj?.context ?? "").trim();
         if (id) setManagerId(id);
+        if (band) setManagerBand(band);
+        if (stream) setManagerStream(stream);
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!mounted) return;
@@ -172,12 +411,13 @@ export default function ManagerPortal({ onLogout, auth }) {
       mounted = false;
       controller.abort();
     };
-  }, [managerId, onLogout]);
+  }, [managerBand, managerId, managerStream, onLogout]);
 
   useEffect(() => {
     let mounted = true;
     const controller = new AbortController();
     (async () => {
+      setSelfKpisLoading(true);
       try {
         const data = await fetchKpiDefinitions({ signal: controller.signal });
         if (!mounted) return;
@@ -185,8 +425,40 @@ export default function ManagerPortal({ onLogout, auth }) {
         const map = {};
         for (const k of list) map[String(k.id)] = { title: k.title, weight: k.weight };
         setKpiIndex(map);
+        setSelfKpis(list);
       } catch {
         // KPI index is best-effort; manager can still review with ids.
+      } finally {
+        if (mounted) setSelfKpisLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+    (async () => {
+      setSelfValuesLoading(true);
+      try {
+        const data = await fetchValues(true, { signal: controller.signal });
+        const list = normalizeWebknotValuesList(data)
+          .map((v) => ({
+            id: String(v?.id || "").trim(),
+            title: String(v?.title || v?.id || "").trim(),
+            pillar: String(v?.pillar || "—").trim() || "—",
+          }))
+          .filter((v) => Boolean(v.id));
+        if (!mounted) return;
+        setSelfValues(list);
+      } catch {
+        if (!mounted) return;
+        setSelfValues([]);
+      } finally {
+        if (mounted) setSelfValuesLoading(false);
       }
     })();
     return () => {
@@ -251,6 +523,130 @@ export default function ManagerPortal({ onLogout, auth }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month]);
 
+  useEffect(() => {
+    if (!String(month || "").trim()) return;
+    let mounted = true;
+    const controller = new AbortController();
+
+    async function run() {
+      setHydratingSelfSubmission(true);
+      setManagerDraftError("");
+      try {
+        const data = await fetchMyMonthlySubmission({ month, signal: controller.signal });
+        if (!mounted) return;
+
+        const normalized = normalizeMonthlySubmission(data);
+        if (!normalized) {
+          setSelfSubmissionMeta(null);
+          setManagerSelfReviewText("");
+          setManagerSelfKpiRatings({});
+          setManagerSelfValueRatings({});
+          const cleared = buildManagerSelfSubmissionPayload({
+            month,
+            selfReviewText: "",
+            kpiRatings: {},
+            selectedValues: {},
+            allowedKpiIds: filteredSelfKpiIds,
+          });
+          lastSavedSelfDraftHashRef.current = payloadHash(cleared);
+          return;
+        }
+
+        const nextKpis = normalizeSelfKpiRatings(normalized.kpiRatings);
+        const nextValues = normalizeSelfValueRatings(
+          normalized.webknotValueRatings ?? normalized.webknotValues
+        );
+
+        setSelfSubmissionMeta({
+          id: normalized.id,
+          month: normalized.month || month,
+          status: normalized.status || null,
+          submittedAt: normalized.submittedAt || null,
+          updatedAt: normalized.updatedAt || null,
+        });
+        setManagerSelfReviewText(normalized.selfReviewText || "");
+        setManagerSelfKpiRatings(nextKpis);
+        setManagerSelfValueRatings(nextValues);
+
+        const loaded = buildManagerSelfSubmissionPayload({
+          month: normalized.month || month,
+          selfReviewText: normalized.selfReviewText || "",
+          kpiRatings: nextKpis,
+          selectedValues: nextValues,
+          allowedKpiIds: filteredSelfKpiIds,
+        });
+        lastSavedSelfDraftHashRef.current = payloadHash(loaded);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setManagerDraftError(err?.message || "Failed to load self review.");
+      } finally {
+        if (mounted) setHydratingSelfSubmission(false);
+      }
+    }
+
+    run();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [month, onLogout]);
+
+  const selfReviewLocked = useMemo(
+    () => isFinalSubmissionStatus(selfSubmissionMeta?.status, selfSubmissionMeta),
+    [selfSubmissionMeta]
+  );
+
+  useEffect(() => {
+    if (!String(month || "").trim()) return;
+    if (hydratingSelfSubmission) return;
+    if (selfReviewLocked) return;
+
+    const payload = buildManagerSelfSubmissionPayload({
+      month,
+      selfReviewText: managerSelfReviewText,
+      kpiRatings: managerSelfKpiRatings,
+      selectedValues: managerSelfValueRatings,
+      allowedKpiIds: filteredSelfKpiIds,
+    });
+
+    const hash = payloadHash(payload);
+    if (hash === lastSavedSelfDraftHashRef.current) return;
+
+    const delayMs = getDraftAutosaveDelayMs();
+    const id = window.setTimeout(async () => {
+      setManagerDraftError("");
+      setManagerDraftSaving(true);
+      try {
+        await saveMonthlyDraft(payload);
+        lastSavedSelfDraftHashRef.current = hash;
+      } catch (err) {
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setManagerDraftError(err?.message || "Failed to save draft.");
+      } finally {
+        setManagerDraftSaving(false);
+      }
+    }, delayMs);
+
+    return () => window.clearTimeout(id);
+  }, [
+    hydratingSelfSubmission,
+    managerSelfKpiRatings,
+    managerSelfReviewText,
+    managerSelfValueRatings,
+    month,
+    onLogout,
+    selfReviewLocked,
+  ]);
+
   const reporteeCount = reportees.length;
   const submittedCount = useMemo(
     () => teamSubs.filter((s) => String(s.status || "").toUpperCase() === "SUBMITTED").length,
@@ -267,22 +663,123 @@ export default function ManagerPortal({ onLogout, auth }) {
     return teamSubs.filter((s) => String(s.status || "").toUpperCase() !== "SUBMITTED");
   }, [filter, teamSubs]);
 
+  const filteredSelfKpis = useMemo(
+    () => selfKpis.filter((k) => kpiAppliesToManager(k, { band: managerBand, stream: managerStream })),
+    [managerBand, managerStream, selfKpis]
+  );
+
+  const filteredSelfKpiIds = useMemo(
+    () => filteredSelfKpis.map((k) => String(k?.id || "").trim()).filter(Boolean),
+    [filteredSelfKpis]
+  );
+
+  const selectedReportee = useMemo(
+    () => reportees.find((r) => String(r.id) === String(selectedReporteeId)) || null,
+    [reportees, selectedReporteeId]
+  );
+
+  const selectedReporteeSubmission = useMemo(() => {
+    if (!selectedReporteeId) return null;
+    return (
+      teamSubs.find((s) => String(s?.employee?.id || "") === String(selectedReporteeId)) || null
+    );
+  }, [selectedReporteeId, teamSubs]);
+
+  async function saveManagerSelfReviewDraft() {
+    if (selfReviewLocked) {
+      showToast({ title: "Locked", message: "You already submitted this month's self review." });
+      return;
+    }
+    const payload = buildManagerSelfSubmissionPayload({
+      month,
+      selfReviewText: managerSelfReviewText,
+      kpiRatings: managerSelfKpiRatings,
+      selectedValues: managerSelfValueRatings,
+      allowedKpiIds: filteredSelfKpiIds,
+    });
+    setSavingSelfReview(true);
+    setManagerDraftError("");
+    try {
+      await saveMonthlyDraft(payload);
+      lastSavedSelfDraftHashRef.current = payloadHash(payload);
+      showToast({ title: "Draft saved", message: "Manager self review saved." });
+    } catch (err) {
+      setManagerDraftError(err?.message || "Please try again.");
+      showToast({ title: "Save failed", message: err?.message || "Please try again." });
+    } finally {
+      setSavingSelfReview(false);
+    }
+  }
+
+  async function submitManagerSelfReview() {
+    if (selfReviewLocked) {
+      showToast({ title: "Already submitted", message: "Manager self review can be submitted once per month." });
+      return;
+    }
+    const text = String(managerSelfReviewText || "").trim();
+    if (!text) {
+      showToast({ title: "Missing self review", message: "Write your self review before submitting." });
+      return;
+    }
+    const payload = {
+      ...buildManagerSelfSubmissionPayload({
+        month,
+        selfReviewText: text,
+        kpiRatings: managerSelfKpiRatings,
+        selectedValues: managerSelfValueRatings,
+        allowedKpiIds: filteredSelfKpiIds,
+      }),
+      submittedAt: new Date().toISOString(),
+    };
+    setSavingSelfReview(true);
+    try {
+      const res = await submitMonthlySubmission(payload);
+      const normalized = normalizeMonthlySubmission(res);
+      const now = new Date().toISOString();
+      setSelfSubmissionMeta({
+        id: normalized?.id ?? selfSubmissionMeta?.id ?? null,
+        month: normalized?.month ?? month,
+        status: normalized?.status ?? "SUBMITTED",
+        submittedAt: normalized?.submittedAt ?? payload.submittedAt ?? now,
+        updatedAt: normalized?.updatedAt ?? now,
+      });
+      lastSavedSelfDraftHashRef.current = payloadHash(
+        buildManagerSelfSubmissionPayload({
+          month,
+          selfReviewText: managerSelfReviewText,
+          kpiRatings: managerSelfKpiRatings,
+          selectedValues: managerSelfValueRatings,
+          allowedKpiIds: filteredSelfKpiIds,
+        })
+      );
+      showToast({ title: "Submitted", message: "Manager self review submitted." });
+    } catch (err) {
+      showToast({ title: "Submit failed", message: err?.message || "Please try again." });
+    } finally {
+      setSavingSelfReview(false);
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-[#080808] text-slate-100 font-sans px-6 lg:px-12 py-10">
+    <div className="rt-shell font-sans px-4 sm:px-6 lg:px-10 py-6 sm:py-10">
       <header className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-end md:justify-between gap-6">
         <div>
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+          <div className="rt-kicker">
             Manager Portal
           </div>
-          <h1 className="mt-2 text-3xl font-black uppercase tracking-tighter italic">
-            Team Submissions
+          <h1 className="mt-2 rt-title">
+            {activeTab === "team"
+              ? "Team Submissions"
+              : activeTab === "reportees"
+              ? "Reportees"
+              : "Manager Self Review"}
           </h1>
-          <div className="mt-3 flex items-center gap-3 flex-wrap text-xs text-gray-400">
+          <div className="mt-3 flex items-center gap-3 flex-wrap text-xs text-[rgb(var(--muted))]">
             <span className="inline-flex items-center gap-2">
-              <Users size={16} /> Reportees: <span className="font-mono text-gray-200">{reporteeCount}</span>
+              <Users size={16} /> Reportees: <span className="font-mono text-[rgb(var(--text))]">{reporteeCount}</span>
             </span>
             <span className="inline-flex items-center gap-2">
-              Submitted: <span className="font-mono text-gray-200">{submittedCount}</span>
+              Submitted: <span className="font-mono text-[rgb(var(--text))]">{submittedCount}</span>
             </span>
             {managerId ? (
               <span className="text-gray-500 font-mono">Manager ID: {managerId}</span>
@@ -290,45 +787,51 @@ export default function ManagerPortal({ onLogout, auth }) {
           </div>
         </div>
 
-        <div className="flex items-end gap-3 flex-wrap">
+        <div className="flex items-end md:items-end gap-3 flex-wrap md:justify-end">
+          <div className="self-end">
+            <ThemeToggle compact />
+          </div>
+
           <div className="space-y-1">
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+            <div className="rt-kicker">
               Month
             </div>
             <input
               type="month"
               value={month}
+              onWheel={preventWheelInputChange}
               onChange={(e) => {
                 const next = String(e.target.value || "").trim();
                 if (!next) return;
                 setMonth(next);
               }}
-              className="bg-[#111] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all text-gray-200"
+              className="rt-input text-sm"
             />
           </div>
 
-          <div className="space-y-1">
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-              Filter
+          {activeTab === "team" ? (
+            <div className="space-y-1">
+              <div className="rt-kicker">
+                Filter
+              </div>
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                className="rt-input text-sm"
+                title="Filter"
+              >
+                <option value="NEEDS_REVIEW">Needs review</option>
+                <option value="ALL">All</option>
+                <option value="SUBMITTED">Submitted</option>
+              </select>
             </div>
-            <select
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              className="bg-[#111] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all text-gray-200"
-              title="Filter"
-            >
-              <option value="NEEDS_REVIEW">Needs review</option>
-              <option value="ALL">All</option>
-              <option value="SUBMITTED">Submitted</option>
-            </select>
-          </div>
+          ) : null}
 
           <button
             onClick={() => reloadTeam()}
             disabled={teamLoading}
             className={[
-              "inline-flex items-center gap-2 rounded-2xl px-6 py-3 text-xs font-black uppercase tracking-widest border transition-all",
-              "border-white/10 text-gray-200 hover:bg-white/5",
+              "rt-btn-ghost inline-flex items-center gap-2 text-xs uppercase tracking-widest transition-all",
               teamLoading ? "opacity-60 cursor-not-allowed" : "",
             ].join(" ")}
             title="Refresh"
@@ -338,7 +841,7 @@ export default function ManagerPortal({ onLogout, auth }) {
 
           <button
             onClick={onLogout}
-            className="inline-flex items-center gap-2 rounded-2xl px-6 py-3 text-xs font-black uppercase tracking-widest bg-red-500/10 text-red-200 hover:bg-red-500 hover:text-white border border-red-500/20 transition-all"
+            className="inline-flex items-center gap-2 rounded-2xl px-6 py-3 text-xs font-semibold uppercase tracking-widest bg-red-500/10 text-red-200 hover:bg-red-500 hover:text-white border border-red-500/30 transition-all"
             title="Logout"
           >
             <LogOut size={18} /> Logout
@@ -346,135 +849,388 @@ export default function ManagerPortal({ onLogout, auth }) {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto mt-10 grid grid-cols-1 xl:grid-cols-3 gap-8">
-        <section className="xl:col-span-2 bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
-          <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <h2 className="text-xl font-black uppercase tracking-tight">Team Submissions</h2>
-              <p className="text-gray-500 text-sm mt-1">
-                Review employee submissions for {month}.
-              </p>
-            </div>
-          </div>
+      <div className="max-w-7xl mx-auto mt-6 flex flex-wrap gap-2">
+        {[
+          { id: "team", label: "Team Submissions" },
+          { id: "reportees", label: "Reportees" },
+          { id: "self-review", label: "Self Review" },
+        ].map((tab) => {
+          const selected = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={[
+                "rounded-2xl border px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-all",
+                selected
+                  ? "bg-blue-500 text-white border-blue-500"
+                  : "border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))]",
+              ].join(" ")}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
 
-          {teamError ? (
-            <div className="px-8 pb-6 text-sm text-red-200">
-              Failed to load: <span className="font-mono">{teamError}</span>
+      {activeTab === "team" ? (
+        <main className="max-w-7xl mx-auto mt-10 grid grid-cols-1 xl:grid-cols-3 gap-8">
+          {teamLoading && teamSubs.length === 0 ? (
+            <div className="xl:col-span-3 rt-panel-subtle rounded-3xl p-6 text-sm text-[rgb(var(--muted))] animate-pulse">
+              Loading team submissions and manager insights…
             </div>
           ) : null}
+          <section className="xl:col-span-2 rt-panel overflow-hidden">
+            <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="text-xl font-bold tracking-tight">Team Submissions</h2>
+                <p className="text-slate-500 text-sm mt-1">
+                  Review employee submissions for {month}.
+                </p>
+              </div>
+            </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
-                <tr>
-                  <th className="p-6 font-black">Employee</th>
-                  <th className="p-6 font-black">Status</th>
-                  <th className="p-6 font-black">Updated</th>
-                  <th className="p-6 text-right font-black px-8">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {filteredTeamSubs.map((s) => {
-                  const status = String(s.status || "—").toUpperCase();
-                  const isSubmitted = status === "SUBMITTED";
-                  const when = s.updatedAt || s.submittedAt || "—";
-                  return (
-                    <tr key={`${s.employee.id}:${s.submissionId || when}`} className="hover:bg-white/[0.01] transition-colors">
-                      <td className="p-6">
-                        <div className="font-bold text-white tracking-tight">{s.employee.name}</div>
-                        <div className="text-xs text-gray-500 font-mono mt-1">
-                          {s.employee.id}{s.employee.email ? ` • ${s.employee.email}` : ""}
-                        </div>
-                      </td>
-                      <td className="p-6">
-                        <span
-                          className={[
-                            "text-[10px] font-black uppercase px-3 py-1 rounded-lg border",
-                            isSubmitted
-                              ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
-                              : "bg-amber-500/10 text-amber-300 border-amber-500/20",
-                          ].join(" ")}
-                        >
-                          {status}
-                        </span>
-                      </td>
-                      <td className="p-6 text-xs text-gray-400 font-mono">
-                        {when}
-                      </td>
-                      <td className="p-6 text-right px-8">
-                        <button
-                          type="button"
-                          onClick={() => setReviewModal({ open: true, row: s })}
-                          className={[
-                            "inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all border",
-                            "border-white/10 text-gray-200 hover:bg-white/5",
-                          ].join(" ")}
-                          title="Review"
-                        >
-                          Review
-                        </button>
+            {teamError ? (
+              <div className="px-8 pb-6 text-sm text-red-200">
+                Failed to load: <span className="font-mono">{teamError}</span>
+              </div>
+            ) : null}
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-t border-b border-[rgb(var(--border))]">
+                  <tr>
+                    <th className="p-6 font-black">Employee</th>
+                    <th className="p-6 font-black">Status</th>
+                    <th className="p-6 font-black">Updated</th>
+                    <th className="p-6 text-right font-black px-8">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[rgb(var(--border))]">
+                  {filteredTeamSubs.map((s) => {
+                    const status = String(s.status || "—").toUpperCase();
+                    const isSubmitted = status === "SUBMITTED";
+                    const when = s.updatedAt || s.submittedAt || "—";
+                    return (
+                      <tr key={`${s.employee.id}:${s.submissionId || when}`} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
+                        <td className="p-6">
+                          <div className="font-bold text-[rgb(var(--text))] tracking-tight">{s.employee.name}</div>
+                          <div className="text-xs text-gray-500 font-mono mt-1">
+                            {s.employee.id}{s.employee.email ? ` • ${s.employee.email}` : ""}
+                          </div>
+                        </td>
+                        <td className="p-6">
+                          <span
+                            className={[
+                              "text-[10px] font-black uppercase px-3 py-1 rounded-lg border",
+                              isSubmitted
+                                ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
+                                : "bg-amber-500/10 text-amber-300 border-amber-500/20",
+                            ].join(" ")}
+                          >
+                            {status}
+                          </span>
+                        </td>
+                        <td className="p-6 text-xs text-[rgb(var(--muted))] font-mono">
+                          {when}
+                        </td>
+                        <td className="p-6 text-right px-8">
+                          <button
+                            type="button"
+                            onClick={() => setReviewModal({ open: true, row: s })}
+                            className={[
+                              "inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all border",
+                              "border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))]",
+                            ].join(" ")}
+                            title="Review"
+                          >
+                            Review
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {!teamLoading && filteredTeamSubs.length === 0 ? (
+                    <tr>
+                      <td className="p-10 text-center text-gray-500" colSpan={4}>
+                        No submissions to show.
                       </td>
                     </tr>
-                  );
-                })}
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
 
-                {!teamLoading && filteredTeamSubs.length === 0 ? (
-                  <tr>
-                    <td className="p-10 text-center text-gray-500" colSpan={4}>
-                      No submissions to show.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </section>
+          <section className="rt-panel p-8">
+            <h2 className="text-xl font-bold tracking-tight">Reportees</h2>
+            <p className="text-gray-500 text-sm mt-1">
+              From <span className="font-mono">/employees/manager/{`{managerId}`}/reportees</span>.
+            </p>
 
-        <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
-          <h2 className="text-xl font-black uppercase tracking-tight">Reportees</h2>
-          <p className="text-gray-500 text-sm mt-1">
-            From <span className="font-mono">/employees/manager/{`{managerId}`}/reportees</span>.
-          </p>
+            {reporteesError ? (
+              <div className="mt-4 text-sm text-red-200">
+                Failed to load: <span className="font-mono">{reporteesError}</span>
+              </div>
+            ) : null}
 
-          {reporteesError ? (
-            <div className="mt-4 text-sm text-red-200">
-              Failed to load: <span className="font-mono">{reporteesError}</span>
+            {reporteesLoading ? (
+              <div className="mt-4 text-sm text-gray-300">Loading reportees…</div>
+            ) : null}
+
+            <div className="mt-6 space-y-3">
+              {reportees.slice(0, 20).map((e) => (
+                <div key={e.id} className="rt-panel-subtle rounded-2xl px-4 py-3">
+                  <div className="font-bold text-[rgb(var(--text))] tracking-tight">{e.name}</div>
+                  <div className="text-xs text-gray-500 font-mono mt-1">
+                    {e.id}{e.email ? ` • ${e.email}` : ""}
+                  </div>
+                  <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500 mt-2">
+                    {e.role}{e.band ? ` • ${e.band}` : ""}
+                  </div>
+                </div>
+              ))}
+
+              {!reporteesLoading && reportees.length === 0 ? (
+                <div className="text-sm text-gray-500">No reportees to show.</div>
+              ) : null}
+            </div>
+          </section>
+        </main>
+      ) : null}
+
+      {activeTab === "reportees" ? (
+        <main className="max-w-7xl mx-auto mt-10 grid grid-cols-1 xl:grid-cols-3 gap-8">
+          {reporteesLoading && reportees.length === 0 ? (
+            <div className="xl:col-span-3 rt-panel-subtle rounded-3xl p-6 text-sm text-[rgb(var(--muted))] animate-pulse">
+              Loading reportee directory…
             </div>
           ) : null}
+          <section className="xl:col-span-2 rt-panel p-8">
+            <h2 className="text-xl font-bold tracking-tight">Select Reportee</h2>
+            <p className="text-slate-500 text-sm mt-1">Pick an employee to open side-by-side comparison and add manager review.</p>
 
-          {reporteesLoading ? (
-            <div className="mt-4 text-sm text-gray-300">Loading reportees…</div>
-          ) : null}
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-3">
+              {reportees.map((e) => {
+                const selected = String(selectedReporteeId) === String(e.id);
+                return (
+                  <button
+                    key={e.id}
+                    type="button"
+                    onClick={() => setSelectedReporteeId(String(e.id))}
+                    className={[
+                      "text-left rounded-2xl border p-4 transition-all",
+                      selected
+                        ? "border-blue-500 bg-blue-500/10"
+                        : "border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] hover:bg-[rgb(var(--surface-2))]",
+                    ].join(" ")}
+                  >
+                    <div className="font-bold text-[rgb(var(--text))]">{e.name}</div>
+                    <div className="text-xs text-slate-500 font-mono mt-1">{e.id}{e.email ? ` • ${e.email}` : ""}</div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mt-2">{e.role}{e.band ? ` • ${e.band}` : ""}</div>
+                  </button>
+                );
+              })}
+              {!reporteesLoading && reportees.length === 0 ? (
+                <div className="text-sm text-slate-500">No reportees available.</div>
+              ) : null}
+            </div>
+          </section>
 
-          <div className="mt-6 space-y-3">
-            {reportees.slice(0, 20).map((e) => (
-              <div key={e.id} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
-                <div className="font-bold text-white tracking-tight">{e.name}</div>
-                <div className="text-xs text-gray-500 font-mono mt-1">
-                  {e.id}{e.email ? ` • ${e.email}` : ""}
+          <section className="rt-panel p-8">
+            <h2 className="text-xl font-bold tracking-tight">Comparison</h2>
+            {selectedReportee ? (
+              <div className="mt-4 space-y-4">
+                <div className="rt-panel-subtle p-4">
+                  <div className="font-bold text-[rgb(var(--text))]">{selectedReportee.name}</div>
+                  <div className="text-xs text-slate-500 font-mono mt-1">{selectedReportee.id}</div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    {selectedReporteeSubmission ? "Submission found for selected month." : "No submission found for selected month."}
+                  </div>
                 </div>
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500 mt-2">
-                  {e.role}{e.band ? ` • ${e.band}` : ""}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!selectedReporteeSubmission) {
+                      showToast({ title: "No submission", message: "Selected employee has no submission for this month." });
+                      return;
+                    }
+                    setReviewModal({ open: true, row: selectedReporteeSubmission });
+                  }}
+                  className="w-full rt-btn-primary text-xs uppercase tracking-widest"
+                >
+                  Open Side-by-Side Review
+                </button>
+              </div>
+            ) : (
+              <div className="mt-4 text-sm text-slate-500">Select a reportee to continue.</div>
+            )}
+          </section>
+        </main>
+      ) : null}
+
+      {activeTab === "self-review" ? (
+        <main className="max-w-7xl mx-auto mt-10">
+          <section className="rt-panel p-8 max-w-4xl">
+            <h2 className="text-xl font-bold tracking-tight">Manager Self Review</h2>
+            <p className="text-slate-500 text-sm mt-1">Write your monthly self review, rate KPIs and Webknot values, then submit.</p>
+
+            {selfReviewLocked ? (
+              <div className="mt-5 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+                This month is locked (already submitted). You can submit once per month.
+              </div>
+            ) : null}
+
+            {(hydratingSelfSubmission || selfKpisLoading || selfValuesLoading) ? (
+              <div className="mt-5 rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))] animate-pulse">
+                Loading your self review template (KPIs and Webknot values)…
+              </div>
+            ) : null}
+
+            {managerDraftError ? (
+              <div className="mt-5 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+                {managerDraftError}
+              </div>
+            ) : null}
+
+            <div className="mt-5 text-xs text-[rgb(var(--muted))]">
+              Draft: {selfReviewLocked ? "Locked" : (hydratingSelfSubmission ? "Loading…" : managerDraftSaving ? "Saving…" : "Saved")}
+            </div>
+
+            <div className="mt-6 space-y-4">
+              <textarea
+                value={managerSelfReviewText}
+                onChange={(e) => setManagerSelfReviewText(e.target.value)}
+                readOnly={selfReviewLocked}
+                rows={10}
+                className={[
+                  "rt-input p-4 text-sm resize-none",
+                  selfReviewLocked ? "opacity-75 cursor-not-allowed" : "",
+                ].join(" ")}
+                placeholder="Write your self review for this month..."
+              />
+
+              <div className="rt-panel-subtle rounded-2xl p-4">
+                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">KPI Ratings (1-5)</div>
+                <div className="mt-3 space-y-3 max-h-[260px] overflow-y-auto pr-1">
+                  {filteredSelfKpis.map((k) => {
+                    const id = String(k?.id || "").trim();
+                    const value = managerSelfKpiRatings?.[id];
+                    const display = formatOneDecimalDisplay(value);
+                    return (
+                      <div key={id} className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-3">
+                        <div className="min-w-0 pr-2">
+                          <div className="text-sm text-[rgb(var(--text))] truncate">{String(k?.title || id)}</div>
+                          <div className="text-[10px] text-[rgb(var(--muted))] font-mono mt-1">
+                            {String(k?.weight || "—")}
+                          </div>
+                        </div>
+                        <input
+                          type="number"
+                          min={1}
+                          max={5}
+                          step={0.1}
+                          value={display}
+                          readOnly={selfReviewLocked}
+                          onWheel={preventWheelInputChange}
+                          onChange={(e) => handleSelfRatingChange("kpi", id, e.target.value)}
+                          className={[
+                            "rt-input w-36 py-2 px-3 text-sm justify-self-end",
+                            selfReviewLocked ? "opacity-75 cursor-not-allowed" : "",
+                          ].join(" ")}
+                          placeholder="1-5"
+                        />
+                      </div>
+                    );
+                  })}
+                  {!selfKpisLoading && filteredSelfKpis.length === 0 ? (
+                    <div className="text-sm text-[rgb(var(--muted))]">No KPIs available.</div>
+                  ) : null}
                 </div>
               </div>
-            ))}
 
-            {!reporteesLoading && reportees.length === 0 ? (
-              <div className="text-sm text-gray-500">No reportees to show.</div>
-            ) : null}
-          </div>
-        </section>
-      </main>
+              <div className="rt-panel-subtle rounded-2xl p-4">
+                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Webknot Values Ratings (1-5)</div>
+                <div className="mt-3 space-y-3 max-h-[260px] overflow-y-auto pr-1">
+                  {selfValues.map((valueItem) => {
+                    const id = String(valueItem?.id || "").trim();
+                    const value = managerSelfValueRatings?.[id];
+                    const display = formatOneDecimalDisplay(value);
+                    return (
+                      <div key={id} className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-3">
+                        <div className="min-w-0 pr-2">
+                          <div className="text-sm text-[rgb(var(--text))] truncate">{String(valueItem?.title || id)}</div>
+                          <div className="text-[10px] text-[rgb(var(--muted))] mt-1">{String(valueItem?.pillar || "—")}</div>
+                        </div>
+                        <input
+                          type="number"
+                          min={1}
+                          max={5}
+                          step={0.1}
+                          value={display}
+                          readOnly={selfReviewLocked}
+                          onWheel={preventWheelInputChange}
+                          onChange={(e) => handleSelfRatingChange("value", id, e.target.value)}
+                          className={[
+                            "rt-input w-36 py-2 px-3 text-sm justify-self-end",
+                            selfReviewLocked ? "opacity-75 cursor-not-allowed" : "",
+                          ].join(" ")}
+                          placeholder="1-5"
+                        />
+                      </div>
+                    );
+                  })}
+                  {!selfValuesLoading && selfValues.length === 0 ? (
+                    <div className="text-sm text-[rgb(var(--muted))]">No values available.</div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="text-[10px] text-[rgb(var(--muted))]">
+                Showing KPIs for your profile{managerBand ? ` • Band: ${managerBand}` : ""}{managerStream ? ` • Stream: ${managerStream}` : ""}.
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={saveManagerSelfReviewDraft}
+                  disabled={savingSelfReview || selfReviewLocked}
+                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60"
+                >
+                  Save Draft
+                </button>
+                <button
+                  type="button"
+                  onClick={submitManagerSelfReview}
+                  disabled={savingSelfReview || selfReviewLocked}
+                  className="rt-btn-primary text-xs uppercase tracking-widest disabled:opacity-60"
+                >
+                  {selfReviewLocked ? "Submitted" : "Submit Self Review"}
+                </button>
+              </div>
+            </div>
+          </section>
+        </main>
+      ) : null}
 
       {reviewModal.open && selectedRow ? (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[70] overflow-y-auto">
-          <div className="w-full max-w-6xl bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+          <div className="w-full max-w-6xl rt-panel rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-4">
               <div>
+
+              {selfRatingValidationError ? (
+                <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                  {selfRatingValidationError}
+                </div>
+              ) : null}
                 <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
                   Manager Review
                 </div>
-                <div className="mt-2 text-2xl font-black tracking-tight text-white">
+                <div className="mt-2 text-2xl font-black tracking-tight text-[rgb(var(--text))]">
                   {selectedRow.employee.name}
                 </div>
                 <div className="mt-1 text-xs text-gray-500 font-mono">
@@ -484,7 +1240,7 @@ export default function ManagerPortal({ onLogout, auth }) {
               <button
                 type="button"
                 onClick={closeReviewModal}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -493,14 +1249,14 @@ export default function ManagerPortal({ onLogout, auth }) {
             </div>
 
             <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="rounded-[2.5rem] border border-white/10 bg-white/[0.03] p-6">
+              <div className="rt-panel-subtle rounded-[2.5rem] p-6">
                 <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
                   Employee Submitted
                 </div>
                 <div className="mt-4 space-y-5">
                   <div>
                     <div className="text-xs font-black uppercase tracking-widest text-gray-500">Self Review</div>
-                    <div className="mt-2 text-sm text-gray-200 whitespace-pre-wrap">
+                    <div className="mt-2 text-sm text-[rgb(var(--text))] whitespace-pre-wrap">
                       {String(selectedRow.payload?.selfReviewText || "—")}
                     </div>
                   </div>
@@ -511,7 +1267,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                       {Object.keys(selectedRow.payload?.kpiRatings || {}).length ? (
                         Object.entries(selectedRow.payload.kpiRatings).map(([id, v]) => (
                           <div key={id} className="flex items-center justify-between gap-3">
-                            <div className="text-sm text-gray-200">
+                            <div className="text-sm text-[rgb(var(--text))]">
                               {kpiIndex?.[id]?.title || id}
                             </div>
                             <div className="text-sm font-mono text-purple-200">{String(v)}</div>
@@ -529,7 +1285,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                       {Array.isArray(selectedRow.payload?.certifications) && selectedRow.payload.certifications.length ? (
                         selectedRow.payload.certifications.map((c) => (
                           <div key={String(c?.name || "")} className="flex items-start justify-between gap-4">
-                            <div className="text-sm text-gray-200">{String(c?.name || "")}</div>
+                            <div className="text-sm text-[rgb(var(--text))]">{String(c?.name || "")}</div>
                             <div className="text-xs text-gray-500 font-mono break-all">{String(c?.proof || "")}</div>
                           </div>
                         ))
@@ -547,13 +1303,13 @@ export default function ManagerPortal({ onLogout, auth }) {
                           .sort(([a], [b]) => String(a).localeCompare(String(b), undefined, { numeric: true }))
                           .map(([id, rating]) => (
                             <div key={String(id || "")} className="flex items-center justify-between gap-4">
-                              <div className="text-sm text-gray-200">{String(id || "")}</div>
+                              <div className="text-sm text-[rgb(var(--text))]">{String(id || "")}</div>
                               <div className="text-sm font-mono text-purple-200">{String(rating ?? "—")}</div>
                             </div>
                           ))
                       ) : Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
                         selectedRow.payload.webknotValues.map((v) => (
-                          <div key={String(v || "")} className="text-sm text-gray-200">
+                          <div key={String(v || "")} className="text-sm text-[rgb(var(--text))]">
                             {String(v || "")}
                           </div>
                         ))
@@ -565,7 +1321,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                 </div>
               </div>
 
-              <div className="rounded-[2.5rem] border border-white/10 bg-[#0c0c0c] p-6">
+              <div className="rt-panel-subtle rounded-[2.5rem] p-6">
                 <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
                   Manager Evaluation
                 </div>
@@ -580,7 +1336,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                             typeof current === "number" && Number.isFinite(current) ? current : (current ?? "");
                           return (
                             <div key={id} className="flex items-center justify-between gap-3">
-                              <div className="text-sm text-gray-200">
+                              <div className="text-sm text-[rgb(var(--text))]">
                                 {kpiIndex?.[id]?.title || id}
                               </div>
                               <input
@@ -602,7 +1358,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                                     return next;
                                   });
                                 }}
-                                className="w-28 bg-[#111] border border-white/10 rounded-2xl py-2 px-3 text-sm outline-none focus:border-purple-500 transition-all text-gray-200"
+                                className="rt-input w-28 py-2 px-3 text-sm"
                                 placeholder="1-5"
                               />
                             </div>
@@ -620,7 +1376,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                       value={managerNotes}
                       onChange={(e) => setManagerNotes(e.target.value)}
                       rows={6}
-                      className="mt-2 w-full bg-[#111] border border-white/10 rounded-2xl p-4 text-sm outline-none focus:border-purple-500 transition-all text-gray-200 resize-none"
+                      className="mt-2 rt-input p-4 text-sm resize-none"
                       placeholder="Write your evaluation notes..."
                     />
                   </div>
@@ -638,7 +1394,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                         saveManagerReviewDrafts(next);
                         showToast({ title: "Saved", message: "Manager draft saved locally." });
                       }}
-                      className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
+                      className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
                     >
                       Save draft
                     </button>
@@ -685,7 +1441,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                       className={[
                         "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
                         savingReview
-                          ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
+                          ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
                           : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
                       ].join(" ")}
                     >

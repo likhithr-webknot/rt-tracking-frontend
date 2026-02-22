@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import WebknotValueDirectory from "./WebknotValueDirectory";
 import Toast from "../shared/Toast.jsx";
+import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 import {
     fetchValues,
     addValue,
@@ -20,6 +21,7 @@ export default function WebknotValueDirectoryPage() {
     const [editingValueId, setEditingValueId] = useState(null);
     const [valueDraft, setValueDraft] = useState({ title: "", pillar: "", description: "" });
     const [valueSaving, setValueSaving] = useState(false);
+    const [pendingDeleteValue, setPendingDeleteValue] = useState(null);
     const [toast, setToast] = useState(null);
     const toastTimerRef = useRef(null);
 
@@ -133,32 +135,34 @@ export default function WebknotValueDirectoryPage() {
     // Delete value
     function deleteValue(v) {
         if (!v) return;
-        const ok = window.confirm(`Delete "${v.title}"?`);
-        if (!ok) return;
-        
-        (async () => {
-            try {
-                await deleteValueApi(String(v.id));
-                setValues((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
-                showToast({ title: "Value deleted", message: v.title });
-                await reloadValues().catch(() => {});
-            } catch (err) {
-                showToast({ title: "Delete failed", message: err?.message || "Please try again." });
-            }
-        })();
+        setPendingDeleteValue(v);
+    }
+
+    async function confirmDeleteValue() {
+        const v = pendingDeleteValue;
+        if (!v) return;
+        setPendingDeleteValue(null);
+        try {
+            await deleteValueApi(String(v.id));
+            setValues((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
+            showToast({ title: "Value deleted", message: v.title });
+            await reloadValues().catch(() => {});
+        } catch (err) {
+            showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+        }
     }
 
     return (
-        <div className="min-h-screen bg-[#0F0F0F] text-slate-100">
+        <div className="rt-shell min-h-screen bg-[rgb(var(--bg))] text-[rgb(var(--text))]">
             {/* Header with logout equivalent */}
-            <div className="border-b border-white/10 bg-black/30 backdrop-blur">
-                <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div className="border-b border-[rgb(var(--border))] bg-[rgb(var(--surface))]/90 backdrop-blur">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
                     <h1 className="text-xl font-black uppercase tracking-tighter">Webknot Values Management</h1>
                 </div>
             </div>
 
             {/* Main content */}
-            <div className="py-8 px-6">
+            <div className="py-6 sm:py-8 px-4 sm:px-6">
                 {valuesError ? (
                     <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300">
                         {valuesError}
@@ -166,7 +170,7 @@ export default function WebknotValueDirectoryPage() {
                 ) : null}
 
                 {valuesLoading ? (
-                    <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+                    <div className="max-w-7xl mx-auto mb-6 rt-panel-subtle p-4 text-sm text-[rgb(var(--muted))]">
                         Loading values…
                     </div>
                 ) : null}
@@ -184,7 +188,7 @@ export default function WebknotValueDirectoryPage() {
             {/* Value Modal */}
             {showValueModal ? (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-                    <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+                    <div className="w-full max-w-lg rt-panel rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
                         <div className="flex items-center justify-between">
                             <div>
                                 <h3 className="font-black uppercase tracking-tight">
@@ -202,7 +206,7 @@ export default function WebknotValueDirectoryPage() {
                             </div>
                             <button
                                 onClick={closeValueModal}
-                                className="p-2 rounded-xl hover:bg-white/5"
+                                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                                 aria-label="Close"
                                 title="Close"
                             >
@@ -218,7 +222,7 @@ export default function WebknotValueDirectoryPage() {
                                 <input
                                     value={valueDraft.title}
                                     onChange={(e) => setValueDraft((d) => ({ ...d, title: e.target.value }))}
-                                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                                    className="mt-2 rt-input py-3 px-4 text-sm"
                                     placeholder="e.g., Own The Outcome"
                                 />
                             </div>
@@ -230,7 +234,7 @@ export default function WebknotValueDirectoryPage() {
                                 <input
                                     value={valueDraft.pillar}
                                     onChange={(e) => setValueDraft((d) => ({ ...d, pillar: e.target.value }))}
-                                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                                    className="mt-2 rt-input py-3 px-4 text-sm"
                                     placeholder="e.g., Ownership"
                                 />
                             </div>
@@ -243,7 +247,7 @@ export default function WebknotValueDirectoryPage() {
                                     value={valueDraft.description}
                                     onChange={(e) => setValueDraft((d) => ({ ...d, description: e.target.value }))}
                                     rows={4}
-                                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all resize-none"
+                                    className="mt-2 rt-input py-3 px-4 text-sm resize-none"
                                     placeholder="Write a short definition of the value..."
                                 />
                             </div>
@@ -253,7 +257,7 @@ export default function WebknotValueDirectoryPage() {
                                     type="button"
                                     onClick={closeValueModal}
                                     disabled={valueSaving}
-                                    className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     Cancel
                                 </button>
@@ -269,6 +273,17 @@ export default function WebknotValueDirectoryPage() {
                     </div>
                 </div>
             ) : null}
+
+            <ConfirmDialog
+                open={Boolean(pendingDeleteValue)}
+                title="Delete Value"
+                message={`Delete "${String(pendingDeleteValue?.title ?? "")}"?`}
+                confirmText="Delete"
+                cancelText="Cancel"
+                confirmVariant="danger"
+                onCancel={() => setPendingDeleteValue(null)}
+                onConfirm={confirmDeleteValue}
+            />
 
             <Toast toast={toast} onDismiss={() => setToast(null)} />
         </div>

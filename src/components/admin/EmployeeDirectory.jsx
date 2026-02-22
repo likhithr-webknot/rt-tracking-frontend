@@ -5,10 +5,13 @@ import {
   ArrowUpCircle,
   Edit3,
   X,
-  Plus
+  Plus,
+  Play,
+  Square,
 } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import CursorPagination from "../shared/CursorPagination.jsx";
+import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 
 import {
   addEmployeeWithManager,
@@ -70,6 +73,8 @@ export default function EmployeeDirectory({
   employeesError,
   currentEmployeeId,
   pager,
+  onSetEmployeeSubmissionWindow,
+  globalWindowOpen = false,
 }) {
   const [query, setQuery] = useState("");
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState([]); // string[]
@@ -82,6 +87,8 @@ export default function EmployeeDirectory({
 
   const [mutating, setMutating] = useState(false);
   const [promotingId, setPromotingId] = useState(null);
+  const [windowUpdatingId, setWindowUpdatingId] = useState(null);
+  const [pendingBulkDeleteCount, setPendingBulkDeleteCount] = useState(0);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [addDraft, setAddDraft] = useState({
@@ -199,6 +206,35 @@ export default function EmployeeDirectory({
     }
   }
 
+  async function setEmployeeSubmissionWindow(emp, mode) {
+    if (!emp?.id || typeof onSetEmployeeSubmissionWindow !== "function") {
+      showToast({ title: "Action unavailable", message: "Employee-level window control is not configured." });
+      return;
+    }
+
+    const action = String(mode || "").trim().toLowerCase();
+    if (action !== "open" && action !== "close") return;
+
+    setWindowUpdatingId(emp.id);
+    try {
+      await onSetEmployeeSubmissionWindow(emp.id, action);
+      showToast({
+        title: action === "open" ? "Window opened" : "Window closed",
+        message:
+          action === "open"
+            ? `${emp.name} can now submit.`
+            : `${emp.name} can no longer submit.`,
+      });
+    } catch (err) {
+      showToast({
+        title: "Update failed",
+        message: err?.message || "Please try again.",
+      });
+    } finally {
+      setWindowUpdatingId(null);
+    }
+  }
+
   function removeEmployee(employeeId) {
     if (currentEmployeeId && String(employeeId) === String(currentEmployeeId)) {
       showToast({ title: "Not allowed", message: "You can't delete your own user." });
@@ -240,14 +276,18 @@ export default function EmployeeDirectory({
       .filter((id) => filteredIdSet.has(id) || employees.some((e) => e.id === id))
       .filter((id) => !currentEmployeeId || String(id) !== String(currentEmployeeId));
     if (ids.length === 0) return;
+    setPendingBulkDeleteCount(ids.length);
+  }
 
-    const ok = window.confirm(`Delete ${ids.length} employee(s)? This currently removes them from the UI only.`);
-    if (!ok) return;
-
+  function confirmDeleteSelected() {
+    const ids = selectedEmployeeIds
+      .filter((id) => filteredIdSet.has(id) || employees.some((e) => e.id === id))
+      .filter((id) => !currentEmployeeId || String(id) !== String(currentEmployeeId));
     const idSet = new Set(ids);
     setEmployees((prev) => prev.filter((e) => !idSet.has(e.id)));
     setSelectedEmployeeIds((prev) => prev.filter((id) => !idSet.has(id)));
     showToast({ title: "Employees removed", message: `Removed ${ids.length} employee(s).` });
+    setPendingBulkDeleteCount(0);
   }
 
   function openEdit(emp) {
@@ -396,16 +436,16 @@ export default function EmployeeDirectory({
     <div className="space-y-8 max-w-7xl mx-auto">
       <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-black uppercase tracking-tighter italic">
+          <h2 className="rt-title">
             Personnel Directory
           </h2>
-          <p className="text-gray-500 text-sm mt-1">Search and manage employees.</p>
+          <p className="text-slate-500 text-sm mt-1">Search and manage employees.</p>
         </div>
 
         <div className="flex items-center gap-3">
           <button
             onClick={openAdd}
-            className="inline-flex items-center gap-2 rounded-2xl bg-purple-600 text-white px-5 py-3 font-black text-xs uppercase tracking-widest hover:bg-purple-500 transition-all"
+            className="rt-btn-primary inline-flex items-center gap-2 px-5 py-3 font-black text-xs uppercase tracking-widest"
             title="Add employee"
           >
             <Plus size={16} /> Add Employee
@@ -427,7 +467,7 @@ export default function EmployeeDirectory({
       </header>
 
       {employeesError ? (
-        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
           Failed to load employees: <span className="font-mono">{employeesError}</span>
         </div>
       ) : null}
@@ -437,7 +477,7 @@ export default function EmployeeDirectory({
         <input
           type="text"
           placeholder="Search by name, id, role, designation, band..."
-          className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
+          className="w-full rt-input py-4 pl-12 pr-4 text-sm"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -449,7 +489,7 @@ export default function EmployeeDirectory({
           <select
             value={roleFilter}
             onChange={(e) => setRoleFilter(e.target.value)}
-            className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+            className="w-full rt-input py-4 px-4 text-sm"
             title="Filter by role"
           >
             <option value="all">All roles</option>
@@ -465,7 +505,7 @@ export default function EmployeeDirectory({
           <select
             value={designationFilter}
             onChange={(e) => setDesignationFilter(e.target.value)}
-            className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+            className="w-full rt-input py-4 px-4 text-sm"
             title="Filter by designation"
           >
             <option value="all">All designations</option>
@@ -481,7 +521,7 @@ export default function EmployeeDirectory({
           <select
             value={bandFilter}
             onChange={(e) => setBandFilter(e.target.value)}
-            className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+            className="w-full rt-input py-4 px-4 text-sm"
             title="Filter by band"
           >
             <option value="all">All bands</option>
@@ -494,9 +534,9 @@ export default function EmployeeDirectory({
         </div>
       </div>
 
-      <div className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <div className="rt-panel overflow-hidden">
         <table className="w-full text-left">
-          <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-b border-white/5">
+          <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-b border-[rgb(var(--border))]">
             <tr>
               <th className="p-6 font-black w-[64px]">
                 <input
@@ -513,12 +553,13 @@ export default function EmployeeDirectory({
               <th className="p-6 font-black">Role</th>
               <th className="p-6 font-black">Designation</th>
               <th className="p-6 font-black">Band</th>
+              <th className="p-6 font-black">Submission Window</th>
               <th className="p-6 text-right font-black px-8">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/5">
+          <tbody className="divide-y divide-[rgb(var(--border))]">
             {visibleEmployees.map((emp) => (
-              <tr key={emp.id} className="hover:bg-white/[0.01] transition-colors">
+              <tr key={emp.id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                 <td className="p-6">
                   <input
                     type="checkbox"
@@ -532,11 +573,49 @@ export default function EmployeeDirectory({
                 </td>
                 <td className="p-6">
                   <div className="font-bold">{emp.name}</div>
-                  <div className="text-xs text-gray-500 font-mono mt-1">{emp.id}</div>
+                  <div className="text-xs text-slate-500 font-mono mt-1">{emp.id}</div>
                 </td>
                 <td className="p-6">{emp.role}</td>
-                <td className="p-6 text-gray-200">{emp.designation ?? emp.role}</td>
+                <td className="p-6 text-[rgb(var(--text))]">{emp.designation ?? emp.role}</td>
                 <td className="p-6 font-mono text-purple-300">{emp.band}</td>
+                <td className="p-6">
+                  <div className="space-y-3">
+                    {globalWindowOpen ? (
+                      emp.submissionWindowForceClosed ? (
+                        <span className="inline-flex items-center rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-blue-500 dark:text-blue-300">
+                          Closed for this employee
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[rgb(var(--text))]">
+                          Open for all
+                        </span>
+                      )
+                    ) : (
+                      <span className="inline-flex items-center rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[rgb(var(--muted))]">
+                        Closed for all
+                      </span>
+                    )}
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setEmployeeSubmissionWindow(emp, "open")}
+                        disabled={windowUpdatingId === emp.id || globalWindowOpen}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1.5 text-[11px] font-bold text-blue-600 dark:text-blue-300 transition-all hover:bg-blue-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        title={globalWindowOpen ? "Cannot start only one employee while global window is already open" : "Open submission window only for this employee"}
+                      >
+                        <Play size={14} /> Open Only This
+                      </button>
+                      <button
+                        onClick={() => setEmployeeSubmissionWindow(emp, "close")}
+                        disabled={windowUpdatingId === emp.id || !globalWindowOpen || emp.submissionWindowForceClosed}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2.5 py-1.5 text-[11px] font-bold text-[rgb(var(--text))] transition-all hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
+                        title={globalWindowOpen ? "Close submission only for this employee" : "Global window is closed for all employees"}
+                      >
+                        <Square size={13} /> Close This
+                      </button>
+                    </div>
+                  </div>
+                </td>
                 <td className="p-6 text-right px-8">
                   <div className="flex justify-end gap-2">
                     <button
@@ -571,7 +650,7 @@ export default function EmployeeDirectory({
 
             {!employeesLoading && filtered.length === 0 ? (
               <tr>
-                <td className="p-10 text-center text-gray-500" colSpan={6}>
+                <td className="p-10 text-center text-slate-500" colSpan={7}>
                   No employees to show.
                 </td>
               </tr>
@@ -593,12 +672,23 @@ export default function EmployeeDirectory({
         </div>
       ) : null}
 
+      <ConfirmDialog
+        open={pendingBulkDeleteCount > 0}
+        title="Remove Employees"
+        message={`Delete ${pendingBulkDeleteCount} employee(s)? This currently removes them from the UI only.`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        onCancel={() => setPendingBulkDeleteCount(0)}
+        onConfirm={confirmDeleteSelected}
+      />
+
       <Toast toast={toast} onDismiss={() => setToast(null)} />
 
       {/* Add Employee Modal */}
       {showAddModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Add Employee</h3>
@@ -606,7 +696,7 @@ export default function EmployeeDirectory({
               </div>
               <button
                 onClick={closeAdd}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -623,10 +713,10 @@ export default function EmployeeDirectory({
 	                  value={addDraft.useNextEmployeeId ? nextEmployeeId : addDraft.employeeId}
 	                  onChange={(e) => setAddDraft((d) => ({ ...d, employeeId: e.target.value, useNextEmployeeId: false }))}
 	                  disabled={addDraft.useNextEmployeeId}
-	                  className={[
-	                    "mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all font-mono",
-	                    addDraft.useNextEmployeeId ? "opacity-70 cursor-not-allowed" : "",
-	                  ].join(" ")}
+                    className={[
+                      "mt-2 w-full rt-input text-sm font-mono",
+                      addDraft.useNextEmployeeId ? "opacity-70 cursor-not-allowed" : "",
+                    ].join(" ")}
 	                  placeholder={`e.g., ${nextEmployeeId}`}
 	                />
 	
@@ -643,7 +733,7 @@ export default function EmployeeDirectory({
 	                    }
 	                    className="h-4 w-4 accent-purple-600"
 	                  />
-	                  <span className="text-xs text-gray-300">
+                    <span className="text-xs text-[rgb(var(--text))]">
 	                    Use next available ID (<span className="font-mono">{nextEmployeeId}</span>)
 	                  </span>
 	                </label>
@@ -656,7 +746,7 @@ export default function EmployeeDirectory({
 	                <input
                   value={addDraft.employeeName}
                   onChange={(e) => setAddDraft((d) => ({ ...d, employeeName: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., Alice Johnson"
                 />
               </div>
@@ -668,7 +758,7 @@ export default function EmployeeDirectory({
                 <input
                   value={addDraft.email}
                   onChange={(e) => setAddDraft((d) => ({ ...d, email: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="name@company.com"
                 />
               </div>
@@ -681,7 +771,7 @@ export default function EmployeeDirectory({
                   <select
                     value={addDraft.empRole}
                     onChange={(e) => setAddDraft((d) => ({ ...d, empRole: e.target.value }))}
-                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    className="mt-2 rt-input text-sm"
                   >
                     <option value="Employee">Employee</option>
                     <option value="Manager">Manager</option>
@@ -696,7 +786,7 @@ export default function EmployeeDirectory({
                   <input
                     value={addDraft.band}
                     onChange={(e) => setAddDraft((d) => ({ ...d, band: e.target.value }))}
-                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    className="mt-2 rt-input text-sm"
                     placeholder="e.g., B5L"
                   />
                 </div>
@@ -709,7 +799,7 @@ export default function EmployeeDirectory({
                 <input
                   value={addDraft.designation}
                   onChange={(e) => setAddDraft((d) => ({ ...d, designation: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., Software Engineer"
                 />
               </div>
@@ -722,7 +812,7 @@ export default function EmployeeDirectory({
                   <input
                     value={addDraft.stream}
                     onChange={(e) => setAddDraft((d) => ({ ...d, stream: e.target.value }))}
-                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    className="mt-2 rt-input text-sm"
                     placeholder="e.g., Engineering"
                   />
                 </div>
@@ -734,7 +824,7 @@ export default function EmployeeDirectory({
                   <input
                     value={managerSearch}
                     onChange={(e) => setManagerSearch(e.target.value)}
-                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    className="mt-2 rt-input text-sm"
                     placeholder="Search managers by name, id, or email..."
                   />
                   <select
@@ -742,7 +832,7 @@ export default function EmployeeDirectory({
                     onChange={(e) => setAddDraft((d) => ({ ...d, managerId: e.target.value }))}
                     disabled={managersLoading}
                     className={[
-                      "mt-3 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all",
+                      "mt-3 w-full rt-input text-sm",
                       managersLoading ? "opacity-60 cursor-not-allowed" : "",
                     ].join(" ")}
                   >
@@ -768,7 +858,7 @@ export default function EmployeeDirectory({
                 <button
                   type="button"
                   onClick={closeAdd}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
+                  className="rt-btn-ghost text-xs uppercase tracking-widest"
                 >
                   Cancel
                 </button>
@@ -790,8 +880,8 @@ export default function EmployeeDirectory({
 
       {/* Edit Modal (kept as-is below in your file) */}
       {editingEmployee ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Edit Employee</h3>
@@ -799,7 +889,7 @@ export default function EmployeeDirectory({
               </div>
               <button
                 onClick={closeEdit}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >

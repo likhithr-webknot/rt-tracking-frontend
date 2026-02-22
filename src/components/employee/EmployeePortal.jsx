@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
+import ThemeToggle from "../shared/ThemeToggle.jsx";
 
 import { fetchMe } from "../../api/auth.js";
 import { fetchCertifications, normalizeCertifications } from "../../api/certifications.js";
@@ -57,6 +58,10 @@ function toPercentNumber(weight) {
   const numText = raw.endsWith("%") ? raw.slice(0, -1).trim() : raw;
   const parsed = Number.parseFloat(numText);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function preventWheelInputChange(e) {
+  e.currentTarget.blur();
 }
 
 function normalizeFilterKey(value) {
@@ -371,31 +376,35 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
   return (
     <aside
       className={[
-        "fixed left-0 top-0 h-full bg-[#111] border-r border-white/5 transition-all duration-300 z-50",
-        isOpen ? "w-64" : "w-20",
+        "fixed left-0 top-0 h-full bg-[rgb(var(--surface))] border-r border-[rgb(var(--border))] transition-all duration-300 z-50",
+        "flex flex-col",
+        "md:translate-x-0",
+        isOpen ? "translate-x-0 w-64" : "-translate-x-full md:translate-x-0 md:w-20",
       ].join(" ")}
     >
       <div className="p-6 flex items-center justify-between">
         {isOpen ? (
           <div className="flex items-center gap-2">
-            <div className="h-8 w-8 bg-purple-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-purple-500/20">
-              W
-            </div>
-            <span className="font-black tracking-tighter uppercase italic text-white">
+            <img
+              src="/unnamed.webp"
+              alt="Webknot Technologies logo"
+              className="h-8 w-8 rounded-lg object-cover border border-[rgb(var(--border))] bg-white"
+            />
+            <span className="font-black tracking-tighter uppercase text-[rgb(var(--text))]">
               Webknot
             </span>
           </div>
         ) : null}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="p-2 hover:bg-white/5 rounded-lg text-gray-500 transition-colors"
+          className="p-2 hover:bg-[rgb(var(--surface-2))] rounded-lg text-slate-500 transition-colors"
           aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
           {isOpen ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
         </button>
       </div>
 
-      <nav className="mt-10 px-3 space-y-2">
+      <nav className="mt-10 px-3 space-y-2 flex-1 overflow-y-auto pb-6">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
@@ -408,7 +417,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
                 isOpen ? "flex items-center justify-start gap-4" : "flex items-center justify-center",
                 isActive
                   ? "bg-purple-600 text-white shadow-xl shadow-purple-900/20"
-                  : "text-gray-500 hover:bg-white/5 hover:text-white",
+                  : "text-slate-500 hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]",
               ].join(" ")}
               title={!isOpen ? item.label : undefined}
             >
@@ -423,30 +432,32 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         })}
       </nav>
 
-      <div className="absolute bottom-24 w-full px-3">
+      <div className="mt-auto w-full px-3 pb-6 space-y-3">
         <div
           className={[
-            "rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-gray-200",
+            "rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-[rgb(var(--text))]",
             isOpen ? "" : "hidden",
           ].join(" ")}
         >
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-            Signed In
-          </div>
-          <div className="mt-2 font-bold tracking-tight text-white truncate">
+          <div className="font-bold tracking-tight text-[rgb(var(--text))] truncate">
             {account?.name || account?.email || "Unknown"}
           </div>
           <div className="mt-1 text-xs text-purple-300 truncate">
             {account?.designation || "—"}
           </div>
-          <div className="mt-2 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+          <div className="mt-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
             Role
           </div>
-          <div className="mt-1 text-xs text-gray-200">{account?.role || "Employee"}</div>
+          <div className="mt-1 text-xs text-[rgb(var(--text))]">{account?.role || "Employee"}</div>
         </div>
-      </div>
+        {isOpen ? (
+          <ThemeToggle />
+        ) : (
+          <div className="grid place-items-center">
+            <ThemeToggle compact />
+          </div>
+        )}
 
-      <div className="absolute bottom-8 w-full px-3 text-red-500">
         <button
           onClick={onLogout}
           className={[
@@ -468,11 +479,11 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
 
 function InfoRow({ label, value }) {
   return (
-    <div className="flex items-start justify-between gap-6 py-3 border-b border-white/5 last:border-b-0">
+    <div className="flex items-start justify-between gap-6 py-3 border-b border-[rgb(var(--border))] last:border-b-0">
       <div className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
         {label}
       </div>
-      <div className="text-sm text-gray-200 font-mono text-right break-all">{value}</div>
+      <div className="text-sm text-[rgb(var(--text))] font-mono text-right break-all">{value}</div>
     </div>
   );
 }
@@ -490,22 +501,22 @@ function ProfileTab({ employee, authEmail }) {
         </p>
       </header>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
         <div className="flex items-start justify-between gap-6 flex-wrap">
           <div>
             <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
               Employee Details
             </div>
-            <div className="mt-3 text-2xl font-black tracking-tight text-white">
+            <div className="mt-3 text-2xl font-black tracking-tight text-[rgb(var(--text))]">
               {display?.name || email}
             </div>
             <div className="mt-1 text-sm text-purple-300 font-mono">{display?.id || "—"}</div>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+          <div className="rt-panel-subtle rounded-2xl px-4 py-3">
             <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
               Support
             </div>
-            <div className="mt-1 text-sm text-gray-200 font-mono">hr@webknot.in</div>
+            <div className="mt-1 text-sm text-[rgb(var(--text))] font-mono">hr@webknot.in</div>
           </div>
         </div>
 
@@ -529,8 +540,8 @@ function Placeholder({ title, note }) {
         <p className="text-gray-500 text-sm mt-2">{note}</p>
       </header>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
-        <div className="text-gray-300">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
+        <div className="text-[rgb(var(--text))]">
           Coming soon.
         </div>
       </section>
@@ -565,7 +576,7 @@ function SelfReviewEditor({
           <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
             Self Review
           </div>
-          <div className="mt-2 text-sm text-gray-300">
+          <div className="mt-2 text-sm text-[rgb(var(--muted))]">
             Write your self review. Use AI Enhance only when you want to improve clarity.
           </div>
         </div>
@@ -594,7 +605,7 @@ function SelfReviewEditor({
             className={[
               "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
               locked || enhancing || !String(text || "").trim() || !aiAgent
-                ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
+                ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
                 : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
             ].join(" ")}
             title={!aiAgent ? "AI Agent is not configured" : "Enhance text using AI"}
@@ -617,7 +628,7 @@ function SelfReviewEditor({
               className={[
                 "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
                 locked || !canFinalSubmit || enhancing
-                  ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
+                  ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
                   : "bg-emerald-500 text-black hover:bg-emerald-400 shadow-xl shadow-emerald-900/20",
               ].join(" ")}
               title={locked ? "This month's review is locked" : (!canFinalSubmit ? "Complete required fields first" : "Submit your self review")}
@@ -640,7 +651,7 @@ function SelfReviewEditor({
         readOnly={locked}
         rows={10}
         className={[
-          "w-full bg-[#0c0c0c] border border-white/10 rounded-2xl p-4 text-sm outline-none transition-all resize-none",
+          "rt-input resize-none p-4 text-sm",
           locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
         ].join(" ")}
         placeholder="Write your self review here..."
@@ -709,17 +720,17 @@ function KpisTab({
       ) : null}
 
       {loading ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
           Loading KPIs…
         </div>
       ) : null}
       {!fullyLoaded && (prefetching || loading) ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
           Loading full KPI list for this month…
         </div>
       ) : null}
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
         <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
           <div>
             <h3 className="text-xl font-black uppercase tracking-tight">KPI Ratings</h3>
@@ -731,14 +742,14 @@ function KpisTab({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">KPI</th>
                 <th className="p-6 font-black">Weightage</th>
                 <th className="p-6 font-black">Your Rating (1-5)</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {items.map((k) => {
                 const id = String(k?.id || "");
                 const title = String(k?.title || "");
@@ -746,9 +757,9 @@ function KpisTab({
                 const value = ratings?.[id];
                 const display = typeof value === "number" && Number.isFinite(value) ? value : "";
                 return (
-                  <tr key={id} className="hover:bg-white/[0.01] transition-colors">
+                  <tr key={id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                     <td className="p-6">
-                      <div className="font-bold text-white tracking-tight">{title || id}</div>
+                      <div className="font-bold text-[rgb(var(--text))] tracking-tight">{title || id}</div>
                       {k?.stream ? (
                         <div className="text-xs text-gray-500 mt-1">{String(k.stream)}</div>
                       ) : null}
@@ -763,6 +774,7 @@ function KpisTab({
                         max={5}
                         step={0.1}
                         value={display}
+                        onWheel={preventWheelInputChange}
                         onChange={(e) => {
                           if (locked) return;
                           const text = String(e.target.value ?? "").trim();
@@ -781,7 +793,7 @@ function KpisTab({
                         }}
                         disabled={locked}
                         className={[
-                          "w-40 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+                          "rt-input w-40 py-3 px-4 text-sm",
                           locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
                         ].join(" ")}
                         placeholder="e.g., 4.2"
@@ -803,7 +815,7 @@ function KpisTab({
         </div>
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
         <SelfReviewEditor
           aiAgent={aiAgent}
           text={selfReviewText}
@@ -815,8 +827,8 @@ function KpisTab({
 
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="text-sm text-gray-500">
-          Rated: <span className="font-mono text-gray-200">{ratedCount}</span>
-          /<span className="font-mono text-gray-200">{all.length}</span>
+          Rated: <span className="font-mono text-[rgb(var(--text))]">{ratedCount}</span>
+          /<span className="font-mono text-[rgb(var(--text))]">{all.length}</span>
           {locked ? " (locked)" : null}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
@@ -827,7 +839,7 @@ function KpisTab({
             className={[
               "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
               proceedDisabled
-                ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
+                ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
                 : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
             ].join(" ")}
             title={
@@ -898,12 +910,12 @@ function ValuesTab({
         </div>
       ) : null}
       {loading ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
           Loading values…
         </div>
       ) : null}
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
         <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
           <div>
             <h3 className="text-xl font-black uppercase tracking-tight">Values</h3>
@@ -915,14 +927,14 @@ function ValuesTab({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">Value</th>
                 <th className="p-6 font-black">Evaluation Criteria</th>
                 <th className="p-6 font-black">Your Rating (1-5)</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {list.map((v) => {
                 const id = String(v?.id || "");
                 const value = valueRatings?.[id];
@@ -930,9 +942,9 @@ function ValuesTab({
                 const pillar = String(v?.pillar || "—");
                 const isPillarMissing = !pillar || pillar === "—";
                 return (
-                  <tr key={id} className="hover:bg-white/[0.01] transition-colors">
+                  <tr key={id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                     <td className="p-6">
-                      <div className="font-bold text-white tracking-tight">{String(v?.title || id)}</div>
+                      <div className="font-bold text-[rgb(var(--text))] tracking-tight">{String(v?.title || id)}</div>
                       <div className="text-[10px] text-gray-500 font-bold uppercase mt-1 font-mono">{id}</div>
                     </td>
                     <td className="p-6">
@@ -940,7 +952,7 @@ function ValuesTab({
                         className={[
                           "inline-flex text-[10px] font-black uppercase px-3 py-1 rounded-lg border",
                           isPillarMissing
-                            ? "bg-white/5 text-gray-400 border-white/10"
+                            ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
                             : "bg-blue-500/10 text-blue-400 border-blue-500/20",
                         ].join(" ")}
                       >
@@ -956,6 +968,7 @@ function ValuesTab({
                           step={0.1}
                           value={display}
                           disabled={locked}
+                          onWheel={preventWheelInputChange}
                           onChange={(e) => {
                             if (locked) return;
                             const text = String(e.target.value ?? "").trim();
@@ -976,7 +989,7 @@ function ValuesTab({
                             });
                           }}
                           className={[
-                            "w-32 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+                            "rt-input w-32 py-3 px-4 text-sm",
                             locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
                           ].join(" ")}
                           placeholder="e.g., 4.2"
@@ -1068,29 +1081,29 @@ function CertificationsTab({
       ) : null}
 
       {loading ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
           Loading certifications…
         </div>
       ) : null}
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">Certification</th>
                 <th className="p-6 font-black">Completed</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {sorted.map((c) => {
                 const name = String(c?.name || "");
                 const key = name.toLowerCase();
                 const checked = selectedKeySet.has(key);
                 return (
-                <tr key={key} className="hover:bg-white/[0.01] transition-colors">
+                <tr key={key} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                   <td className="p-6">
-                    <div className="font-bold text-white tracking-tight">{name}</div>
+                    <div className="font-bold text-[rgb(var(--text))] tracking-tight">{name}</div>
                     <div className="text-xs text-gray-500 mt-1">
                       Select the certifications you have completed.
                     </div>
@@ -1134,7 +1147,7 @@ function CertificationsTab({
           </table>
         </div>
 
-        <div className="p-6 border-t border-white/5 flex items-center justify-between gap-4 flex-wrap">
+        <div className="p-6 border-t border-[rgb(var(--border))] flex items-center justify-between gap-4 flex-wrap">
           <div className="text-sm text-gray-400">
             Selected: <span className="font-mono text-purple-200">{selectedKeySet.size}</span>
           </div>
@@ -1155,7 +1168,7 @@ function CertificationsTab({
 
       {proofModal.open ? (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Proof of Certification</h3>
@@ -1163,7 +1176,7 @@ function CertificationsTab({
               </div>
               <button
                 onClick={closeProofModal}
-                className="p-2 rounded-xl hover:bg-white/5"
+                  className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -1217,7 +1230,7 @@ function CertificationsTab({
                   }}
                   disabled={locked}
                   className={[
-                    "mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+                    "mt-2 rt-input py-3 px-4 text-sm",
                     locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
                   ].join(" ")}
                   placeholder="Paste certificate URL / credential ID"
@@ -1231,7 +1244,7 @@ function CertificationsTab({
                 <button
                   type="button"
                   onClick={closeProofModal}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
+                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
                 >
                   Cancel
                 </button>
@@ -1240,7 +1253,7 @@ function CertificationsTab({
                   disabled={locked}
                   className={[
                     "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
-                    locked ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-500",
+                    locked ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-500",
                   ].join(" ")}
                 >
                   Save
@@ -1264,7 +1277,7 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
         </p>
       </header>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Awards Received
         </div>
@@ -1274,6 +1287,7 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
             min={0}
             step={1}
             value={Number.isFinite(recognitionsCount) ? recognitionsCount : 0}
+            onWheel={preventWheelInputChange}
             onChange={(e) => {
               if (locked) return;
               const parsed = Number.parseInt(String(e.target.value || "0"), 10);
@@ -1281,7 +1295,7 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
             }}
             disabled={locked}
             className={[
-              "w-40 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+              "rt-input w-40 py-3 px-4 text-sm",
               locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
             ].join(" ")}
           />
@@ -1358,18 +1372,18 @@ function ReviewTab({
         </div>
       </header>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-4">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-4">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Employee
         </div>
-        <div className="text-sm text-gray-200">
+        <div className="text-sm text-[rgb(var(--text))]">
           {employee?.name || authEmail || "Unknown"}{" "}
           <span className="text-gray-500 font-mono">({employee?.id || "—"})</span>
         </div>
         <div className="text-xs text-gray-500 font-mono">{authEmail || "—"} • {role}</div>
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           KPI Ratings
         </div>
@@ -1377,7 +1391,7 @@ function ReviewTab({
           <div className="space-y-2">
             {kpis.map((k) => (
               <div key={k.id} className="flex items-center justify-between gap-4">
-                <div className="text-sm text-gray-200">{k.title}</div>
+                <div className="text-sm text-[rgb(var(--text))]">{k.title}</div>
                 <div className="text-sm font-mono text-purple-200">
                   {String(kpiRatings?.[k.id] ?? "—")}
                 </div>
@@ -1389,14 +1403,14 @@ function ReviewTab({
         )}
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Self Review
         </div>
-        <div className="text-sm text-gray-200 whitespace-pre-wrap">{String(selfReviewText || "")}</div>
+        <div className="text-sm text-[rgb(var(--text))] whitespace-pre-wrap">{String(selfReviewText || "")}</div>
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Webknot Values
         </div>
@@ -1404,7 +1418,7 @@ function ReviewTab({
           <div className="space-y-2">
             {valueRatings.map((row) => (
               <div key={row.id} className="flex items-center justify-between gap-4">
-                <div className="text-sm text-gray-200">{row.title}</div>
+                <div className="text-sm text-[rgb(var(--text))]">{row.title}</div>
                 <div className="text-sm font-mono text-purple-200">{row.rating.toFixed(1)}</div>
               </div>
             ))}
@@ -1414,7 +1428,7 @@ function ReviewTab({
         )}
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Certifications
         </div>
@@ -1422,7 +1436,7 @@ function ReviewTab({
           <div className="space-y-2">
             {selectedCertifications.map((c) => (
               <div key={String(c?.name || "")} className="flex items-start justify-between gap-4">
-                <div className="text-sm text-gray-200">{String(c?.name || "")}</div>
+                <div className="text-sm text-[rgb(var(--text))]">{String(c?.name || "")}</div>
                 <div className="text-xs text-gray-500 font-mono break-all">{String(c?.proof || "")}</div>
               </div>
             ))}
@@ -1432,11 +1446,11 @@ function ReviewTab({
         )}
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Recognitions
         </div>
-        <div className="text-sm text-gray-200">
+        <div className="text-sm text-[rgb(var(--text))]">
           Awards received at All Hands: <span className="font-mono text-purple-200">{Number(recognitionsCount || 0)}</span>
         </div>
       </section>
@@ -1454,7 +1468,7 @@ function ReviewTab({
             }
           }}
           disabled={locked}
-          className="inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
+          className="inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
         >
           Save draft
         </button>
@@ -1473,7 +1487,7 @@ function ReviewTab({
           className={[
             "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
             locked || !canFinalSubmit
-              ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
+              ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
               : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
           ].join(" ")}
           title={locked ? "This month's review is locked" : (!canFinalSubmit ? "Complete required fields first" : "Final submit")}
@@ -2297,7 +2311,7 @@ export default function EmployeePortal({ onLogout, auth }) {
             </div>
           ) : null}
           {loading ? (
-            <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+            <div className="max-w-4xl mx-auto mb-6 rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
               Loading profile…
             </div>
           ) : null}
@@ -2386,7 +2400,25 @@ export default function EmployeePortal({ onLogout, auth }) {
   })();
 
   return (
-    <div className="flex min-h-screen bg-[#080808] text-slate-100 font-sans overflow-x-hidden">
+    <div className="rt-shell flex min-h-screen bg-[rgb(var(--bg))] text-[rgb(var(--text))] font-sans overflow-x-hidden">
+      {isSidebarOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-label="Close sidebar"
+        />
+      ) : null}
+
+      <button
+        type="button"
+        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
+        onClick={() => setIsSidebarOpen((prev) => !prev)}
+        aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
+      >
+        {isSidebarOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+      </button>
+
       <Sidebar
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
@@ -2396,7 +2428,7 @@ export default function EmployeePortal({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? "ml-64" : "ml-20"} p-6 lg:p-12`}>
+      <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-64" : "md:ml-20"} p-4 pt-20 md:pt-6 lg:p-12`}>
         {portalBootstrapError ? (
           <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
             {portalBootstrapError}
@@ -2415,12 +2447,13 @@ export default function EmployeePortal({ onLogout, auth }) {
             <input
               type="month"
               value={submissionMonth}
+              onWheel={preventWheelInputChange}
               onChange={(e) => {
                 const next = String(e.target.value || "").trim();
                 if (!next) return;
                 setSubmissionMonth(next);
               }}
-              className="bg-[#111] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all text-gray-200"
+              className="rt-input py-3 px-4 text-sm"
               aria-label="Select submission month"
               title="Select submission month"
             />

@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from "react";
 import { Edit3, Eye, EyeOff, KeyRound, Plug, Plus, Trash2, X } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
+import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 
 const LEGACY_STORAGE_KEY = "rt_tracking_ai_agents_config_v1";
 const STORAGE_KEY = "rt_tracking_ai_agents_v1";
@@ -122,6 +123,7 @@ export default function AIAgentsConfig() {
   const [draftProvider, setDraftProvider] = useState("openai");
   const [draftApiKey, setDraftApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [pendingDeleteAgent, setPendingDeleteAgent] = useState(null);
 
   const [toast, setToast] = useState(null); // { title, message? }
   const toastTimerRef = useRef(null);
@@ -182,10 +184,10 @@ export default function AIAgentsConfig() {
     <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
-          <h2 className="text-3xl font-black uppercase tracking-tighter italic">
+          <h2 className="rt-title">
             Configure AI Agents
           </h2>
-          <p className="text-gray-500 text-sm mt-2">
+          <p className="text-slate-500 text-sm mt-2">
             Stored locally in your browser. Not sent anywhere until we wire the backend.
           </p>
         </div>
@@ -198,22 +200,22 @@ export default function AIAgentsConfig() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search agents by provider..."
-          className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
+          className="w-full rt-input py-4 pl-12 pr-4 text-sm"
         />
       </div>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel overflow-hidden">
         <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h3 className="text-xl font-black uppercase tracking-tight">AI Agents</h3>
-            <p className="text-gray-500 text-sm mt-1">
+            <h3 className="text-xl font-black tracking-tight">AI Agents</h3>
+            <p className="text-slate-500 text-sm mt-1">
               {agents.length ? `${agents.length} configured` : "No agents configured yet."}
             </p>
           </div>
 
           <button
             onClick={openAddModal}
-            className="inline-flex items-center gap-2 rounded-2xl bg-purple-600 text-white px-6 py-3 font-black text-xs uppercase tracking-widest hover:bg-purple-500 shadow-xl shadow-purple-900/20 transition-all"
+            className="rt-btn-primary inline-flex items-center gap-2 px-6 py-3 font-black text-xs uppercase tracking-widest"
           >
             <Plus size={18} /> Add AI Agent
           </button>
@@ -221,21 +223,21 @@ export default function AIAgentsConfig() {
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">Provider</th>
                 <th className="p-6 font-black">API Key</th>
                 <th className="p-6 text-right font-black px-8">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {filteredAgents.map((agent) => (
-                <tr key={agent.id} className="hover:bg-white/[0.01] transition-colors">
+                <tr key={agent.id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                   <td className="p-6">
-                    <div className="font-bold text-white tracking-tight">
+                    <div className="font-bold text-[rgb(var(--text))] tracking-tight">
                       {providerLabel(agent.provider)}
                     </div>
-                    <div className="text-xs text-gray-500 font-mono mt-1">
+                    <div className="text-xs text-slate-500 font-mono mt-1">
                       {String(agent.provider || "")}
                     </div>
                   </td>
@@ -248,7 +250,7 @@ export default function AIAgentsConfig() {
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => openEditModal(agent)}
-                        className="p-2.5 bg-white/5 text-gray-200 hover:bg-white/10 hover:text-white rounded-xl transition-all border border-white/10"
+                        className="p-2.5 bg-[rgb(var(--surface-2))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] hover:brightness-95 rounded-xl transition-all border border-[rgb(var(--border))]"
                         title="Edit API key"
                         aria-label={`Edit API key for ${providerLabel(agent.provider)}`}
                       >
@@ -256,11 +258,7 @@ export default function AIAgentsConfig() {
                       </button>
                       <button
                         onClick={() => {
-                          const ok = window.confirm(`Delete AI Agent (${providerLabel(agent.provider)})?`);
-                          if (!ok) return;
-                          const next = agents.filter((a) => a.id !== agent.id);
-                          persist(next);
-                          showToast({ title: "Agent deleted", message: providerLabel(agent.provider) });
+                          setPendingDeleteAgent(agent);
                         }}
                         className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
                         title="Delete agent"
@@ -275,7 +273,7 @@ export default function AIAgentsConfig() {
 
               {filteredAgents.length === 0 ? (
                 <tr>
-                  <td className="p-10 text-center text-gray-500" colSpan={3}>
+                  <td className="p-10 text-center text-slate-500" colSpan={3}>
                     No agents to show.
                   </td>
                 </tr>
@@ -286,8 +284,8 @@ export default function AIAgentsConfig() {
       </section>
 
       {modal.open ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">
@@ -301,7 +299,7 @@ export default function AIAgentsConfig() {
               </div>
               <button
                 onClick={closeModal}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -355,7 +353,7 @@ export default function AIAgentsConfig() {
                   <select
                     value={draftProvider}
                     onChange={(e) => setDraftProvider(e.target.value)}
-                    className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    className="w-full rt-input py-3 pl-12 pr-4 text-sm"
                   >
                     {providerOptions.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -377,20 +375,20 @@ export default function AIAgentsConfig() {
                     value={draftApiKey}
                     onChange={(e) => setDraftApiKey(e.target.value)}
                     placeholder="Paste API key…"
-                    className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 pl-12 pr-12 text-sm focus:border-purple-500 outline-none transition-all"
+                    className="w-full rt-input py-3 pl-12 pr-12 text-sm"
                     autoComplete="off"
                   />
                   <button
                     type="button"
                     onClick={() => setShowKey((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl hover:bg-white/5 text-gray-300"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl hover:bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))]"
                     aria-label={showKey ? "Hide key" : "Show key"}
                     title={showKey ? "Hide key" : "Show key"}
                   >
                     {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
-                <div className="text-xs text-gray-500 mt-2">
+                <div className="text-xs text-slate-500 mt-2">
                   Keep this secret. Anyone with access to this browser profile can read it.
                 </div>
               </div>
@@ -399,13 +397,13 @@ export default function AIAgentsConfig() {
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
+                  className="rt-btn-ghost text-xs uppercase tracking-widest"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all"
+                  className="rt-btn-primary text-xs uppercase tracking-widest"
                 >
                   {modal.mode === "edit" ? "Save" : "Add"}
                 </button>
@@ -414,6 +412,24 @@ export default function AIAgentsConfig() {
           </div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteAgent)}
+        title="Delete AI Agent"
+        message={`Delete AI Agent (${providerLabel(pendingDeleteAgent?.provider)})?`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        onCancel={() => setPendingDeleteAgent(null)}
+        onConfirm={() => {
+          const agent = pendingDeleteAgent;
+          if (!agent) return;
+          const next = agents.filter((a) => a.id !== agent.id);
+          persist(next);
+          setPendingDeleteAgent(null);
+          showToast({ title: "Agent deleted", message: providerLabel(agent.provider) });
+        }}
+      />
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>

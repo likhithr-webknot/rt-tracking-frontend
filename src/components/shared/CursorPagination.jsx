@@ -12,7 +12,7 @@ export default function CursorPagination({
   return (
     <div className="flex items-center justify-end gap-2">
       {label ? (
-        <div className="mr-2 text-[10px] font-black uppercase tracking-[0.2em] text-gray-600">
+        <div className="mr-2 rt-kicker">
           {label}
         </div>
       ) : null}
@@ -21,10 +21,10 @@ export default function CursorPagination({
         onClick={onPrev}
         disabled={!canPrev || loading}
         className={[
-          "inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-[11px] font-black uppercase tracking-widest transition-all border",
+          "rt-btn-ghost inline-flex items-center gap-2 px-4 py-2 text-[11px] uppercase tracking-widest transition-all",
           !canPrev || loading
-            ? "bg-white/5 text-gray-600 border-white/10 cursor-not-allowed"
-            : "border-white/10 text-gray-200 hover:bg-white/5",
+            ? "opacity-50 cursor-not-allowed"
+            : "",
         ].join(" ")}
         title="Previous"
       >
@@ -35,10 +35,10 @@ export default function CursorPagination({
         onClick={onNext}
         disabled={!canNext || loading}
         className={[
-          "inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-[11px] font-black uppercase tracking-widest transition-all",
+          "rt-btn-primary inline-flex items-center gap-2 px-4 py-2 text-[11px] uppercase tracking-widest transition-all",
           !canNext || loading
-            ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
-            : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
+            ? "opacity-50 cursor-not-allowed"
+            : "",
         ].join(" ")}
         title="Next"
       >

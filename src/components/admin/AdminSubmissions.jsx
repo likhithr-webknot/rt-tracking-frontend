@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Trash2 } from "lucide-react";
+import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 
 import {
   deleteAdminMonthlySubmission,
@@ -74,6 +75,8 @@ export default function AdminSubmissions({ onLogout }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [pendingDeleteSubmissionId, setPendingDeleteSubmissionId] = useState(null);
+  const [deleteErrorMessage, setDeleteErrorMessage] = useState("");
 
   const query = useMemo(() => {
     const m = String(month || "").trim();
@@ -110,38 +113,38 @@ export default function AdminSubmissions({ onLogout }) {
     <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
-          <h2 className="text-3xl font-black uppercase tracking-tighter italic">
+          <h2 className="rt-title">
             Monthly Submissions
           </h2>
-          <p className="text-gray-500 text-sm mt-2">
+          <p className="text-slate-500 text-sm mt-2">
             Admin view for fully submitted entries only.
           </p>
         </div>
 
         <div className="flex items-end gap-3 flex-wrap">
           <div className="space-y-1">
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+            <div className="rt-kicker">
               Month
             </div>
             <input
               type="month"
               value={month}
               onChange={(e) => setMonth(String(e.target.value || "").trim())}
-              className="bg-[#111] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all text-gray-200"
+              className="rt-input text-sm"
             />
-            <div className="text-[10px] text-gray-500">
+            <div className="text-[10px] text-slate-500">
               Clear the input to fetch all months (backend permitting).
             </div>
           </div>
 
-          <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+          <label className="flex items-center gap-3 rt-panel-subtle px-4 py-3">
             <input
               type="checkbox"
               checked={onlyManagerSubmitted}
               onChange={(e) => setOnlyManagerSubmitted(e.target.checked)}
               className="h-4 w-4 accent-purple-600"
             />
-            <span className="text-xs font-black uppercase tracking-widest text-gray-200">
+            <span className="text-xs font-black uppercase tracking-widest text-[rgb(var(--text))]">
               Only manager-submitted
             </span>
           </label>
@@ -150,8 +153,7 @@ export default function AdminSubmissions({ onLogout }) {
             onClick={() => reload()}
             disabled={loading}
             className={[
-              "inline-flex items-center gap-2 rounded-2xl px-6 py-3 text-xs font-black uppercase tracking-widest border transition-all",
-              "border-white/10 text-gray-200 hover:bg-white/5",
+              "rt-btn-ghost inline-flex items-center gap-2 text-xs uppercase tracking-widest transition-all",
               loading ? "opacity-60 cursor-not-allowed" : "",
             ].join(" ")}
             title="Refresh"
@@ -162,15 +164,15 @@ export default function AdminSubmissions({ onLogout }) {
       </header>
 
       {error ? (
-        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
           Failed to load submissions: <span className="font-mono">{error}</span>
         </div>
       ) : null}
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">Employee</th>
                 <th className="p-6 font-black">Month</th>
@@ -179,21 +181,21 @@ export default function AdminSubmissions({ onLogout }) {
                 <th className="p-6 text-right font-black px-8">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {items
                 .filter((it) => (onlyManagerSubmitted ? Boolean(it.managerReady) : true))
                 .map((it) => (
-                <tr key={it.id} className="hover:bg-white/[0.01] transition-colors">
+                <tr key={it.id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                   <td className="p-6">
-                    <div className="font-bold text-white tracking-tight">{it.employee.name}</div>
-                    <div className="text-xs text-gray-500 font-mono mt-1">
+                    <div className="font-bold text-[rgb(var(--text))] tracking-tight">{it.employee.name}</div>
+                    <div className="text-xs text-slate-500 font-mono mt-1">
                       {it.employee.id}{it.employee.email ? ` • ${it.employee.email}` : ""}
                     </div>
-                    <div className="text-[10px] font-mono text-gray-600 mt-1">
+                    <div className="text-[10px] font-mono text-slate-400 mt-1">
                       {it.id}
                     </div>
                   </td>
-                  <td className="p-6 font-mono text-gray-200">{it.month}</td>
+                  <td className="p-6 font-mono text-[rgb(var(--text))]">{it.month}</td>
                   <td className="p-6">
                     <span
                       className={[
@@ -210,28 +212,15 @@ export default function AdminSubmissions({ onLogout }) {
                         Manager submitted
                       </div>
                     ) : (
-                      <div className="mt-2 text-[10px] font-black uppercase tracking-[0.2em] text-gray-600">
+                      <div className="mt-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
                         Awaiting manager
                       </div>
                     )}
                   </td>
-                  <td className="p-6 text-xs text-gray-400 font-mono">{it.when}</td>
+                  <td className="p-6 text-xs text-slate-500 font-mono">{it.when}</td>
                   <td className="p-6 text-right px-8">
                     <button
-                      onClick={async () => {
-                        const ok = window.confirm(`Delete submission ${it.id}?`);
-                        if (!ok) return;
-                        try {
-                          await deleteAdminMonthlySubmission(it.id);
-                          await reload();
-                        } catch (err) {
-                          if (err?.status === 401) {
-                            onLogout?.();
-                            return;
-                          }
-                          window.alert(err?.message || "Delete failed.");
-                        }
-                      }}
+                      onClick={() => setPendingDeleteSubmissionId(it.id)}
                       className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
                       title="Delete"
                     >
@@ -243,7 +232,7 @@ export default function AdminSubmissions({ onLogout }) {
 
               {!loading && items.filter((it) => (onlyManagerSubmitted ? Boolean(it.managerReady) : true)).length === 0 ? (
                 <tr>
-                  <td className="p-10 text-center text-gray-500" colSpan={5}>
+                  <td className="p-10 text-center text-slate-500" colSpan={5}>
                     No submissions to show.
                   </td>
                 </tr>
@@ -252,6 +241,43 @@ export default function AdminSubmissions({ onLogout }) {
           </table>
         </div>
       </section>
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteSubmissionId)}
+        title="Delete Submission"
+        message={`Delete submission ${String(pendingDeleteSubmissionId ?? "")}?`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        onCancel={() => setPendingDeleteSubmissionId(null)}
+        onConfirm={async () => {
+          const id = pendingDeleteSubmissionId;
+          if (!id) return;
+          try {
+            await deleteAdminMonthlySubmission(id);
+            setPendingDeleteSubmissionId(null);
+            await reload();
+          } catch (err) {
+            if (err?.status === 401) {
+              onLogout?.();
+              return;
+            }
+            setPendingDeleteSubmissionId(null);
+            setDeleteErrorMessage(err?.message || "Delete failed.");
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(deleteErrorMessage)}
+        title="Delete Failed"
+        message={String(deleteErrorMessage || "Delete failed.")}
+        confirmText="OK"
+        confirmVariant="primary"
+        showCancel={false}
+        onCancel={() => setDeleteErrorMessage("")}
+        onConfirm={() => setDeleteErrorMessage("")}
+      />
     </div>
   );
 }

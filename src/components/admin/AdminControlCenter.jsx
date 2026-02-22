@@ -12,7 +12,9 @@ import EmployeeDirectory from "./EmployeeDirectory.jsx";
 import KPIRegistry from "./KPIRegistry.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
 import WebknotValueDirectory from "./WebknotValueDirectory.jsx";
+import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 import Toast from "../shared/Toast.jsx";
+import ThemeToggle from "../shared/ThemeToggle.jsx";
 import { fetchEmployees, normalizeEmployees } from "../../api/employees.js";
 import {
   addKpiDefinition,
@@ -21,7 +23,12 @@ import {
   normalizeKpiDefinitions,
   updateKpiDefinition
 } from "../../api/kpi-definitions.js";
-import { fetchSubmissionWindowCurrent } from "../../api/submission-window.js";
+import {
+  closeSubmissionWindowForEmployeeNow,
+  fetchEmployeeSubmissionWindowStatus,
+  fetchSubmissionWindowCurrent,
+  openSubmissionWindowForEmployeeNow,
+} from "../../api/submission-window.js";
 import {
   addCertification,
   deleteCertification,
@@ -44,30 +51,34 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
     { id: 'directory', icon: <Users size={20} />, label: "Employee Directory" },
     { id: 'kpi', icon: <Target size={20} />, label: "KPI Directory" },
     { id: 'certifications', icon: <Award size={20} />, label: "Certifications" },
-    { id: 'values', icon: <Sparkles size={20} />, label: "Webknot Value Directory" },
+    { id: 'values', icon: <Sparkles size={20} />, label: "Webknot Values" },
     ...(isAdmin ? [{ id: 'agents', icon: <Bot size={20} />, label: "Configure AI Agents" }] : []),
     { id: 'settings', icon: <Settings size={20} />, label: "Settings" },
   ];
 
   return (
-    <aside className={`fixed left-0 top-0 h-full bg-[#111] border-r border-white/5 transition-all duration-300 z-50 ${isOpen ? 'w-64' : 'w-20'}`}>
+    <aside className={`fixed left-0 top-0 h-full bg-[rgb(var(--surface))] border-r border-[rgb(var(--border))] transition-all duration-300 z-50 md:translate-x-0 flex flex-col ${isOpen ? 'translate-x-0 w-64' : '-translate-x-full md:translate-x-0 md:w-20'}`}>
       <div className="p-6 flex items-center justify-between">
         {isOpen && (
           <div className="flex items-center gap-2">
-            <div className="h-8 w-8 bg-purple-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-purple-500/20">W</div>
-            <span className="font-black tracking-tighter uppercase italic text-white">Webknot</span>
+            <img
+              src="/unnamed.webp"
+              alt="Webknot Technologies logo"
+              className="h-8 w-8 rounded-lg object-cover border border-[rgb(var(--border))] bg-white"
+            />
+            <span className="font-black tracking-tighter uppercase text-[rgb(var(--text))]">Webknot</span>
           </div>
         )}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="p-2 hover:bg-white/5 rounded-lg text-gray-500 transition-colors"
+          className="p-2 hover:bg-[rgb(var(--surface-2))] rounded-lg text-slate-500 transition-colors"
           aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
           {isOpen ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
         </button>
       </div>
 
-      <nav className="mt-10 px-3 space-y-2">
+      <nav className="mt-10 px-3 space-y-2 flex-1 overflow-y-auto pb-6">
         {navItems.map((item) => {
           const isActive = activeTab === item.id
           return (
@@ -80,7 +91,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
                 isOpen ? 'flex items-center justify-start gap-4' : 'flex items-center justify-center',
                 isActive
                   ? 'bg-purple-600 text-white shadow-xl shadow-purple-900/20'
-                  : 'text-gray-500 hover:bg-white/5 hover:text-white',
+                  : 'text-slate-500 hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]',
               ].join(' ')}
               title={!isOpen ? item.label : undefined}
             >
@@ -88,7 +99,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
                 {item.icon}
               </span>
               {isOpen && (
-                <span className="text-sm font-bold tracking-tight whitespace-nowrap">
+                <span className="text-sm font-bold tracking-tight truncate">
                   {item.label}
                 </span>
               )}
@@ -97,31 +108,28 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         })}
       </nav>
 
-      <div className="absolute bottom-24 w-full px-3">
+      <div className="mt-auto w-full px-3 pb-6 space-y-3">
         <div
           className={[
-            "rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-gray-200",
+            "rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-[rgb(var(--text))]",
             isOpen ? "" : "hidden",
           ].join(" ")}
         >
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-            Signed In
-          </div>
-          <div className="mt-2 font-bold tracking-tight text-white truncate">
+          <div className="font-bold tracking-tight text-[rgb(var(--text))] truncate">
             {account?.name || account?.email || "Unknown"}
           </div>
           <div className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-purple-300 truncate">
             {account?.role || "Employee"}
           </div>
-          <div className="mt-1 text-xs text-gray-400 truncate">
+          <div className="mt-1 text-xs text-slate-500 truncate">
             {account?.subtitle || "—"}
           </div>
         </div>
 
         {!isOpen ? (
-          <div className="grid place-items-center text-gray-500">
+          <div className="grid place-items-center text-slate-500">
             <div
-              className="h-10 w-10 rounded-2xl border border-white/10 bg-white/[0.03] grid place-items-center"
+              className="h-10 w-10 rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] grid place-items-center"
               title={[
                 account?.name || account?.email || "Unknown",
                 account?.role || "Employee",
@@ -133,9 +141,15 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
             </div>
           </div>
         ) : null}
-      </div>
 
-      <div className="absolute bottom-8 w-full px-3 text-red-500">
+        {isOpen ? (
+          <ThemeToggle />
+        ) : (
+          <div className="grid place-items-center">
+            <ThemeToggle compact />
+          </div>
+        )}
+
         <button
           onClick={onLogout}
           className={[
@@ -164,6 +178,25 @@ function toLocalInputValue(date) {
   const hh = pad(date.getHours())
   const min = pad(date.getMinutes())
   return `${yyyy}-${mm}-${dd}T${hh}:${min}`
+}
+
+function parseLocalInputValue(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isPortalWindowOpenNow(portalWindow, now = new Date()) {
+  if (portalWindow?.manualClosed) return false;
+  const start = parseLocalInputValue(portalWindow?.start);
+  if (!start) return false;
+
+  const endRaw = String(portalWindow?.end ?? "").trim();
+  const end = endRaw ? parseLocalInputValue(endRaw) : null;
+  if (endRaw && !end) return false;
+
+  if (now < start) return false;
+  if (!end) return true;
+  return now <= end;
 }
 
 function downloadTextFile({ filename, text, mime = "text/plain" }) {
@@ -310,8 +343,10 @@ function applyEmployeeExtras(employees, extras) {
         ? x.recognitions
         : e.recognitions ?? 0;
     const certifications = Array.isArray(x.certifications) ? x.certifications : e.certifications ?? [];
+    const submissionWindowForceOpen = Boolean(x.submissionWindowForceOpen);
+    const submissionWindowForceClosed = Boolean(x.submissionWindowForceClosed);
 
-    return { ...e, recognitions, certifications };
+    return { ...e, recognitions, certifications, submissionWindowForceOpen, submissionWindowForceClosed };
   });
 }
 
@@ -334,6 +369,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [kpisCursor, setKpisCursor] = useState(null);
   const [kpisNextCursor, setKpisNextCursor] = useState(null);
   const [kpisCursorStack, setKpisCursorStack] = useState([]);
+  const kpisCursorRef = useRef(null);
   const [kpiDraft, setKpiDraft] = useState({ title: "", stream: "", band: "", weight: "" });
   const [editingKpiId, setEditingKpiId] = useState(null);
   const [kpiSaving, setKpiSaving] = useState(false);
@@ -346,11 +382,13 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [valuesCursor, setValuesCursor] = useState(null);
   const [valuesNextCursor, setValuesNextCursor] = useState(null);
   const [valuesCursorStack, setValuesCursorStack] = useState([]);
+  const valuesCursorRef = useRef(null);
   const [showValueModal, setShowValueModal] = useState(false);
   const [valueModalMode, setValueModalMode] = useState("add"); // "add" | "edit"
   const [editingValueId, setEditingValueId] = useState(null);
   const [valueDraft, setValueDraft] = useState({ title: "", pillar: "", description: "" });
   const [valueSaving, setValueSaving] = useState(false);
+  const [pendingDeleteValue, setPendingDeleteValue] = useState(null);
 
   // Certifications (admin registry)
   const [certificationCatalog, setCertificationCatalog] = useState(() => {
@@ -520,24 +558,26 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
   function deleteValue(v) {
     if (!v) return;
-    const ok = window.confirm(`Delete "${v.title}"?`);
-    if (!ok) return;
-    
-    (async () => {
-      try {
-        await deleteValueApi(String(v.id));
-        setValues((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
-        showToast({ title: "Value deleted", message: v.title });
-        await reloadValues().catch(() => {});
-      } catch (err) {
-        if (err?.status === 401) {
-          showToast({ title: "Session expired", message: "Please login again." });
-          onLogout?.();
-          return;
-        }
-        showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+    setPendingDeleteValue(v);
+  }
+
+  async function confirmDeleteValue() {
+    const v = pendingDeleteValue;
+    if (!v) return;
+    setPendingDeleteValue(null);
+    try {
+      await deleteValueApi(String(v.id));
+      setValues((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
+      showToast({ title: "Value deleted", message: v.title });
+      await reloadValues().catch(() => {});
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
       }
-    })();
+      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+    }
   }
 
   async function submitKpi(e) {
@@ -616,17 +656,20 @@ export default function AdminControlCenter({ onLogout, auth }) {
     }
   }
 
-  const reloadKpis = useCallback(async ({ signal, cursor = kpisCursor, pageAction = "stay" } = {}) => {
+  const reloadKpis = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
+    const resolvedCursor = cursor === undefined ? (kpisCursorRef.current ?? null) : (cursor ?? null);
+    const previousCursor = kpisCursorRef.current ?? null;
     setKpisError("");
     setKpisLoading(true);
     try {
-      const data = await fetchKpiDefinitions({ limit: DIRECTORY_PAGE_SIZE, cursor, signal });
+      const data = await fetchKpiDefinitions({ limit: DIRECTORY_PAGE_SIZE, cursor: resolvedCursor, signal });
       const page = normalizeCursorPage(data);
       setKpis(normalizeKpiDefinitions(page.items));
       setKpisNextCursor(page.nextCursor);
-      setKpisCursor(cursor ?? null);
+      setKpisCursor(resolvedCursor);
+      kpisCursorRef.current = resolvedCursor;
       setKpisCursorStack((prev) => {
-        if (pageAction === "next") return [...prev, kpisCursor ?? null];
+        if (pageAction === "next") return [...prev, previousCursor];
         if (pageAction === "prev") return prev.slice(0, -1);
         if (pageAction === "reset") return [];
         return prev;
@@ -644,20 +687,23 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setKpisLoading(false);
     }
-  }, [kpisCursor, onLogout, showToast]);
+  }, [onLogout, showToast]);
 
-  const reloadValues = useCallback(async ({ signal, cursor = valuesCursor, pageAction = "stay" } = {}) => {
+  const reloadValues = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
+    const resolvedCursor = cursor === undefined ? (valuesCursorRef.current ?? null) : (cursor ?? null);
+    const previousCursor = valuesCursorRef.current ?? null;
     setValuesError("");
     setValuesLoading(true);
     try {
-      const data = await fetchValues(false, { limit: DIRECTORY_PAGE_SIZE, cursor, signal });
+      const data = await fetchValues(false, { limit: DIRECTORY_PAGE_SIZE, cursor: resolvedCursor, signal });
       const page = normalizeCursorPage(data);
       const normalized = normalizeWebknotValuesList(page.items);
       setValues(normalized.sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true })));
       setValuesNextCursor(page.nextCursor);
-      setValuesCursor(cursor ?? null);
+      setValuesCursor(resolvedCursor);
+      valuesCursorRef.current = resolvedCursor;
       setValuesCursorStack((prev) => {
-        if (pageAction === "next") return [...prev, valuesCursor ?? null];
+        if (pageAction === "next") return [...prev, previousCursor];
         if (pageAction === "prev") return prev.slice(0, -1);
         if (pageAction === "reset") return [];
         return prev;
@@ -675,7 +721,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setValuesLoading(false);
     }
-  }, [onLogout, showToast, valuesCursor]);
+  }, [onLogout, showToast]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -737,20 +783,24 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [employeesCursor, setEmployeesCursor] = useState(null);
   const [employeesNextCursor, setEmployeesNextCursor] = useState(null);
   const [employeesCursorStack, setEmployeesCursorStack] = useState([]);
+  const employeesCursorRef = useRef(null);
 
-  const reloadEmployees = useCallback(async ({ signal, cursor = employeesCursor, pageAction = "stay" } = {}) => {
+  const reloadEmployees = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
+    const resolvedCursor = cursor === undefined ? (employeesCursorRef.current ?? null) : (cursor ?? null);
+    const previousCursor = employeesCursorRef.current ?? null;
     setEmployeesError("");
     setEmployeesLoading(true);
     try {
-      const data = await fetchEmployees({ limit: DIRECTORY_PAGE_SIZE, cursor, signal });
+      const data = await fetchEmployees({ limit: DIRECTORY_PAGE_SIZE, cursor: resolvedCursor, signal });
       const page = normalizeCursorPage(data);
       const base = normalizeEmployees(page.items);
       const extras = loadEmployeeExtras();
       setEmployees(applyEmployeeExtras(base, extras));
       setEmployeesNextCursor(page.nextCursor);
-      setEmployeesCursor(cursor ?? null);
+      setEmployeesCursor(resolvedCursor);
+      employeesCursorRef.current = resolvedCursor;
       setEmployeesCursorStack((prev) => {
-        if (pageAction === "next") return [...prev, employeesCursor ?? null];
+        if (pageAction === "next") return [...prev, previousCursor];
         if (pageAction === "prev") return prev.slice(0, -1);
         if (pageAction === "reset") return [];
         return prev;
@@ -768,7 +818,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setEmployeesLoading(false);
     }
-  }, [employeesCursor, onLogout, showToast]);
+  }, [onLogout, showToast]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -957,6 +1007,67 @@ export default function AdminControlCenter({ onLogout, auth }) {
     });
   }, [certificationCatalog]);
 
+  const setEmployeeSubmissionWindowOverride = useCallback((employeeId, mode) => {
+    const id = String(employeeId ?? "").trim();
+    if (!id) return;
+
+    const action = String(mode ?? "").trim().toLowerCase();
+    if (action !== "open" && action !== "close") return;
+
+    return (async () => {
+      if (action === "open") {
+        await openSubmissionWindowForEmployeeNow(id);
+      } else {
+        await closeSubmissionWindowForEmployeeNow(id);
+      }
+
+      let nextForceOpen = action === "open";
+      let nextForceClosed = action === "close";
+
+      try {
+        const status = await fetchEmployeeSubmissionWindowStatus(id);
+        const root = status && typeof status === "object" ? status : {};
+        const employeeScopedIsOpen =
+          root?.employeeWindowOpen ??
+          root?.windowOpenForEmployee ??
+          root?.isOpenForEmployee ??
+          root?.employee?.isOpen ??
+          root?.status?.employeeWindowOpen;
+
+        if (typeof employeeScopedIsOpen === "boolean") {
+          nextForceOpen = employeeScopedIsOpen;
+          nextForceClosed = !employeeScopedIsOpen;
+        }
+      } catch {
+      }
+
+      setEmployees((prev) =>
+        prev.map((emp) =>
+          String(emp?.id) === id
+            ? {
+                ...emp,
+                submissionWindowForceOpen: nextForceOpen,
+                submissionWindowForceClosed: nextForceClosed,
+              }
+            : emp
+        )
+      );
+
+      const extras = loadEmployeeExtras();
+      const current = extras[id] && typeof extras[id] === "object" ? extras[id] : {};
+      saveEmployeeExtras({
+        ...extras,
+        [id]: {
+          ...current,
+          recognitions: Number(current.recognitions) || 0,
+          certifications: Array.isArray(current.certifications) ? current.certifications : [],
+          submissionWindowForceOpen: nextForceOpen,
+          submissionWindowForceClosed: nextForceClosed,
+        },
+      });
+    })();
+  }, []);
+
   const account = useMemo(() => {
     const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
     const rawEmail = String(auth?.email || auth?.claims?.sub || "").trim();
@@ -1006,6 +1117,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
     return match?.id ?? null;
   }, [auth?.employeeId, auth?.email, auth?.claims?.sub, employees]);
 
+  const globalWindowOpen = useMemo(
+    () => isPortalWindowOpenNow(portalWindow, new Date()),
+    [portalWindow]
+  );
+
   // Ability trend (demo)
   const ability6m = useMemo(() => ([
     { month: "Sep", avg: 3.6 },
@@ -1036,7 +1152,25 @@ export default function AdminControlCenter({ onLogout, auth }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-[#080808] text-slate-100 font-sans overflow-x-hidden">
+    <div className="rt-shell flex overflow-x-hidden">
+      {isSidebarOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-label="Close sidebar"
+        />
+      ) : null}
+
+      <button
+        type="button"
+        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
+        onClick={() => setIsSidebarOpen((prev) => !prev)}
+        aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
+      >
+        {isSidebarOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+      </button>
+
       <Sidebar
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
@@ -1046,7 +1180,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'ml-64' : 'ml-20'} p-6 lg:p-12`}>
+      <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'md:ml-64' : 'md:ml-20'} p-4 pt-20 md:pt-6 lg:p-10`}>
         {activeTab === "dashboard" && (
           <AdminDashboard
             portalWindow={portalWindow}
@@ -1071,12 +1205,12 @@ export default function AdminControlCenter({ onLogout, auth }) {
         {activeTab === "certifications" && (
           <>
             {certificationsError ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-100">
                 Failed to load certifications: <span className="font-mono">{certificationsError}</span>
               </div>
             ) : null}
             {certificationsLoading ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+              <div className="max-w-7xl mx-auto mb-6 rt-panel-subtle p-4 text-sm text-[rgb(var(--muted))]">
                 Loading certifications…
               </div>
             ) : null}
@@ -1099,6 +1233,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
             employeesError={employeesError}
             currentEmployeeId={currentEmployeeId}
             pager={employeePager}
+            onSetEmployeeSubmissionWindow={setEmployeeSubmissionWindowOverride}
+            globalWindowOpen={globalWindowOpen}
           />
         )}
 
@@ -1119,12 +1255,12 @@ export default function AdminControlCenter({ onLogout, auth }) {
         {activeTab === "values" && (
           <>
             {valuesError ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-100">
                 Failed to load values: <span className="font-mono">{valuesError}</span>
               </div>
             ) : null}
             {valuesLoading ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+              <div className="max-w-7xl mx-auto mb-6 rt-panel-subtle p-4 text-sm text-[rgb(var(--muted))]">
                 Loading values…
               </div>
             ) : null}
@@ -1147,8 +1283,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
       {/* KPI Modal */}
       {showKPIModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">
@@ -1166,7 +1302,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               </div>
               <button
                 onClick={closeKpiModal}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
               >
                 <X size={18} />
@@ -1181,7 +1317,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 <input
                   value={kpiDraft.title}
                   onChange={(e) => setKpiDraft((d) => ({ ...d, title: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., Technical Velocity"
                 />
               </div>
@@ -1194,7 +1330,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   <input
                     value={kpiDraft.stream}
                     onChange={(e) => setKpiDraft((d) => ({ ...d, stream: e.target.value }))}
-                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    className="mt-2 rt-input text-sm"
                     placeholder="e.g., Engineering"
                   />
                 </div>
@@ -1206,7 +1342,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   <input
                     value={kpiDraft.band}
                     onChange={(e) => setKpiDraft((d) => ({ ...d, band: e.target.value }))}
-                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                    className="mt-2 rt-input text-sm"
                     placeholder="e.g., B5L"
                   />
                 </div>
@@ -1219,7 +1355,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 <input
                   value={kpiDraft.weight}
                   onChange={(e) => setKpiDraft((d) => ({ ...d, weight: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., 30%"
                 />
               </div>
@@ -1229,14 +1365,14 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   type="button"
                   onClick={closeKpiModal}
                   disabled={kpiSaving}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={kpiSaving}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-primary text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {kpiSaving ? "Saving…" : (kpiModalMode === "edit" ? "Save Changes" : "Add KPI")}
                 </button>
@@ -1248,8 +1384,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
       {/* Values Modal */}
       {showValueModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">
@@ -1267,7 +1403,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               </div>
               <button
                 onClick={closeValueModal}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -1283,7 +1419,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 <input
                   value={valueDraft.title}
                   onChange={(e) => setValueDraft((d) => ({ ...d, title: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., Own The Outcome"
                 />
               </div>
@@ -1295,7 +1431,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 <input
                   value={valueDraft.pillar}
                   onChange={(e) => setValueDraft((d) => ({ ...d, pillar: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., Ownership"
                 />
               </div>
@@ -1308,7 +1444,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   value={valueDraft.description}
                   onChange={(e) => setValueDraft((d) => ({ ...d, description: e.target.value }))}
                   rows={4}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all resize-none"
+                  className="mt-2 rt-input text-sm resize-none"
                   placeholder="Write a short definition of the value..."
                 />
               </div>
@@ -1318,14 +1454,14 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   type="button"
                   onClick={closeValueModal}
                   disabled={valueSaving}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={valueSaving}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-primary text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {valueSaving ? "Saving…" : (valueModalMode === "edit" ? "Save Changes" : "Add Value")}
                 </button>
@@ -1334,6 +1470,17 @@ export default function AdminControlCenter({ onLogout, auth }) {
           </div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteValue)}
+        title="Delete Value"
+        message={`Delete "${String(pendingDeleteValue?.title ?? "")}"?`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        onCancel={() => setPendingDeleteValue(null)}
+        onConfirm={confirmDeleteValue}
+      />
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>

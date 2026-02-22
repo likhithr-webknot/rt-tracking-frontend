@@ -1,6 +1,29 @@
 import React, { useMemo, useRef, useState } from "react";
 import { Edit3, Eye, EyeOff, Plus, Search, Trash2, X } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
+import ConfirmDialog from "../shared/ConfirmDialog.jsx";
+
+function extractCertificationName(raw) {
+  if (typeof raw === "string") return raw.trim();
+  if (!raw || typeof raw !== "object") return "";
+
+  const direct = String(raw.name ?? raw.certificationName ?? raw.title ?? "").trim();
+  if (direct) return direct;
+
+  if (raw.certification && typeof raw.certification === "object") {
+    const nested = String(
+      raw.certification.name ?? raw.certification.certificationName ?? raw.certification.title ?? ""
+    ).trim();
+    if (nested) return nested;
+  }
+
+  if (typeof raw.certification === "string") {
+    const nestedText = raw.certification.trim();
+    if (nestedText) return nestedText;
+  }
+
+  return "";
+}
 
 function normalizeCatalogItems(items) {
   const list = Array.isArray(items) ? items : [];
@@ -8,10 +31,14 @@ function normalizeCatalogItems(items) {
   const seenByName = new Set();
   for (const raw of list) {
     const id = String(raw?.id ?? "").trim();
-    const name = String(raw?.name ?? raw ?? "").trim();
+    const name = extractCertificationName(raw);
     const listed = raw && typeof raw === "object" ? Boolean(raw.listed ?? true) : true;
 
-    if (!name) continue;
+    if (!name) {
+      if (!id) continue;
+      out.push({ id, name: id, listed });
+      continue;
+    }
     const nameKey = name.toLowerCase();
     if (seenByName.has(nameKey)) continue;
     seenByName.add(nameKey);
@@ -34,6 +61,7 @@ export default function Certifications({
   const [catalogDraft, setCatalogDraft] = useState("");
 
   const [editModal, setEditModal] = useState({ open: false, id: null, name: "" });
+  const [pendingDeleteItem, setPendingDeleteItem] = useState(null);
 
   const [toast, setToast] = useState(null); // { title, message? }
   const toastTimerRef = useRef(null);
@@ -72,10 +100,10 @@ export default function Certifications({
     <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
-          <h2 className="text-3xl font-black uppercase tracking-tighter italic">
+          <h2 className="rt-title">
             Certifications
           </h2>
-          <p className="text-gray-500 text-sm mt-2">
+          <p className="text-slate-500 text-sm mt-2">
             Admin manages the certification registry. Employees can only complete items from this list.
           </p>
         </div>
@@ -88,24 +116,24 @@ export default function Certifications({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search certifications..."
-          className="w-full bg-[#111] border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-sm focus:border-purple-500 outline-none transition-all"
+          className="w-full rt-input py-4 pl-12 pr-4 text-sm"
         />
       </div>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel overflow-hidden">
         <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h3 className="text-xl font-black uppercase tracking-tight">
+            <h3 className="text-xl font-black tracking-tight">
               Certification Registry
             </h3>
-            <p className="text-gray-500 text-sm mt-1">
+            <p className="text-slate-500 text-sm mt-1">
               {catalog.length ? `${catalog.length} listed` : "No certifications listed yet."}
             </p>
           </div>
 
           <button
             onClick={() => setShowCatalogModal(true)}
-            className="inline-flex items-center gap-2 rounded-2xl bg-purple-600 text-white px-6 py-3 font-black text-xs uppercase tracking-widest hover:bg-purple-500 shadow-xl shadow-purple-900/20 transition-all"
+            className="rt-btn-primary inline-flex items-center gap-2 px-6 py-3 font-black text-xs uppercase tracking-widest"
           >
             <Plus size={18} /> Add certification
           </button>
@@ -113,19 +141,19 @@ export default function Certifications({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">Certification</th>
                 <th className="p-6 font-black">Status</th>
                 <th className="p-6 text-right font-black px-8">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {filteredCatalog.map((item) => (
-                <tr key={String(item.id)} className="hover:bg-white/[0.01] transition-colors">
+                <tr key={String(item.id)} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                   <td className="p-6">
-                    <div className="font-bold text-white tracking-tight">{item.name}</div>
-                    <div className="text-xs text-gray-500 mt-1">
+                    <div className="font-bold text-[rgb(var(--text))] tracking-tight">{item.name}</div>
+                    <div className="text-xs text-[rgb(var(--muted))] mt-1">
                       Employees will only be able to complete registry items.
                     </div>
                   </td>
@@ -144,7 +172,7 @@ export default function Certifications({
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => openEdit(item)}
-                        className="p-2.5 bg-white/5 text-gray-200 hover:bg-white/10 hover:text-white rounded-xl transition-all border border-white/10"
+                        className="p-2.5 bg-[rgb(var(--surface-2))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] hover:brightness-95 rounded-xl transition-all border border-[rgb(var(--border))]"
                         title="Edit"
                         aria-label={`Edit ${item.name}`}
                       >
@@ -186,20 +214,7 @@ export default function Certifications({
                       <button
                         onClick={async () => {
                           if (busy) return;
-                          const ok = window.confirm(`Delete "${item.name}"?`);
-                          if (!ok) return;
-                          setBusy(true);
-                          try {
-                            await onDeleteCertificationFromCatalog?.(item.id);
-                            showToast({ title: "Deleted", message: item.name });
-                          } catch (err) {
-                            showToast({
-                              title: "Delete failed",
-                              message: err?.message || "Please try again.",
-                            });
-                          } finally {
-                            setBusy(false);
-                          }
+                          setPendingDeleteItem(item);
                         }}
                         disabled={busy}
                         className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
@@ -215,7 +230,7 @@ export default function Certifications({
 
               {filteredCatalog.length === 0 ? (
                 <tr>
-                  <td className="p-10 text-center text-gray-500" colSpan={3}>
+                  <td className="p-10 text-center text-slate-500" colSpan={3}>
                     No certifications to show.
                   </td>
                 </tr>
@@ -227,8 +242,8 @@ export default function Certifications({
 
       {/* Add to Catalog Modal */}
       {showCatalogModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Add Certification</h3>
@@ -236,7 +251,7 @@ export default function Certifications({
               </div>
               <button
                 onClick={closeCatalogModal}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -281,7 +296,7 @@ export default function Certifications({
                 <input
                   value={catalogDraft}
                   onChange={(e) => setCatalogDraft(e.target.value)}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., AWS Solutions Architect Associate"
                 />
               </div>
@@ -290,14 +305,14 @@ export default function Certifications({
                 <button
                   type="button"
                   onClick={closeCatalogModal}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
+                  className="rt-btn-ghost text-xs uppercase tracking-widest"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={busy}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all"
+                  className="rt-btn-primary text-xs uppercase tracking-widest"
                 >
                   {busy ? "Working…" : "Add"}
                 </button>
@@ -309,8 +324,8 @@ export default function Certifications({
 
       {/* Edit Modal */}
       {editModal.open ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Edit Certification</h3>
@@ -318,7 +333,7 @@ export default function Certifications({
               </div>
               <button
                 onClick={closeEdit}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -365,7 +380,7 @@ export default function Certifications({
                 <input
                   value={editModal.name}
                   onChange={(e) => setEditModal((p) => ({ ...p, name: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., AWS Solutions Architect Associate"
                 />
               </div>
@@ -375,14 +390,14 @@ export default function Certifications({
                   type="button"
                   onClick={closeEdit}
                   disabled={busy}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
+                  className="rt-btn-ghost text-xs uppercase tracking-widest"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={busy}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all"
+                  className="rt-btn-primary text-xs uppercase tracking-widest"
                 >
                   {busy ? "Saving…" : "Save"}
                 </button>
@@ -391,6 +406,34 @@ export default function Certifications({
           </div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteItem)}
+        title="Delete Certification"
+        message={`Delete "${String(pendingDeleteItem?.name ?? "")}"?`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        busy={busy}
+        onCancel={() => setPendingDeleteItem(null)}
+        onConfirm={async () => {
+          const item = pendingDeleteItem;
+          if (!item) return;
+          setBusy(true);
+          try {
+            await onDeleteCertificationFromCatalog?.(item.id);
+            showToast({ title: "Deleted", message: item.name });
+            setPendingDeleteItem(null);
+          } catch (err) {
+            showToast({
+              title: "Delete failed",
+              message: err?.message || "Please try again.",
+            });
+          } finally {
+            setBusy(false);
+          }
+        }}
+      />
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>

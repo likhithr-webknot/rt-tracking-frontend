@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
-import { Eye, EyeOff, Briefcase, Award, TrendingUp as Profit, Headset, Zap, Copy, Check, Activity } from "lucide-react";
+import { Eye, EyeOff, Briefcase, Award, TrendingUp as Profit, Headset, Copy, Check, Activity } from "lucide-react";
 import { fetchMe, getAuth, login, setAuth, forgotPassword, resetPassword } from "../../api/auth.js";
 import { fetchPortalAdmin, fetchPortalEmployee, fetchPortalManager } from "../../api/portal.js";
 
@@ -61,14 +61,16 @@ export default function LoginPage({ onLoginSuccess }) {
   });
 
   return (
-      <div className="fixed inset-0 flex flex-col md:flex-row w-full bg-[#0F0F0F] font-sans selection:bg-purple-500/30 overflow-hidden text-slate-100">
+      <div className="fixed inset-0 flex flex-col md:flex-row w-full bg-[rgb(var(--bg))] font-sans selection:bg-purple-500/30 overflow-hidden text-[rgb(var(--text))]">
 
         {/* Left Panel - Responsive container */}
-        <div className="flex w-full md:w-[35%] lg:w-[30%] xl:w-[25%] flex-col justify-between p-6 md:p-10 lg:p-12 z-40 bg-[#0F0F0F] border-r border-white/5 shadow-2xl overflow-y-auto">
+        <div className="flex w-full md:w-[35%] lg:w-[30%] xl:w-[25%] flex-col justify-between p-6 md:p-10 lg:p-12 z-40 bg-[rgb(var(--surface))] border-r border-[rgb(var(--border))] shadow-xl overflow-y-auto">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 md:h-12 md:w-12 items-center justify-center rounded-xl md:rounded-2xl bg-purple-600 text-white shadow-lg">
-              <Zap size={22} fill="currentColor" />
-            </div>
+            <img
+              src="/unnamed.webp"
+              alt="Webknot Technologies logo"
+              className="h-10 w-10 md:h-12 md:w-12 rounded-xl md:rounded-2xl object-cover border border-[rgb(var(--border))] bg-white"
+            />
             <div className="flex flex-col">
               <span className="text-lg md:text-xl font-black uppercase italic tracking-tight">Webknot</span>
               <span className="text-[10px] font-bold text-purple-400 uppercase tracking-[0.3em]">Technologies</span>
@@ -76,8 +78,8 @@ export default function LoginPage({ onLoginSuccess }) {
           </div>
 
           <div className="w-full max-w-sm mx-auto my-8 md:my-0">
-            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tighter">Login</h1>
-            <p className="mt-2 text-sm text-gray-500 font-medium">Professional growth starts here.</p>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">Login</h1>
+            <p className="mt-2 text-sm text-slate-500 font-medium">Professional growth starts here.</p>
 
 	            <form
 	              className="mt-10 md:mt-12 space-y-6 md:space-y-8"
@@ -177,7 +179,7 @@ export default function LoginPage({ onLoginSuccess }) {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full border-b border-white/10 bg-transparent pb-2 md:pb-3 outline-none focus:border-purple-500 transition-all text-base md:text-lg"
+                    className="rt-input text-base md:text-lg"
                     placeholder="name@webknot.in"
                 />
               </div>
@@ -189,19 +191,25 @@ export default function LoginPage({ onLoginSuccess }) {
                       type={showPassword ? "text" : "password"}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full border-b border-white/10 bg-transparent pb-2 md:pb-3 pr-10 outline-none focus:border-purple-500 transition-all text-base md:text-lg"
+                        className="rt-input pr-12 text-base md:text-lg"
                       placeholder="••••••••"
                   />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-0 bottom-3 text-gray-600 hover:text-purple-400">
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))] transition-colors"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    title={showPassword ? "Hide password" : "Show password"}
+                  >
                     {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
               </div>
 
-		              <button
-		                  disabled={!canSubmit || submitting}
-		                  className="w-full rounded-xl bg-purple-600 py-3 md:py-4 font-black uppercase text-white hover:bg-purple-500 disabled:opacity-20 active:scale-95 transition-all shadow-lg text-sm md:text-base"
-		              >
+                  <button
+                      disabled={!canSubmit || submitting}
+                      className="w-full rt-btn-primary py-3 md:py-4 font-black uppercase disabled:opacity-20 active:scale-95 transition-all text-sm md:text-base"
+                  >
 		                {submitting ? "Signing In…" : "Sign In"}
 		              </button>
 
@@ -233,7 +241,7 @@ export default function LoginPage({ onLoginSuccess }) {
 		            </form>
 		          </div>
 
-          <div className="flex justify-between items-center text-[10px] text-gray-700 font-bold uppercase tracking-widest">
+          <div className="flex justify-between items-center text-[10px] text-[rgb(var(--muted))] font-bold uppercase tracking-widest">
             <span>© 2026 Webknot</span>
             <button onClick={() => setShowAdminModal(true)} className="hover:text-purple-500 transition-colors">
               <Headset size={14} className="inline mr-1" /> Support
@@ -242,7 +250,7 @@ export default function LoginPage({ onLoginSuccess }) {
         </div>
 
         {/* Right Visual Panel - Relative sizing for fit */}
-        <div className="relative hidden md:flex flex-1 flex-col items-center justify-center bg-[#6344F5] overflow-hidden">
+        <div className="relative hidden md:flex flex-1 flex-col items-center justify-center bg-gradient-to-br from-indigo-600 to-violet-700 overflow-hidden">
           <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: `linear-gradient(to right, white 1px, transparent 1px), linear-gradient(to bottom, white 1px, transparent 1px)`, backgroundSize: '40px 40px' }} />
           <div className="absolute h-[50vw] w-[50vw] bg-white/10 rounded-full blur-[120px] animate-pulse" />
 
@@ -334,7 +342,7 @@ export default function LoginPage({ onLoginSuccess }) {
                     animate={{ x: 0, opacity: 1, y: [0, -10, 0] }}
                     exit={{ x: -20, opacity: 0 }}
                     transition={{ x: { duration: 0.3 }, y: { duration: 4, repeat: Infinity, ease: "easeInOut" } }}
-                    className="absolute -right-4 lg:-right-12 top-0 rounded-[2rem] bg-white p-6 lg:p-10 shadow-2xl w-64 lg:w-80 text-gray-900 border border-white/20"
+                  className="absolute right-0 lg:-right-8 top-0 rounded-[2rem] bg-white p-5 lg:p-10 shadow-2xl w-56 sm:w-64 lg:w-80 text-gray-900 border border-white/20"
                 >
                   <div className="flex items-center gap-4 lg:gap-6">
                     <div className={`h-12 w-12 lg:h-16 lg:w-16 rounded-xl lg:rounded-2xl ${metrics[metricIndex].color} flex items-center justify-center`}>
@@ -356,16 +364,16 @@ export default function LoginPage({ onLoginSuccess }) {
           {showAdminModal && (
               <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
                 <Motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAdminModal(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-                <Motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-sm rounded-[2.5rem] bg-[#121212] border border-white/10 p-8 sm:p-10 shadow-2xl my-6 max-h-[90vh] overflow-y-auto">
-                  <h3 className="text-2xl font-bold text-white tracking-tight">Support</h3>
-                  <p className="mt-4 text-gray-400 text-sm">Talent Desk Assistance:</p>
-                  <div className="mt-6 flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10 overflow-hidden">
+                <Motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-sm rt-panel rounded-[2.5rem] p-8 sm:p-10 shadow-2xl my-6 max-h-[90vh] overflow-y-auto">
+                  <h3 className="text-2xl font-bold text-[rgb(var(--text))] tracking-tight">Support</h3>
+                  <p className="mt-4 text-[rgb(var(--muted))] text-sm">Talent Desk Assistance:</p>
+                  <div className="mt-6 flex items-center justify-between p-4 rounded-xl rt-panel-subtle overflow-hidden">
                     <span className="text-sm font-medium text-purple-300 truncate mr-2">{hrEmail}</span>
-                    <button onClick={handleCopy} className="p-2 text-gray-400 hover:text-white shrink-0 transition-colors">
+                    <button onClick={handleCopy} className="p-2 text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] shrink-0 transition-colors">
                       {copied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
                     </button>
                   </div>
-                  <button onClick={() => setShowAdminModal(false)} className="mt-10 w-full py-4 bg-white text-black font-black rounded-xl uppercase tracking-widest active:scale-95 transition-all">Close</button>
+                  <button onClick={() => setShowAdminModal(false)} className="mt-10 w-full py-4 rt-btn-ghost font-black rounded-xl uppercase tracking-widest active:scale-95 transition-all">Close</button>
                 </Motion.div>
               </div>
           )}
@@ -386,17 +394,17 @@ export default function LoginPage({ onLoginSuccess }) {
                 initial={{ scale: 0.95, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.95, opacity: 0 }}
-                className="relative w-full max-w-lg rounded-[2.5rem] bg-[#121212] border border-white/10 p-6 sm:p-10 shadow-2xl my-6 max-h-[90vh] overflow-y-auto"
+                className="relative w-full max-w-lg rounded-[2.5rem] rt-panel p-6 sm:p-10 shadow-2xl my-6 max-h-[90vh] overflow-y-auto"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <h3 className="text-2xl font-black text-white tracking-tight">Reset Password</h3>
-                    <p className="mt-2 text-sm text-gray-400">Request a reset token and set a new password.</p>
+                    <h3 className="text-2xl font-black text-[rgb(var(--text))] tracking-tight">Reset Password</h3>
+                    <p className="mt-2 text-sm text-[rgb(var(--muted))]">Request a reset token and set a new password.</p>
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowResetModal(false)}
-                    className="rounded-xl p-2 text-gray-400 hover:text-white hover:bg-white/5 transition"
+                    className="rounded-xl p-2 text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition"
                     aria-label="Close"
                     title="Close"
                   >
@@ -411,7 +419,7 @@ export default function LoginPage({ onLoginSuccess }) {
                       type="email"
                       value={resetEmail}
                       onChange={(e) => setResetEmail(e.target.value)}
-                      className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                      className="rt-input py-3 px-4 text-sm"
                       placeholder="name@webknot.in"
                     />
                   </div>
@@ -423,7 +431,7 @@ export default function LoginPage({ onLoginSuccess }) {
                         type="password"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
-                        className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                        className="rt-input py-3 px-4 text-sm"
                         placeholder="NewPass@123"
                       />
                     </div>
@@ -433,7 +441,7 @@ export default function LoginPage({ onLoginSuccess }) {
                         type="password"
                         value={confirmNewPassword}
                         onChange={(e) => setConfirmNewPassword(e.target.value)}
-                        className="w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                        className="rt-input py-3 px-4 text-sm"
                         placeholder="Repeat password"
                       />
                     </div>
