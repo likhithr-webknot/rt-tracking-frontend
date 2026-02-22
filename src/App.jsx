@@ -14,9 +14,9 @@ import {
   setAuth,
 } from "./api/auth.js";
 import {
-  fetchEmployeeSubmissionWindowStatus,
   fetchSubmissionWindowCurrent,
 } from "./api/submission-window.js";
+import { fetchManagerReportees, normalizeEmployees } from "./api/employees.js";
 
 function withWindowSource(data, source) {
   const obj = data && typeof data === "object" ? data : {};
@@ -34,6 +34,20 @@ export default function App() {
   const [windowLoading, setWindowLoading] = useState(false);
   const [windowError, setWindowError] = useState("");
   const [windowRefreshNonce, setWindowRefreshNonce] = useState(0);
+  const [managerAccessLoading, setManagerAccessLoading] = useState(false);
+  const [managerHasReportees, setManagerHasReportees] = useState(null);
+
+  const authEmployeeId = useMemo(
+    () => String(
+      auth?.employeeId ??
+      auth?.empId ??
+      auth?.id ??
+      auth?.claims?.employeeId ??
+      auth?.claims?.empId ??
+      ""
+    ).trim(),
+    [auth?.claims?.empId, auth?.claims?.employeeId, auth?.empId, auth?.employeeId, auth?.id]
+  );
 
   const roleLabel = useMemo(() => {
     const role = String(auth?.role ?? "").trim();
@@ -50,6 +64,49 @@ export default function App() {
     if (portal.includes("employee")) return "Employee";
     return "Employee";
   }, [auth?.portal, auth?.role]);
+
+  useEffect(() => {
+    if (!auth || roleLabel !== "Manager") {
+      setManagerAccessLoading(false);
+      setManagerHasReportees(null);
+      return;
+    }
+
+    if (!authEmployeeId) {
+      setManagerAccessLoading(false);
+      setManagerHasReportees(false);
+      return;
+    }
+
+    let alive = true;
+    const controller = new AbortController();
+
+    (async () => {
+      setManagerAccessLoading(true);
+      try {
+        const data = await fetchManagerReportees(authEmployeeId, { signal: controller.signal });
+        if (!alive) return;
+        const count = normalizeEmployees(data).length;
+        setManagerHasReportees(count > 0);
+      } catch (err) {
+        if (!alive) return;
+        if (err?.name === "AbortError") return;
+        setManagerHasReportees(false);
+      } finally {
+        if (alive) setManagerAccessLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, [auth, authEmployeeId, roleLabel]);
+
+  const effectivePortalRole = useMemo(() => {
+    if (roleLabel !== "Manager") return roleLabel;
+    return managerHasReportees ? "Manager" : "Employee";
+  }, [managerHasReportees, roleLabel]);
 
   useEffect(() => {
     // Restore session from cookie on refresh/new tab.
@@ -98,7 +155,7 @@ export default function App() {
       setWindowLoading(false);
       return;
     }
-    if (roleLabel !== "Employee" && roleLabel !== "Manager") return;
+    if (effectivePortalRole !== "Employee" && effectivePortalRole !== "Manager") return;
 
     let alive = true;
     let timer = null;
@@ -112,34 +169,8 @@ export default function App() {
       if (showSpinner) setWindowLoading(true);
       setWindowError("");
       try {
-        let data = null;
-
-        if (roleLabel === "Employee") {
-          const employeeId = String(
-            auth?.employeeId ??
-            auth?.empId ??
-            auth?.id ??
-            auth?.claims?.employeeId ??
-            auth?.claims?.empId ??
-            ""
-          ).trim();
-          if (employeeId) {
-            try {
-              const employeeWindow = await fetchEmployeeSubmissionWindowStatus(employeeId, {
-                signal: controller.signal,
-              });
-              data = withWindowSource(employeeWindow, "employee");
-            } catch (employeeErr) {
-              if (employeeErr?.name === "AbortError") return;
-              if (employeeErr?.status !== 404) throw employeeErr;
-            }
-          }
-        }
-
-        if (!data) {
-          const globalWindow = await fetchSubmissionWindowCurrent({ signal: controller.signal });
-          data = withWindowSource(globalWindow, "global");
-        }
+        const globalWindow = await fetchSubmissionWindowCurrent({ signal: controller.signal });
+        const data = withWindowSource(globalWindow, "global");
 
         if (!alive) return;
         setWindowData(data);
@@ -180,7 +211,7 @@ export default function App() {
       if (timer) window.clearTimeout(timer);
       if (controller) controller.abort();
     };
-  }, [auth, roleLabel, windowRefreshNonce]);
+  }, [auth, authEmployeeId, effectivePortalRole, windowRefreshNonce]);
 
   const logout = useCallback(() => {
     markManualLogout();
@@ -222,6 +253,18 @@ export default function App() {
     return <AdminControlCenter onLogout={logout} auth={auth} />;
   }
 
+  if (roleLabel === "Manager" && managerAccessLoading) {
+    return (
+      <div className="rt-shell grid place-items-center px-6">
+        <div className="rt-panel text-center px-8 py-10 w-full max-w-xl">
+          <div className="rt-kicker">Loading</div>
+          <div className="mt-2 rt-title">Checking Manager Access</div>
+          <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">Validating reportees…</div>
+        </div>
+      </div>
+    );
+  }
+
   if (windowLoading && !windowData) {
     return (
       <div className="rt-shell grid place-items-center px-6">
@@ -255,7 +298,7 @@ export default function App() {
     );
   }
 
-  if (roleLabel === "Manager") {
+  if (effectivePortalRole === "Manager") {
     return <ManagerPortal onLogout={logout} auth={auth} />;
   }
 

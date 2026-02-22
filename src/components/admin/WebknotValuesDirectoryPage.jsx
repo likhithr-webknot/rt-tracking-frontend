@@ -11,6 +11,19 @@ import {
     normalizeWebknotValuesList,
 } from "../../api/webknotValueApi.js";
 
+function getCanonicalValueId(v) {
+    const id = String(
+        v?.id ??
+        v?.valueId ??
+        v?.webknotValueId ??
+        v?.raw?.id ??
+        v?.raw?.valueId ??
+        v?.raw?.webknotValueId ??
+        ""
+    ).trim();
+    return id || null;
+}
+
 export default function WebknotValueDirectoryPage() {
     const [values, setValues] = useState([]);
     const [searchQuery, setSearchQuery] = useState("");
@@ -65,8 +78,13 @@ export default function WebknotValueDirectoryPage() {
 
     function openEditValueModal(v) {
         if (!v) return;
+        const canonicalId = getCanonicalValueId(v);
+        if (!canonicalId) {
+            showToast({ title: "Edit unavailable", message: "This value has no editable id." });
+            return;
+        }
         setValueModalMode("edit");
-        setEditingValueId(v.id);
+        setEditingValueId(canonicalId);
         setValueDraft({
             title: String(v.title ?? ""),
             pillar: String(v.pillar ?? ""),
@@ -98,6 +116,9 @@ export default function WebknotValueDirectoryPage() {
         try {
             let res;
             if (valueModalMode === "edit") {
+                if (!String(editingValueId ?? "").trim()) {
+                    throw new Error("Missing value id for edit.");
+                }
                 res = await updateValue(String(editingValueId), payload);
             } else {
                 res = await addValue(payload);

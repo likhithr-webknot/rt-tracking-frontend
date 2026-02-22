@@ -25,7 +25,6 @@ import {
   submitMonthlySubmission
 } from "../../api/monthly-submissions.js";
 import { fetchPortalEmployee } from "../../api/portal.js";
-import CursorPagination from "../shared/CursorPagination.jsx";
 import {
   fetchEmployeePortalKpiDefinitions,
   fetchEmployeePortalWebknotValues,
@@ -675,7 +674,6 @@ function KpisTab({
   error,
   fullyLoaded,
   prefetching,
-  pager,
   aiAgent,
   selfReviewText,
   setSelfReviewText,
@@ -852,16 +850,6 @@ function KpisTab({
           >
             Proceed
           </button>
-          <div className="ml-auto">
-            <CursorPagination
-              canPrev={Boolean(pager?.canPrev)}
-              canNext={Boolean(pager?.canNext)}
-              onPrev={pager?.onPrev}
-              onNext={pager?.onNext}
-              loading={Boolean(pager?.loading)}
-              label="KPIs"
-            />
-          </div>
         </div>
       </div>
     </div>
@@ -876,7 +864,6 @@ function ValuesTab({
   setSelectedValues,
   onProceed,
   locked,
-  pager,
 }) {
   const valueRatings = useMemo(
     () => normalizeWebknotValueRatingsForState(selectedValues),
@@ -1020,14 +1007,6 @@ function ValuesTab({
         >
           Proceed
         </button>
-        <CursorPagination
-          canPrev={Boolean(pager?.canPrev)}
-          canNext={Boolean(pager?.canNext)}
-          onPrev={pager?.onPrev}
-          onNext={pager?.onNext}
-          loading={Boolean(pager?.loading)}
-          label="Values"
-        />
       </div>
     </div>
   );
@@ -2253,51 +2232,6 @@ export default function EmployeePortal({ onLogout, auth }) {
     return { name, email: authEmail, role, designation };
   }, [auth?.designation, auth?.employeeName, authEmail, employee?.designation, employee?.name, role]);
 
-  const kpiPager = useMemo(() => {
-    const stack = Array.isArray(kpiPage?.stack) ? kpiPage.stack : [];
-    const cursor = kpiPage?.cursor ?? null;
-    const nextCursor = kpiPage?.nextCursor ?? null;
-    return {
-      canPrev: stack.length > 0,
-      canNext: Boolean(nextCursor),
-      loading: kpiPageLoading,
-      onPrev: () => {
-        if (stack.length === 0) return;
-        const prevCursor = stack[stack.length - 1] ?? null;
-        const nextStack = stack.slice(0, -1);
-        loadKpiPage({ cursor: prevCursor, stack: nextStack }).catch(() => {});
-      },
-      onNext: () => {
-        if (!nextCursor) return;
-        const nextStack = stack.concat([cursor]);
-        loadKpiPage({ cursor: nextCursor, stack: nextStack }).catch(() => {});
-      },
-    };
-  }, [kpiPage?.cursor, kpiPage?.nextCursor, kpiPage?.stack, kpiPageLoading, loadKpiPage]);
-
-  const valuesPager = useMemo(() => {
-    const stack = Array.isArray(valuesPage?.stack) ? valuesPage.stack : [];
-    const cursor = valuesPage?.cursor ?? null;
-    const nextCursor = valuesPage?.nextCursor ?? null;
-    const busy = valuesLoading || valuesPageLoading;
-    return {
-      canPrev: stack.length > 0,
-      canNext: Boolean(nextCursor),
-      loading: busy,
-      onPrev: () => {
-        if (stack.length === 0) return;
-        const prevCursor = stack[stack.length - 1] ?? null;
-        const nextStack = stack.slice(0, -1);
-        loadValuesPage({ cursor: prevCursor, stack: nextStack }).catch(() => {});
-      },
-      onNext: () => {
-        if (!nextCursor) return;
-        const nextStack = stack.concat([cursor]);
-        loadValuesPage({ cursor: nextCursor, stack: nextStack }).catch(() => {});
-      },
-    };
-  }, [loadValuesPage, valuesLoading, valuesPage?.cursor, valuesPage?.nextCursor, valuesPage?.stack, valuesPageLoading]);
-
   const main = (() => {
     if (activeTab === "profile") {
       return (
@@ -2330,7 +2264,6 @@ export default function EmployeePortal({ onLogout, auth }) {
           error={kpisError}
           fullyLoaded={kpisFullyLoaded}
           prefetching={kpiPrefetching}
-          pager={kpiPager}
           aiAgent={aiAgent}
           selfReviewText={selfReviewText}
           setSelfReviewText={setSelfReviewText}
@@ -2347,7 +2280,6 @@ export default function EmployeePortal({ onLogout, auth }) {
           error={valuesError}
           selectedValues={selectedValues}
           setSelectedValues={setSelectedValues}
-          pager={valuesPager}
           locked={locked}
           onProceed={() => setActiveTab("certifications")}
         />

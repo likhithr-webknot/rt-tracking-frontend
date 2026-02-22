@@ -83,6 +83,8 @@ export function normalizeWebknotValue(raw, index = 0) {
 
     const pillar =
         pickDeep(obj, [
+            "evaluationCriteria",
+            "criteria",
             "pillar",
             "valuePillar",
             "valuePillarName",
@@ -103,7 +105,7 @@ export function normalizeWebknotValue(raw, index = 0) {
     return {
         id,
         title: title || id,
-        pillar: pillar || title || "—",
+        pillar: pillar || "—",
         description,
         raw: obj,
     };
@@ -176,12 +178,16 @@ export async function addValue(data) {
         title,
         valueTitle: title,
         name: title,
+        valueName: title,
         pillar,
+        evaluationCriteria: pillar,
+        criteria: pillar,
         valuePillar: pillar,
         valuePillarName: pillar,
         pillarName: pillar,
         description,
         valueDescription: description,
+        details: description,
         desc: description,
     };
     const res = await fetch(buildApiUrl("/webknot-values/add"), {
@@ -199,24 +205,33 @@ export async function addValue(data) {
 }
 
 export async function updateValue(id, data) {
+    const safeId = encodeURIComponent(String(id ?? "").trim());
+    if (!safeId) throw new Error("Value id is required.");
     const auth = getAuthHeader();
     const title = toCleanString(data?.title);
     const pillar = toCleanString(data?.pillar);
     const description = toCleanString(data?.description);
     const payload = {
         ...(data && typeof data === "object" ? data : {}),
+        id: String(id ?? "").trim(),
+        valueId: String(id ?? "").trim(),
+        webknotValueId: String(id ?? "").trim(),
         title,
         valueTitle: title,
         name: title,
+        valueName: title,
         pillar,
+        evaluationCriteria: pillar,
+        criteria: pillar,
         valuePillar: pillar,
         valuePillarName: pillar,
         pillarName: pillar,
         description,
         valueDescription: description,
+        details: description,
         desc: description,
     };
-    const res = await fetch(buildApiUrl(`/webknot-values/update/${id}`), {
+    const res = await fetch(buildApiUrl(`/webknot-values/update/${safeId}`), {
         method: "PUT",
         credentials: "include",
         headers: withCsrfHeaders({
@@ -231,8 +246,10 @@ export async function updateValue(id, data) {
 }
 
 export async function deleteValue(id) {
+    const safeId = encodeURIComponent(String(id ?? "").trim());
+    if (!safeId) throw new Error("Value id is required.");
     const auth = getAuthHeader();
-    const res = await fetch(buildApiUrl(`/webknot-values/delete/${id}`), {
+    const res = await fetch(buildApiUrl(`/webknot-values/delete/${safeId}`), {
         method: "DELETE",
         credentials: "include",
         headers: withCsrfHeaders(auth ? { Authorization: auth } : undefined),

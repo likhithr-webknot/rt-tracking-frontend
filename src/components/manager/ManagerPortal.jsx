@@ -191,22 +191,33 @@ function buildManagerSelfSubmissionPayload({
   const kpiEntries = Object.entries(normalizedKpis).sort(([a], [b]) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
   );
-  const stableKpiRatings = Object.fromEntries(kpiEntries);
+  const kpiRatingsArray = kpiEntries.map(([kpiId, rating]) => ({
+    kpiId: String(kpiId || "").trim(),
+    rating,
+  }));
 
   const normalizedValues = normalizeSelfValueRatings(selectedValues);
   const valueEntries = Object.entries(normalizedValues).sort(([a], [b]) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
   );
   const stableValueRatings = Object.fromEntries(valueEntries);
+  const webknotValueResponses = valueEntries.map(([valueId, rating]) => ({
+    valueId: String(valueId || "").trim(),
+    rating,
+  }));
   const webknotValues = valueEntries.map(([id]) => String(id));
+  const monthKey = String(month || "").trim() || null;
 
   return {
-    month: String(month || "").trim() || null,
+    month: monthKey,
+    monthKey,
+    profileVerified: true,
     selfReviewText: String(selfReviewText || ""),
     certifications: [],
-    kpiRatings: stableKpiRatings,
+    kpiRatings: kpiRatingsArray,
     webknotValues,
     webknotValueRatings: stableValueRatings,
+    webknotValueResponses,
     recognitionsCount: 0,
   };
 }
@@ -757,6 +768,116 @@ export default function ManagerPortal({ onLogout, auth }) {
       showToast({ title: "Submit failed", message: err?.message || "Please try again." });
     } finally {
       setSavingSelfReview(false);
+    }
+  }
+
+  function validateManagerReview(action) {
+    if (!selectedRow) return { ok: false, message: "No submission selected." };
+    const reviewAction = String(action || "").trim().toUpperCase();
+    const expectedIds = Object.keys(selectedRow?.payload?.kpiRatings || {});
+    const normalizedRatings = {};
+
+    for (const id of expectedIds) {
+      const raw = managerRatings?.[id];
+      if (reviewAction === "SUBMIT" && (raw == null || raw === "")) {
+        return { ok: false, message: "Rate all KPIs before submitting review." };
+      }
+      if (raw == null || raw === "") continue;
+      const parsed = typeof raw === "number" ? raw : Number.parseFloat(String(raw));
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 5) {
+        return { ok: false, message: "Manager KPI ratings must be between 1 and 5." };
+      }
+      normalizedRatings[id] = Math.round(parsed * 10) / 10;
+    }
+
+    const notes = String(managerNotes || "").trim();
+    if (reviewAction === "REJECT" && notes.length < 10) {
+      return { ok: false, message: "Rejection comments must be at least 10 characters." };
+    }
+
+    return { ok: true, notes, normalizedRatings };
+  }
+
+  async function submitManagerReviewDecision(action) {
+    if (!selectedRow) return;
+
+    const check = validateManagerReview(action);
+    if (!check.ok) {
+      showToast({ title: "Validation failed", message: check.message || "Please review the input." });
+      return;
+    }
+
+    const reviewAction = String(action || "").trim().toUpperCase();
+    const empId = String(selectedRow.employee.id || "").trim();
+    const m = String(selectedRow.month || month || "").trim();
+    if (!empId || !m) {
+      showToast({ title: "Missing data", message: "Employee id or month is missing." });
+      return;
+    }
+
+    const employeePayload = selectedRow.payload || {};
+    const reviewedAt = new Date().toISOString();
+    const payload = {
+      month: m,
+      monthKey: m,
+      profileVerified: true,
+      employeeId: empId,
+      selfReviewText: String(employeePayload.selfReviewText || ""),
+      certifications: [],
+      webknotValues: [],
+      webknotValueRatings: [],
+      webknotValueResponses: [],
+      recognitionsCount: Number(employeePayload.recognitionsCount || 0) || 0,
+      kpiRatings: Object.entries(check.normalizedRatings || {}).map(([kpiId, rating]) => ({
+        kpiId: String(kpiId || "").trim(),
+        rating,
+      })),
+      managerReview: {
+        action: reviewAction,
+        comments: check.notes,
+        reviewedAt,
+        reviewedBy: managerId || null,
+      },
+      managerComments: check.notes,
+      managerNotes: check.notes,
+      reviewStatus: reviewAction === "REJECT" ? "NEEDS_REVIEW" : "SUBMITTED",
+      reopenedForResubmission: reviewAction === "REJECT",
+    };
+
+    try {
+      setSavingReview(true);
+      if (reviewAction === "SUBMIT") {
+        await submitMonthlySubmission(payload);
+        showToast({ title: "Submitted", message: "Manager review submitted." });
+      } else {
+        await saveMonthlyDraft(payload);
+        setTeamSubs((prev) =>
+          prev.map((s) => {
+            const sameEmp = String(s?.employee?.id || "") === empId;
+            const sameMonth = String(s?.month || "") === m;
+            if (!sameEmp || !sameMonth) return s;
+            return {
+              ...s,
+              status: "NEEDS_REVIEW",
+              updatedAt: reviewedAt,
+              raw: {
+                ...(s.raw && typeof s.raw === "object" ? s.raw : {}),
+                managerReview: payload.managerReview,
+                reviewStatus: "NEEDS_REVIEW",
+                reopenedForResubmission: true,
+              },
+            };
+          })
+        );
+        showToast({ title: "Rejected", message: "Sent back with comments for resubmission." });
+      }
+
+      closeReviewModal();
+      await reloadTeam();
+    } catch (err) {
+      showToast({ title: `${reviewAction === "REJECT" ? "Reject" : "Submit"} failed`, message: err?.message || "Please try again." });
+    } finally {
+      setSavingReview(false);
     }
   }
 
@@ -1400,43 +1521,20 @@ export default function ManagerPortal({ onLogout, auth }) {
                     </button>
                     <button
                       type="button"
-                      onClick={async () => {
-                        if (!selectedRow) return;
-                        const empId = String(selectedRow.employee.id || "").trim();
-                        const m = String(selectedRow.month || month || "").trim();
-                        if (!empId || !m) return;
-
-                        // Submit using existing endpoint; backend must decide whether this is a manager-final submit.
-                        // We avoid sending new/unknown fields to reduce 400 risk.
-                        const employeePayload = selectedRow.payload || {};
-                        const payload = {
-                          month: m,
-                          employeeId: empId,
-                          selfReviewText: String(employeePayload.selfReviewText || ""),
-                          certifications: Array.isArray(employeePayload.certifications) ? employeePayload.certifications : [],
-                          webknotValues: Array.isArray(employeePayload.webknotValues) ? employeePayload.webknotValues : [],
-                          webknotValueRatings:
-                            employeePayload.webknotValueRatings && typeof employeePayload.webknotValueRatings === "object"
-                              ? employeePayload.webknotValueRatings
-                              : undefined,
-                          recognitionsCount: Number(employeePayload.recognitionsCount || 0) || 0,
-                          kpiRatings: managerRatings,
-                        };
-
-                        try {
-                          setSavingReview(true);
-                          // Best-effort: save draft first, then submit.
-                          await saveMonthlyDraft(payload);
-                          await submitMonthlySubmission(payload);
-                          showToast({ title: "Submitted", message: "Manager review submitted." });
-                          closeReviewModal();
-                          await reloadTeam();
-                        } catch (err) {
-                          showToast({ title: "Submit failed", message: err?.message || "Please try again." });
-                        } finally {
-                          setSavingReview(false);
-                        }
-                      }}
+                      onClick={() => submitManagerReviewDecision("REJECT")}
+                      disabled={savingReview}
+                      className={[
+                        "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
+                        savingReview
+                          ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
+                          : "bg-amber-500/10 text-amber-200 border border-amber-500/30 hover:bg-amber-500 hover:text-black",
+                      ].join(" ")}
+                    >
+                      {savingReview ? "Working…" : "Reject with comments"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => submitManagerReviewDecision("SUBMIT")}
                       disabled={savingReview}
                       className={[
                         "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
@@ -1449,7 +1547,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                     </button>
                   </div>
                   <div className="text-[10px] text-gray-500">
-                    Note: this uses `POST /monthly-submissions/draft` and `POST /monthly-submissions/submit`. If your backend expects different manager-review fields, share the payload shape and I will wire it correctly.
+                    Validation: all KPI manager ratings must be between 1 and 5; reject requires at least 10 characters of comments.
                   </div>
                 </div>
               </div>

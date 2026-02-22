@@ -15,9 +15,11 @@ import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 
 import {
   addEmployeeWithManager,
+  deleteEmployee,
   fetchManagers,
   normalizeManagers,
-  promoteEmployee as promoteEmployeeApi
+  promoteEmployee as promoteEmployeeApi,
+  updateEmployee,
 } from "../../api/employees.js";
 
 function computeNextEmployeeId(employees) {
@@ -113,10 +115,10 @@ export default function EmployeeDirectory({
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }
 
-  async function safeReloadEmployees() {
+  async function safeReloadEmployees(options = {}) {
     if (!reloadEmployees) return false;
     try {
-      await reloadEmployees();
+      await reloadEmployees(options);
       return true;
     } catch {
       return false;
@@ -235,15 +237,25 @@ export default function EmployeeDirectory({
     }
   }
 
-  function removeEmployee(employeeId) {
+  async function removeEmployee(employeeId) {
     if (currentEmployeeId && String(employeeId) === String(currentEmployeeId)) {
       showToast({ title: "Not allowed", message: "You can't delete your own user." });
       return;
     }
-    // NOTE: same as above—needs a backend delete endpoint to persist.
-    setSelectedEmployeeIds((prev) => prev.filter((id) => id !== employeeId));
-    setEmployees((prev) => prev.filter((e) => e.id !== employeeId));
-    showToast({ title: "Employee removed", message: `Removed ${employeeId}` });
+    try {
+      setMutating(true);
+      await deleteEmployee(employeeId);
+      const reloaded = await safeReloadEmployees();
+      if (!reloaded) {
+        setSelectedEmployeeIds((prev) => prev.filter((id) => id !== employeeId));
+        setEmployees((prev) => prev.filter((e) => e.id !== employeeId));
+      }
+      showToast({ title: "Employee removed", message: `Removed ${employeeId}` });
+    } catch (err) {
+      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+    } finally {
+      setMutating(false);
+    }
   }
 
   function toggleRowSelected(employeeId) {
@@ -279,15 +291,47 @@ export default function EmployeeDirectory({
     setPendingBulkDeleteCount(ids.length);
   }
 
-  function confirmDeleteSelected() {
+  async function confirmDeleteSelected() {
     const ids = selectedEmployeeIds
       .filter((id) => filteredIdSet.has(id) || employees.some((e) => e.id === id))
       .filter((id) => !currentEmployeeId || String(id) !== String(currentEmployeeId));
-    const idSet = new Set(ids);
-    setEmployees((prev) => prev.filter((e) => !idSet.has(e.id)));
-    setSelectedEmployeeIds((prev) => prev.filter((id) => !idSet.has(id)));
-    showToast({ title: "Employees removed", message: `Removed ${ids.length} employee(s).` });
-    setPendingBulkDeleteCount(0);
+    if (ids.length === 0) {
+      setPendingBulkDeleteCount(0);
+      return;
+    }
+
+    try {
+      setMutating(true);
+      const results = await Promise.allSettled(ids.map((id) => deleteEmployee(id)));
+      const successCount = results.filter((r) => r.status === "fulfilled").length;
+      const failedCount = results.length - successCount;
+
+      const reloaded = await safeReloadEmployees();
+      if (!reloaded && successCount > 0) {
+        const succeededIds = new Set(
+          results
+            .map((r, idx) => ({ r, id: ids[idx] }))
+            .filter((x) => x.r.status === "fulfilled")
+            .map((x) => x.id)
+        );
+        setEmployees((prev) => prev.filter((e) => !succeededIds.has(e.id)));
+        setSelectedEmployeeIds((prev) => prev.filter((id) => !succeededIds.has(id)));
+      }
+
+      if (successCount > 0 && failedCount === 0) {
+        showToast({ title: "Employees removed", message: `Removed ${successCount} employee(s).` });
+      } else if (successCount > 0) {
+        showToast({ title: "Partial delete", message: `Removed ${successCount}, failed ${failedCount}.` });
+      } else {
+        const firstError = results.find((r) => r.status === "rejected");
+        showToast({ title: "Delete failed", message: firstError?.reason?.message || "Please try again." });
+      }
+    } catch (err) {
+      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+    } finally {
+      setMutating(false);
+      setPendingBulkDeleteCount(0);
+    }
   }
 
   function openEdit(emp) {
@@ -306,24 +350,54 @@ export default function EmployeeDirectory({
 
   async function saveEdit(e) {
     e.preventDefault();
+    if (!editingEmployeeId) return;
 
-    // NOTE: needs your update endpoint to persist.
-    setEmployees((prev) =>
-      prev.map((emp) =>
-        emp.id === editingEmployeeId
-          ? {
-              ...emp,
-              name: draft.name.trim() || emp.name,
-              role: draft.role,
-              designation: draft.designation.trim(),
-              band: draft.band,
-            }
-          : emp
-      )
-    );
+    const current = employees.find((emp) => String(emp?.id) === String(editingEmployeeId)) || null;
+    if (!current) {
+      showToast({ title: "Update failed", message: "Employee not found." });
+      return;
+    }
 
-    showToast({ title: "Employee updated", message: "Changes saved (local demo)." });
-    closeEdit();
+    const payload = {
+      employeeId: String(current.id ?? editingEmployeeId),
+      employeeName: draft.name.trim(),
+      email: String(current.email ?? "").trim(),
+      empRole: draft.role,
+      stream: String(current.stream ?? "").trim() || null,
+      designation: draft.designation.trim() || null,
+      band: draft.band,
+      managerId: String(current.managerId ?? "").trim() || null,
+      updatedById: currentEmployeeId ? String(currentEmployeeId) : null,
+      createdAt: current.createdAt || null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      setMutating(true);
+      await updateEmployee(editingEmployeeId, payload);
+      const reloaded = await safeReloadEmployees();
+      if (!reloaded) {
+        setEmployees((prev) =>
+          prev.map((emp) =>
+            emp.id === editingEmployeeId
+              ? {
+                  ...emp,
+                  name: payload.employeeName || emp.name,
+                  role: payload.empRole || emp.role,
+                  designation: payload.designation || "",
+                  band: payload.band || emp.band,
+                }
+              : emp
+          )
+        );
+      }
+      showToast({ title: "Employee updated", message: payload.employeeName || String(editingEmployeeId) });
+      closeEdit();
+    } catch (err) {
+      showToast({ title: "Update failed", message: err?.message || "Please try again." });
+    } finally {
+      setMutating(false);
+    }
   }
 
   function openAdd() {
@@ -659,16 +733,30 @@ export default function EmployeeDirectory({
         </table>
       </div>
 
-      {pager && (pager.canPrev || pager.canNext) ? (
+      {pager ? (
         <div className="pt-4">
-          <CursorPagination
-            canPrev={Boolean(pager.canPrev)}
-            canNext={Boolean(pager.canNext)}
-            onPrev={pager.onPrev}
-            onNext={pager.onNext}
-            loading={Boolean(pager.loading)}
-            label={pager.label}
-          />
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={pager.onReset}
+              disabled={Boolean(pager.loading) || !pager.onReset}
+              className={[
+                "rt-btn-ghost inline-flex items-center gap-2 px-4 py-2 text-[11px] uppercase tracking-widest transition-all",
+                Boolean(pager.loading) || !pager.onReset ? "opacity-50 cursor-not-allowed" : "",
+              ].join(" ")}
+              title="First page"
+            >
+              First Page
+            </button>
+            <CursorPagination
+              canPrev={Boolean(pager.canPrev)}
+              canNext={Boolean(pager.canNext)}
+              onPrev={pager.onPrev}
+              onNext={pager.onNext}
+              loading={Boolean(pager.loading)}
+              label={pager.label}
+            />
+          </div>
         </div>
       ) : null}
 
@@ -878,7 +966,7 @@ export default function EmployeeDirectory({
         </div>
       ) : null}
 
-      {/* Edit Modal (kept as-is below in your file) */}
+      {/* Edit Employee Modal */}
       {editingEmployee ? (
         <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
@@ -898,7 +986,91 @@ export default function EmployeeDirectory({
             </div>
 
             <form onSubmit={saveEdit} className="mt-6 space-y-4">
-              {/* ... keep your existing edit form fields here ... */}
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  Employee ID
+                </label>
+                <input
+                  value={String(editingEmployee.id || "")}
+                  readOnly
+                  className="mt-2 rt-input text-sm font-mono opacity-70 cursor-not-allowed"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  Employee Name *
+                </label>
+                <input
+                  value={draft.name}
+                  onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                  className="mt-2 rt-input text-sm"
+                  placeholder="e.g., Alice Johnson"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                    Role
+                  </label>
+                  <select
+                    value={draft.role}
+                    onChange={(e) => setDraft((d) => ({ ...d, role: e.target.value }))}
+                    className="mt-2 rt-input text-sm"
+                  >
+                    <option value="Employee">Employee</option>
+                    <option value="Manager">Manager</option>
+                    <option value="Admin">Admin</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                    Band
+                  </label>
+                  <input
+                    value={draft.band}
+                    onChange={(e) => setDraft((d) => ({ ...d, band: e.target.value }))}
+                    className="mt-2 rt-input text-sm"
+                    placeholder="e.g., B5L"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  Designation
+                </label>
+                <input
+                  value={draft.designation}
+                  onChange={(e) => setDraft((d) => ({ ...d, designation: e.target.value }))}
+                  className="mt-2 rt-input text-sm"
+                  placeholder="e.g., Software Engineer"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeEdit}
+                  disabled={mutating}
+                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={mutating}
+                  className={[
+                    "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all",
+                    mutating ? "opacity-60 cursor-not-allowed" : "",
+                  ].join(" ")}
+                >
+                  {mutating ? "Saving…" : "Save changes"}
+                </button>
+              </div>
             </form>
           </div>
         </div>

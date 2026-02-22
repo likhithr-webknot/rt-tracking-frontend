@@ -121,17 +121,17 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry })
                 </ul>
               </div>
 
-              <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-6">
-                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-amber-200">
+              <div className="rounded-2xl border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-6">
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-amber-700 dark:text-amber-200">
                   <ShieldAlert size={14} /> Support
                 </div>
-                <div className="mt-3 text-sm text-amber-100">
+                <div className="mt-3 text-sm text-amber-800 dark:text-amber-100">
                   {error ? "Unable to load the submission window status." : "If you believe the window should be open, please contact:"}
                 </div>
                 {error ? (
-                  <div className="mt-2 text-xs text-amber-100/90 font-mono whitespace-pre-wrap">{String(error)}</div>
+                  <div className="mt-2 text-xs text-amber-800/90 dark:text-amber-100/90 font-mono whitespace-pre-wrap">{String(error)}</div>
                 ) : null}
-                <div className="mt-2 text-sm font-mono text-amber-100">
+                <div className="mt-2 text-sm font-mono text-amber-800 dark:text-amber-100">
                   hr@webknot.in
                 </div>
                 {typeof onRetry === "function" ? (
@@ -143,7 +143,7 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry })
                     Retry
                   </button>
                 ) : null}
-                <div className="mt-4 text-xs text-amber-200/80">
+                <div className="mt-4 text-xs text-amber-700/90 dark:text-amber-200/80">
                   Note: monthly and 6-month aggregations will be handled automatically once the backend workflow is wired.
                 </div>
               </div>

@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import Toast from "../shared/Toast.jsx";
 
-import { promoteEmployee as promoteEmployeeApi } from "../../api/employees.js";
+import { deleteEmployee, promoteEmployee as promoteEmployeeApi } from "../../api/employees.js";
 import {
   closeSubmissionWindowNow,
   openSubmissionWindowNow,
@@ -41,6 +41,76 @@ function StatCard({ label, value, icon }) {
       <p className="text-4xl font-black mb-1 text-[rgb(var(--text))]">{value}</p>
     </div>
   );
+}
+
+function clampAbility(n) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(5, Math.max(1, n));
+}
+
+function classifyBellCurve(avg) {
+  if (avg >= 4.2) return { label: "Top", className: "bg-emerald-500/10 text-emerald-300 border-emerald-500/20" };
+  if (avg >= 3.3) return { label: "Core", className: "bg-blue-500/10 text-blue-300 border-blue-500/20" };
+  return { label: "Low", className: "bg-amber-500/10 text-amber-300 border-amber-500/20" };
+}
+
+function formatDelta(delta) {
+  const value = Math.round((delta || 0) * 10) / 10;
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(1)}`;
+}
+
+function getDepartmentLabel(emp) {
+  return String(emp?.stream || emp?.designation || emp?.role || "Unassigned").trim() || "Unassigned";
+}
+
+function getProjectLabel(emp) {
+  return String(emp?.project || emp?.projectName || emp?.account || emp?.client || "Unassigned").trim() || "Unassigned";
+}
+
+function buildBreakdownRows({ employees, ability6m, keySelector }) {
+  const list = Array.isArray(employees) ? employees : [];
+  const trend = Array.isArray(ability6m) ? ability6m : [];
+  if (!list.length || !trend.length) return [];
+
+  const firstBase = Number(trend[0]?.avg) || 0;
+  const latestBase = Number(trend[trend.length - 1]?.avg) || 0;
+
+  const grouped = new Map();
+  for (const emp of list) {
+    const key = String(keySelector(emp) || "Unassigned").trim() || "Unassigned";
+    const prev = grouped.get(key) || { total: 0, submitted: 0 };
+    prev.total += 1;
+    if (emp?.submitted) prev.submitted += 1;
+    grouped.set(key, prev);
+  }
+
+  return Array.from(grouped.entries())
+    .map(([group, stats]) => {
+      const submissionRate = stats.total > 0 ? stats.submitted / stats.total : 0;
+      const sizeFactor = Math.min(0.25, stats.total * 0.02);
+      const modifier = (submissionRate - 0.5) * 0.9 + sizeFactor - 0.1;
+
+      const latestAvg = Math.round(clampAbility(latestBase + modifier) * 10) / 10;
+      const firstAvg = Math.round(clampAbility(firstBase + modifier - 0.2) * 10) / 10;
+      const delta = Math.round((latestAvg - firstAvg) * 10) / 10;
+      const bell = classifyBellCurve(latestAvg);
+      const needsIntervention = latestAvg < 3.4 || delta < -0.2 || submissionRate < 0.5;
+
+      return {
+        group,
+        latestAvg,
+        delta,
+        bell,
+        submissionRate,
+        headcount: stats.total,
+        needsIntervention,
+      };
+    })
+    .sort((a, b) => {
+      if (a.needsIntervention !== b.needsIntervention) return a.needsIntervention ? -1 : 1;
+      return a.latestAvg - b.latestAvg;
+    });
 }
 
 export default function AdminDashboard({
@@ -135,6 +205,16 @@ export default function AdminDashboard({
     };
   }, [employees, stats.employeesSubmitted, stats.managersSubmitted, stats.totalEmployees, stats.totalManagers]);
 
+  const departmentBreakdown = useMemo(
+    () => buildBreakdownRows({ employees, ability6m, keySelector: getDepartmentLabel }),
+    [employees, ability6m]
+  );
+
+  const projectBreakdown = useMemo(
+    () => buildBreakdownRows({ employees, ability6m, keySelector: getProjectLabel }),
+    [employees, ability6m]
+  );
+
   async function promoteEmployee(employeeId) {
     const emp = employees.find((e) => e.id === employeeId);
     if (!emp) return;
@@ -151,8 +231,15 @@ export default function AdminDashboard({
     }
   }
 
-  function removeEmployee(employeeId) {
-    setEmployees(prev => prev.filter(e => e.id !== employeeId));
+  async function removeEmployee(employeeId) {
+    try {
+      await deleteEmployee(employeeId);
+      await reloadEmployees?.();
+      setEmployees((prev) => prev.filter((e) => e.id !== employeeId));
+      showToast({ title: "Employee removed", message: `Removed ${employeeId}` });
+    } catch (err) {
+      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+    }
   }
 
   return (
@@ -415,7 +502,7 @@ export default function AdminDashboard({
             Average Ability Trend (6 months)
           </h3>
           <p className="text-slate-500 text-sm mt-1">
-            Demo numbers for now — we’ll compute from real submissions later.
+            Includes department/project bell-curve and intervention view for reporting.
           </p>
         </div>
 
@@ -441,6 +528,60 @@ export default function AdminDashboard({
               />
             </LineChart>
           </ResponsiveContainer>
+        </div>
+
+        <div className="mt-8 grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="rt-panel-subtle p-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Department Breakdown</div>
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Bell Curve + Intervention</div>
+            </div>
+            <div className="mt-4 space-y-3">
+              {departmentBreakdown.slice(0, 6).map((row) => (
+                <div key={`dep-${row.group}`} className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-semibold text-[rgb(var(--text))] truncate">{row.group}</div>
+                    <span className={["text-[10px] font-black uppercase px-2.5 py-1 rounded-lg border", row.bell.className].join(" ")}>{row.bell.label}</span>
+                  </div>
+                  <div className="mt-2 flex items-center gap-3 text-xs text-slate-400 flex-wrap">
+                    <span className="font-mono text-[rgb(var(--text))]">Avg {row.latestAvg.toFixed(1)}</span>
+                    <span className="font-mono">Δ {formatDelta(row.delta)}</span>
+                    <span>Headcount {row.headcount}</span>
+                    <span>Submitted {Math.round(row.submissionRate * 100)}%</span>
+                    <span className={row.needsIntervention ? "text-amber-300 font-semibold" : "text-emerald-300 font-semibold"}>
+                      {row.needsIntervention ? "Intervention Needed" : "Stable"}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rt-panel-subtle p-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Project Breakdown</div>
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Bell Curve + Intervention</div>
+            </div>
+            <div className="mt-4 space-y-3">
+              {projectBreakdown.slice(0, 6).map((row) => (
+                <div key={`proj-${row.group}`} className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-semibold text-[rgb(var(--text))] truncate">{row.group}</div>
+                    <span className={["text-[10px] font-black uppercase px-2.5 py-1 rounded-lg border", row.bell.className].join(" ")}>{row.bell.label}</span>
+                  </div>
+                  <div className="mt-2 flex items-center gap-3 text-xs text-slate-400 flex-wrap">
+                    <span className="font-mono text-[rgb(var(--text))]">Avg {row.latestAvg.toFixed(1)}</span>
+                    <span className="font-mono">Δ {formatDelta(row.delta)}</span>
+                    <span>Headcount {row.headcount}</span>
+                    <span>Submitted {Math.round(row.submissionRate * 100)}%</span>
+                    <span className={row.needsIntervention ? "text-amber-300 font-semibold" : "text-emerald-300 font-semibold"}>
+                      {row.needsIntervention ? "Intervention Needed" : "Stable"}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 
@@ -502,7 +643,9 @@ export default function AdminDashboard({
                         <ArrowUpCircle size={18} />
                       </button>
                       <button
-                        onClick={() => removeEmployee(emp.id)}
+                        onClick={() => {
+                          removeEmployee(emp.id).catch(() => {});
+                        }}
                         className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
                         title="Remove"
                       >

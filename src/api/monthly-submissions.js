@@ -53,7 +53,16 @@ function normalizeWebknotValueRatings(input) {
   if (Array.isArray(input)) {
     for (const item of input) {
       if (item && typeof item === "object") {
-        const id = item.valueId ?? item.webknotValueId ?? item.id ?? item.code ?? item.key ?? item.value ?? item.title ?? item.name;
+        const id =
+          item.valueId ??
+          item.webknotValueId ??
+          item.valueDefinitionId ??
+          item.id ??
+          item.code ??
+          item.key ??
+          item.value ??
+          item.title ??
+          item.name;
         const rating = item.rating ?? item.valueRating ?? item.score ?? item.value;
         assign(id, rating, 1);
         continue;
@@ -90,7 +99,14 @@ function normalizeKpiRatings(input) {
   if (Array.isArray(input)) {
     for (const item of input) {
       if (item && typeof item === "object") {
-        const id = item.kpiId ?? item.id ?? item.code ?? item.key ?? item.title ?? item.name;
+        const id =
+          item.kpiId ??
+          item.kpiDefinitionId ??
+          item.id ??
+          item.code ??
+          item.key ??
+          item.title ??
+          item.name;
         const rating = item.rating ?? item.kpiRating ?? item.score ?? item.value;
         assign(id, rating, 1);
         continue;
@@ -104,23 +120,68 @@ function normalizeKpiRatings(input) {
 
 function toRequestPayload(payload) {
   const source = payload && typeof payload === "object" ? payload : {};
-  const next = { ...source };
+  const month = String(source.monthKey ?? source.month ?? "").trim();
+  const selfReviewText = String(source.selfReviewText ?? source.selfReview ?? source.reviewText ?? "");
+  const recognitionsCountRaw = source.recognitionsCount ?? source.recognitions ?? 0;
+  const recognitionsCount =
+    typeof recognitionsCountRaw === "number" && Number.isFinite(recognitionsCountRaw)
+      ? recognitionsCountRaw
+      : Number.parseInt(String(recognitionsCountRaw || "0"), 10) || 0;
+
+  const next = {
+    month: month || null,
+    monthKey: month || null,
+    profileVerified: Boolean(source.profileVerified),
+    selfReviewText,
+    recognitionsCount,
+    certifications: [],
+    kpiRatings: [],
+    webknotValueResponses: [],
+  };
+
+  const rawCertifications = Array.isArray(source.certifications) ? source.certifications : [];
+  next.certifications = rawCertifications
+    .map((item) => {
+      if (typeof item === "string") {
+        const name = String(item).trim();
+        return name ? { name, certificationName: name, proof: "" } : null;
+      }
+      if (!item || typeof item !== "object") return null;
+      const name = String(item.name ?? item.certificationName ?? item.title ?? "").trim();
+      if (!name) return null;
+      const proof = String(item.proof ?? item.url ?? item.link ?? item.credentialId ?? "").trim();
+      return { name, certificationName: name, proof };
+    })
+    .filter(Boolean);
 
   const normalizedKpis = normalizeKpiRatings(source.kpiRatings ?? source.kpis ?? source.kpiSelfRatings);
   next.kpiRatings = Object.entries(normalizedKpis).map(([kpiId, rating]) => ({
-    kpiId,
+    kpiId: String(kpiId || "").trim(),
+    kpiDefinitionId: String(kpiId || "").trim(),
     rating,
   }));
 
   const normalizedValues = normalizeWebknotValueRatings(
-    source.webknotValueRatings ?? source.valuesRatings ?? source.valueRatings ?? source.webknotValues
+    source.webknotValueResponses ??
+    source.webknotValueRatings ??
+    source.valuesRatings ??
+    source.valueRatings ??
+    source.webknotValues
   );
-  if (Object.keys(normalizedValues).length) {
-    next.webknotValueRatings = Object.entries(normalizedValues).map(([valueId, rating]) => ({
-      valueId,
-      rating,
-    }));
-  }
+  const valuePairs = Object.entries(normalizedValues);
+  next.webknotValueResponses = valuePairs.map(([valueId, rating]) => ({
+    valueId: String(valueId || "").trim(),
+    webknotValueId: String(valueId || "").trim(),
+    rating,
+  }));
+
+  // Hard guarantee for backend JSON-array validation.
+  if (!Array.isArray(next.kpiRatings)) next.kpiRatings = [];
+  if (!Array.isArray(next.certifications)) next.certifications = [];
+  if (!Array.isArray(next.webknotValueResponses)) next.webknotValueResponses = [];
+
+  if (source.submittedAt) next.submittedAt = source.submittedAt;
+  if (source.employeeId) next.employeeId = String(source.employeeId);
 
   return next;
 }
@@ -186,6 +247,7 @@ export function normalizeMonthlySubmission(data) {
 
 export async function saveMonthlyDraft(payload, { signal } = {}) {
   const auth = getAuthHeader();
+  const preparedPayload = toRequestPayload(payload);
   const baseHeaders = {
     "Content-Type": "application/json",
     ...(auth ? { Authorization: auth } : {}),
@@ -197,7 +259,7 @@ export async function saveMonthlyDraft(payload, { signal } = {}) {
       signal,
       credentials: "include",
       headers: withCsrfHeaders(baseHeaders),
-      body: JSON.stringify(toRequestPayload(payload)),
+      body: JSON.stringify(preparedPayload),
     });
   }
 
@@ -210,7 +272,13 @@ export async function saveMonthlyDraft(payload, { signal } = {}) {
     });
     res = await attempt();
   }
-  if (!res.ok) throw await toHttpError(res);
+  if (!res.ok) {
+    const err = await toHttpError(res);
+    if (res.status === 400) {
+      err.message = `${err.message} [payload-shape kpiRatings=${Array.isArray(preparedPayload?.kpiRatings)} certifications=${Array.isArray(preparedPayload?.certifications)} webknotValueResponses=${Array.isArray(preparedPayload?.webknotValueResponses)}]`;
+    }
+    throw err;
+  }
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json().catch(() => ({}));
   return res.text().catch(() => "");
@@ -218,6 +286,7 @@ export async function saveMonthlyDraft(payload, { signal } = {}) {
 
 export async function submitMonthlySubmission(payload, { signal } = {}) {
   const auth = getAuthHeader();
+  const preparedPayload = toRequestPayload(payload);
   const baseHeaders = {
     "Content-Type": "application/json",
     ...(auth ? { Authorization: auth } : {}),
@@ -229,7 +298,7 @@ export async function submitMonthlySubmission(payload, { signal } = {}) {
       signal,
       credentials: "include",
       headers: withCsrfHeaders(baseHeaders),
-      body: JSON.stringify(toRequestPayload(payload)),
+      body: JSON.stringify(preparedPayload),
     });
   }
 
@@ -242,7 +311,13 @@ export async function submitMonthlySubmission(payload, { signal } = {}) {
     });
     res = await attempt();
   }
-  if (!res.ok) throw await toHttpError(res);
+  if (!res.ok) {
+    const err = await toHttpError(res);
+    if (res.status === 400) {
+      err.message = `${err.message} [payload-shape kpiRatings=${Array.isArray(preparedPayload?.kpiRatings)} certifications=${Array.isArray(preparedPayload?.certifications)} webknotValueResponses=${Array.isArray(preparedPayload?.webknotValueResponses)}]`;
+    }
+    throw err;
+  }
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json().catch(() => ({}));
   return res.text().catch(() => "");

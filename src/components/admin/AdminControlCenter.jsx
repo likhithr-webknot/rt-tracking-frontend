@@ -39,6 +39,11 @@ import {
 import { fetchPortalAdmin } from "../../api/portal.js";
 import { normalizeCursorPage } from "../../api/employee-portal.js";
 import { fetchValues, addValue, updateValue, deleteValue as deleteValueApi, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
+import {
+  fetchAdminAllSubmissions,
+  formatYearMonth,
+  normalizeMonthlySubmission,
+} from "../../api/monthly-submissions.js";
 
 const DIRECTORY_PAGE_SIZE = 10;
 
@@ -350,6 +355,68 @@ function applyEmployeeExtras(employees, extras) {
   });
 }
 
+function getCanonicalValueId(v) {
+  const id = String(
+    v?.id ??
+    v?.valueId ??
+    v?.webknotValueId ??
+    v?.raw?.id ??
+    v?.raw?.valueId ??
+    v?.raw?.webknotValueId ??
+    ""
+  ).trim();
+  return id || null;
+}
+
+function buildLastMonths(count = 6) {
+  const n = Number.isFinite(count) ? Math.max(1, count) : 6;
+  const out = [];
+  const now = new Date();
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = formatYearMonth(d);
+    const label = new Intl.DateTimeFormat(undefined, { month: "short" }).format(d);
+    out.push({ key, label });
+  }
+  return out;
+}
+
+function computeSubmissionAbilityScore(submission) {
+  const data = submission && typeof submission === "object" ? submission : null;
+  if (!data) return null;
+
+  const source = data?.raw && typeof data.raw === "object" ? data.raw : data;
+  const payload = source?.payload && typeof source.payload === "object" ? source.payload : source;
+
+  const kpis = data?.kpiRatings && typeof data.kpiRatings === "object"
+    ? data.kpiRatings
+    : payload?.kpiRatings;
+  const values = data?.webknotValueRatings && typeof data.webknotValueRatings === "object"
+    ? data.webknotValueRatings
+    : payload?.webknotValueRatings;
+
+  const toNumbers = (obj) => {
+    if (!obj || typeof obj !== "object") return [];
+    if (Array.isArray(obj)) {
+      return obj
+        .map((item) => {
+          const v = item?.rating ?? item?.valueRating ?? item?.score ?? item?.value;
+          const parsed = typeof v === "number" ? v : Number.parseFloat(String(v ?? ""));
+          return Number.isFinite(parsed) ? parsed : null;
+        })
+        .filter((v) => typeof v === "number" && v >= 1 && v <= 5);
+    }
+    return Object.values(obj)
+      .map((v) => (typeof v === "number" ? v : Number.parseFloat(String(v ?? ""))))
+      .filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
+  };
+
+  const numbers = [...toNumbers(kpis), ...toNumbers(values)];
+  if (!numbers.length) return null;
+  const avg = numbers.reduce((sum, v) => sum + v, 0) / numbers.length;
+  return Math.round(avg * 10) / 10;
+}
+
 // --- MAIN PORTAL ---
 export default function AdminControlCenter({ onLogout, auth }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
@@ -485,8 +552,13 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
   function openEditValueModal(v) {
     if (!v) return;
+    const canonicalId = getCanonicalValueId(v);
+    if (!canonicalId) {
+      showToast({ title: "Edit unavailable", message: "This value has no editable id." });
+      return;
+    }
     setValueModalMode("edit");
-    setEditingValueId(v.id);
+    setEditingValueId(canonicalId);
     setValueDraft({
       title: String(v.title ?? ""),
       pillar: String(v.pillar ?? ""),
@@ -517,6 +589,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
     try {
       let res;
       if (valueModalMode === "edit") {
+        if (!String(editingValueId ?? "").trim()) {
+          throw new Error("Missing value id for edit.");
+        }
         res = await updateValue(String(editingValueId), payload);
       } else {
         res = await addValue(payload);
@@ -785,6 +860,10 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [employeesCursorStack, setEmployeesCursorStack] = useState([]);
   const employeesCursorRef = useRef(null);
 
+  const [ability6m, setAbility6m] = useState(() =>
+    buildLastMonths(6).map((m) => ({ month: m.label, avg: 0 }))
+  );
+
   const reloadEmployees = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
     const resolvedCursor = cursor === undefined ? (employeesCursorRef.current ?? null) : (cursor ?? null);
     const previousCursor = employeesCursorRef.current ?? null;
@@ -826,9 +905,65 @@ export default function AdminControlCenter({ onLogout, auth }) {
     return () => controller.abort();
   }, [reloadEmployees]);
 
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const data = await fetchAdminAllSubmissions({ status: "SUBMITTED", signal: controller.signal });
+        if (!mounted) return;
+
+        const rows = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
+
+        const buckets = new Map();
+        for (const raw of rows) {
+          const normalized = normalizeMonthlySubmission(raw);
+          const monthKey = String(normalized?.month ?? raw?.month ?? "").trim();
+          if (!monthKey) continue;
+          const score = computeSubmissionAbilityScore(normalized);
+          if (!Number.isFinite(score)) continue;
+          const prev = buckets.get(monthKey) || { sum: 0, count: 0 };
+          prev.sum += score;
+          prev.count += 1;
+          buckets.set(monthKey, prev);
+        }
+
+        const months = buildLastMonths(6);
+        const points = months.map(({ key, label }) => {
+          const bucket = buckets.get(key);
+          const avg = bucket?.count ? Math.round((bucket.sum / bucket.count) * 10) / 10 : 0;
+          return { month: label, avg };
+        });
+        setAbility6m(points);
+      } catch (err) {
+        if (!mounted) return;
+        if (err?.name === "AbortError") return;
+        if (err?.status === 401) {
+          showToast({ title: "Session expired", message: "Please login again." });
+          onLogout?.();
+          return;
+        }
+        setAbility6m(buildLastMonths(6).map((m) => ({ month: m.label, avg: 0 })));
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [onLogout, showToast]);
+
   const employeePager = useMemo(() => ({
     canPrev: employeesCursorStack.length > 0,
     canNext: Boolean(employeesNextCursor),
+    onReset: () => {
+      reloadEmployees({ cursor: null, pageAction: "reset" }).catch(() => {});
+    },
     onPrev: () => {
       const prevCursor = employeesCursorStack[employeesCursorStack.length - 1] ?? null;
       reloadEmployees({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
@@ -1121,16 +1256,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
     () => isPortalWindowOpenNow(portalWindow, new Date()),
     [portalWindow]
   );
-
-  // Ability trend (demo)
-  const ability6m = useMemo(() => ([
-    { month: "Sep", avg: 3.6 },
-    { month: "Oct", avg: 3.7 },
-    { month: "Nov", avg: 3.8 },
-    { month: "Dec", avg: 3.9 },
-    { month: "Jan", avg: 4.0 },
-    { month: "Feb", avg: 4.1 },
-  ]), [])
 
   function generateReport() {
     const lines = [
