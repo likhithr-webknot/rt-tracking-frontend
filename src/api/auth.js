@@ -140,12 +140,29 @@ export function setAuth(auth) {
       ? root.data
       : root;
 
-  const accessTokenRaw =
-    obj.accessToken != null || obj.access_token != null || obj.token != null || obj.jwt != null
-      ? String(obj.accessToken ?? obj.access_token ?? obj.token ?? obj.jwt).trim()
-      : prev?.accessToken
-        ? String(prev.accessToken).trim()
-        : "";
+  const hasIncomingToken =
+    obj.accessToken != null || obj.access_token != null || obj.token != null || obj.jwt != null;
+  const incomingTokenRaw = hasIncomingToken
+    ? String(obj.accessToken ?? obj.access_token ?? obj.token ?? obj.jwt).trim()
+    : "";
+
+  const incomingRole = firstNonEmptyString(obj.role, obj.empRole, obj.userRole);
+  const incomingEmail = firstNonEmptyString(obj.email, obj.employeeEmail, obj.mail);
+  const incomingEmployeeId = firstNonEmptyString(obj.employeeId, obj.empId, obj.id);
+  const incomingEmployeeName = firstNonEmptyString(obj.employeeName, obj.name, obj.fullName);
+
+  const identityChanged = Boolean(
+    (incomingRole && prev?.role && incomingRole !== String(prev.role)) ||
+    (incomingEmail && prev?.email && incomingEmail.toLowerCase() !== String(prev.email).toLowerCase()) ||
+    (incomingEmployeeId && prev?.employeeId && incomingEmployeeId !== String(prev.employeeId)) ||
+    (incomingEmployeeName && prev?.employeeName && incomingEmployeeName !== String(prev.employeeName))
+  );
+
+  const accessTokenRaw = hasIncomingToken
+    ? incomingTokenRaw
+    : identityChanged
+      ? ""
+      : (prev?.accessToken ? String(prev.accessToken).trim() : "");
   const accessToken = accessTokenRaw ? accessTokenRaw : null;
 
   const tokenType = firstNonEmptyString(obj.tokenType, obj.token_type, prev?.tokenType, "Bearer");

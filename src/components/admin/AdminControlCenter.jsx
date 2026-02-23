@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LayoutDashboard, Users, Settings, LogOut, ChevronLeft, ChevronRight,
-  ClipboardCheck, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X
+  ClipboardCheck, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X, Layers3
 } from "lucide-react";
 
 import AdminDashboard from "./AdminDashboard.jsx";
@@ -12,16 +12,25 @@ import EmployeeDirectory from "./EmployeeDirectory.jsx";
 import KPIRegistry from "./KPIRegistry.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
 import WebknotValueDirectory from "./WebknotValueDirectory.jsx";
+import BandStreamDirectory from "./BandStreamDirectory.jsx";
+import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 import Toast from "../shared/Toast.jsx";
+import ThemeToggle from "../shared/ThemeToggle.jsx";
 import { fetchEmployees, normalizeEmployees } from "../../api/employees.js";
 import {
   addKpiDefinition,
+  deleteKpiDefinition,
   fetchKpiDefinitions,
   normalizeKpiDefinition,
   normalizeKpiDefinitions,
   updateKpiDefinition
 } from "../../api/kpi-definitions.js";
-import { fetchSubmissionWindowCurrent } from "../../api/submission-window.js";
+import {
+  closeSubmissionWindowForEmployeeNow,
+  fetchEmployeeSubmissionWindowStatus,
+  fetchSubmissionWindowCurrent,
+  openSubmissionWindowForEmployeeNow,
+} from "../../api/submission-window.js";
 import {
   addCertification,
   deleteCertification,
@@ -32,42 +41,56 @@ import {
 import { fetchPortalAdmin } from "../../api/portal.js";
 import { normalizeCursorPage } from "../../api/employee-portal.js";
 import { fetchValues, addValue, updateValue, deleteValue as deleteValueApi, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
+import { fetchBands, fetchStreams, normalizeDirectoryPage } from "../../api/band-stream-directory.js";
+import {
+  fetchAdminAllSubmissions,
+  formatYearMonth,
+  normalizeMonthlySubmission,
+} from "../../api/monthly-submissions.js";
 
 const DIRECTORY_PAGE_SIZE = 10;
+const KPI_PAGE_SIZE_OPTIONS = [10, 20, 50];
+const KPI_FIRST_CURSOR = null;
+const ADMIN_SIDEBAR_PREF_KEY = "rt_tracking_admin_sidebar_open_v1";
 
 // --- SUB-COMPONENT: SIDEBAR ---
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
   const isAdmin = String(account?.role || "").trim().toLowerCase() === "admin";
   const navItems = [
-    { id: 'dashboard', icon: <LayoutDashboard size={20} />, label: "Dashboard" },
-    { id: 'submissions', icon: <ClipboardCheck size={20} />, label: "Monthly Submissions" },
-    { id: 'directory', icon: <Users size={20} />, label: "Employee Directory" },
-    { id: 'kpi', icon: <Target size={20} />, label: "KPI Directory" },
-    { id: 'certifications', icon: <Award size={20} />, label: "Certifications" },
-    { id: 'values', icon: <Sparkles size={20} />, label: "Webknot Value Directory" },
-    ...(isAdmin ? [{ id: 'agents', icon: <Bot size={20} />, label: "Configure AI Agents" }] : []),
-    { id: 'settings', icon: <Settings size={20} />, label: "Settings" },
+    { id: "dashboard", icon: <LayoutDashboard size={20} />, label: "Dashboard" },
+    { id: "submissions", icon: <ClipboardCheck size={20} />, label: "Monthly Submissions" },
+    { id: "directory", icon: <Users size={20} />, label: "Employee Directory" },
+    { id: "kpi", icon: <Target size={20} />, label: "KPI Directory" },
+    { id: "band-streams", icon: <Layers3 size={20} />, label: "Bands & Streams" },
+    { id: "certifications", icon: <Award size={20} />, label: "Certifications" },
+    { id: "values", icon: <Sparkles size={20} />, label: "Webknot Values" },
+    ...(isAdmin ? [{ id: "agents", icon: <Bot size={20} />, label: "Configure AI Agents" }] : []),
+    { id: "settings", icon: <Settings size={20} />, label: "Settings" },
   ];
 
   return (
-    <aside className={`fixed left-0 top-0 h-full bg-[#111] border-r border-white/5 transition-all duration-300 z-50 ${isOpen ? 'w-64' : 'w-20'}`}>
+    <aside className={`fixed left-0 top-0 h-full bg-[linear-gradient(180deg,_rgb(var(--surface))_0%,_rgb(var(--surface-2))_100%)] backdrop-blur-xl transition-all duration-300 z-50 md:translate-x-0 flex flex-col shadow-[0_14px_36px_rgba(8,22,45,0.18)] ${isOpen ? 'translate-x-0 w-72' : '-translate-x-full md:translate-x-0 md:w-24'}`}>
       <div className="p-6 flex items-center justify-between">
         {isOpen && (
           <div className="flex items-center gap-2">
-            <div className="h-8 w-8 bg-purple-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-purple-500/20">W</div>
-            <span className="font-black tracking-tighter uppercase italic text-white">Webknot</span>
+            <img
+              src="/unnamed.webp"
+              alt="Webknot Technologies logo"
+              className="h-9 w-9 rounded-xl object-cover bg-white"
+            />
+            <span className="font-black tracking-tight uppercase text-[rgb(var(--text))]">Webknot</span>
           </div>
         )}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="p-2 hover:bg-white/5 rounded-lg text-gray-500 transition-colors"
+          className="p-2 hover:bg-[rgb(var(--surface-2))] rounded-xl text-slate-500 transition-colors"
           aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
           {isOpen ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
         </button>
       </div>
 
-      <nav className="mt-10 px-3 space-y-2">
+      <nav className="mt-6 px-3 space-y-1.5 flex-1 overflow-y-auto pb-6">
         {navItems.map((item) => {
           const isActive = activeTab === item.id
           return (
@@ -75,20 +98,25 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
               key={item.id}
               onClick={() => setActiveTab(item.id)}
               className={[
-                'w-full rounded-2xl transition-all duration-200',
-                'px-4 py-4',
+                'w-full rounded-xl transition-all duration-150 group',
+                'px-4 py-3.5',
                 isOpen ? 'flex items-center justify-start gap-4' : 'flex items-center justify-center',
                 isActive
-                  ? 'bg-purple-600 text-white shadow-xl shadow-purple-900/20'
-                  : 'text-gray-500 hover:bg-white/5 hover:text-white',
+                  ? 'bg-[rgb(var(--primary-soft))] text-[rgb(var(--text))] shadow-[0_10px_18px_rgba(46,103,220,0.16)]'
+                  : 'text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]',
               ].join(' ')}
               title={!isOpen ? item.label : undefined}
             >
-              <span className="w-6 grid place-items-center shrink-0">
+              <span
+                className={[
+                  "w-6 grid place-items-center shrink-0 transition-colors",
+                  isActive ? "text-[rgb(var(--primary))]" : "text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))]",
+                ].join(" ")}
+              >
                 {item.icon}
               </span>
               {isOpen && (
-                <span className="text-sm font-bold tracking-tight whitespace-nowrap">
+                <span className="text-sm font-bold tracking-tight truncate">
                   {item.label}
                 </span>
               )}
@@ -97,31 +125,28 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         })}
       </nav>
 
-      <div className="absolute bottom-24 w-full px-3">
+      <div className="mt-auto w-full px-3 pb-6 space-y-3">
         <div
           className={[
-            "rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-gray-200",
+            "rounded-xl bg-[rgb(var(--surface-2))] p-3 text-[rgb(var(--text))]",
             isOpen ? "" : "hidden",
           ].join(" ")}
         >
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-            Signed In
-          </div>
-          <div className="mt-2 font-bold tracking-tight text-white truncate">
+          <div className="font-bold tracking-tight text-[rgb(var(--text))] truncate">
             {account?.name || account?.email || "Unknown"}
           </div>
-          <div className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-purple-300 truncate">
+          <div className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))] truncate">
             {account?.role || "Employee"}
           </div>
-          <div className="mt-1 text-xs text-gray-400 truncate">
+          <div className="mt-1 text-xs text-slate-500 truncate">
             {account?.subtitle || "—"}
           </div>
         </div>
 
         {!isOpen ? (
-          <div className="grid place-items-center text-gray-500">
+          <div className="grid place-items-center text-slate-500">
             <div
-              className="h-10 w-10 rounded-2xl border border-white/10 bg-white/[0.03] grid place-items-center"
+              className="h-10 w-10 rounded-xl bg-[rgb(var(--surface-2))] grid place-items-center"
               title={[
                 account?.name || account?.email || "Unknown",
                 account?.role || "Employee",
@@ -133,9 +158,15 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
             </div>
           </div>
         ) : null}
-      </div>
 
-      <div className="absolute bottom-8 w-full px-3 text-red-500">
+        {isOpen ? (
+          <ThemeToggle />
+        ) : (
+          <div className="grid place-items-center">
+            <ThemeToggle compact />
+          </div>
+        )}
+
         <button
           onClick={onLogout}
           className={[
@@ -164,6 +195,25 @@ function toLocalInputValue(date) {
   const hh = pad(date.getHours())
   const min = pad(date.getMinutes())
   return `${yyyy}-${mm}-${dd}T${hh}:${min}`
+}
+
+function parseLocalInputValue(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isPortalWindowOpenNow(portalWindow, now = new Date()) {
+  if (portalWindow?.manualClosed) return false;
+  const start = parseLocalInputValue(portalWindow?.start);
+  if (!start) return false;
+
+  const endRaw = String(portalWindow?.end ?? "").trim();
+  const end = endRaw ? parseLocalInputValue(endRaw) : null;
+  if (endRaw && !end) return false;
+
+  if (now < start) return false;
+  if (!end) return true;
+  return now <= end;
 }
 
 function downloadTextFile({ filename, text, mime = "text/plain" }) {
@@ -270,6 +320,28 @@ function makeCertificationId(name) {
   return `CERT_${h}`;
 }
 
+function extractCertificationCatalogName(raw) {
+  if (typeof raw === "string") return raw.trim();
+  if (!raw || typeof raw !== "object") return "";
+
+  const direct = String(raw.name ?? raw.certificationName ?? raw.title ?? "").trim();
+  if (direct) return direct;
+
+  if (raw.certification && typeof raw.certification === "object") {
+    const nested = String(
+      raw.certification.name ?? raw.certification.certificationName ?? raw.certification.title ?? ""
+    ).trim();
+    if (nested) return nested;
+  }
+
+  if (typeof raw.certification === "string") {
+    const nestedText = raw.certification.trim();
+    if (nestedText) return nestedText;
+  }
+
+  return "";
+}
+
 function normalizeCertificationCatalog(items) {
   const list = Array.isArray(items) ? items : [];
   const out = [];
@@ -277,7 +349,7 @@ function normalizeCertificationCatalog(items) {
   const seenById = new Set();
 
   for (const raw of list) {
-    const name = String(raw?.name ?? raw ?? "").trim();
+    const name = extractCertificationCatalogName(raw);
     if (!name) continue;
     const nameKey = name.toLowerCase();
     if (seenByName.has(nameKey)) continue;
@@ -310,15 +382,99 @@ function applyEmployeeExtras(employees, extras) {
         ? x.recognitions
         : e.recognitions ?? 0;
     const certifications = Array.isArray(x.certifications) ? x.certifications : e.certifications ?? [];
+    const submissionWindowForceOpen = Boolean(x.submissionWindowForceOpen);
+    const submissionWindowForceClosed = Boolean(x.submissionWindowForceClosed);
 
-    return { ...e, recognitions, certifications };
+    return { ...e, recognitions, certifications, submissionWindowForceOpen, submissionWindowForceClosed };
   });
+}
+
+function getCanonicalValueId(v) {
+  const id = String(
+    v?.id ??
+    v?.valueId ??
+    v?.webknotValueId ??
+    v?.raw?.id ??
+    v?.raw?.valueId ??
+    v?.raw?.webknotValueId ??
+    ""
+  ).trim();
+  return id || null;
+}
+
+function buildLastMonths(count = 6) {
+  const n = Number.isFinite(count) ? Math.max(1, count) : 6;
+  const out = [];
+  const now = new Date();
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = formatYearMonth(d);
+    const label = new Intl.DateTimeFormat(undefined, { month: "short" }).format(d);
+    out.push({ key, label });
+  }
+  return out;
+}
+
+function computeSubmissionAbilityScore(submission) {
+  const data = submission && typeof submission === "object" ? submission : null;
+  if (!data) return null;
+
+  const source = data?.raw && typeof data.raw === "object" ? data.raw : data;
+  const payload = source?.payload && typeof source.payload === "object" ? source.payload : source;
+  const submissionType = String(data?.submissionType ?? payload?.submissionType ?? source?.submissionType ?? "").trim().toUpperCase();
+  const managerEval =
+    (data?.managerEvaluation && typeof data.managerEvaluation === "object" ? data.managerEvaluation : null) ??
+    (payload?.managerEvaluation && typeof payload.managerEvaluation === "object" ? payload.managerEvaluation : null) ??
+    (source?.managerEvaluation && typeof source.managerEvaluation === "object" ? source.managerEvaluation : null);
+
+  // For employee submissions, final monthly/cycle scores must come only from manager ratings.
+  const useManagerScoresOnly = submissionType !== "MANAGER_SELF_REVIEW";
+  if (useManagerScoresOnly && !managerEval) return null;
+
+  const kpis = useManagerScoresOnly
+    ? (managerEval?.kpiRatings ?? null)
+    : (data?.kpiRatings && typeof data.kpiRatings === "object"
+      ? data.kpiRatings
+      : payload?.kpiRatings);
+  const values = useManagerScoresOnly
+    ? (managerEval?.webknotValueRatings ?? managerEval?.webknotValues ?? null)
+    : (data?.webknotValueRatings && typeof data.webknotValueRatings === "object"
+      ? data.webknotValueRatings
+      : payload?.webknotValueRatings);
+
+  const toNumbers = (obj) => {
+    if (!obj || typeof obj !== "object") return [];
+    if (Array.isArray(obj)) {
+      return obj
+        .map((item) => {
+          const v = item?.rating ?? item?.valueRating ?? item?.score ?? item?.value;
+          const parsed = typeof v === "number" ? v : Number.parseFloat(String(v ?? ""));
+          return Number.isFinite(parsed) ? parsed : null;
+        })
+        .filter((v) => typeof v === "number" && v >= 1 && v <= 5);
+    }
+    return Object.values(obj)
+      .map((v) => (typeof v === "number" ? v : Number.parseFloat(String(v ?? ""))))
+      .filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
+  };
+
+  const numbers = [...toNumbers(kpis), ...toNumbers(values)];
+  if (!numbers.length) return null;
+  const avg = numbers.reduce((sum, v) => sum + v, 0) / numbers.length;
+  return Math.round(avg * 10) / 10;
 }
 
 // --- MAIN PORTAL ---
 export default function AdminControlCenter({ onLogout, auth }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
     if (typeof window === "undefined") return true;
+    try {
+      const stored = window.localStorage.getItem(ADMIN_SIDEBAR_PREF_KEY);
+      if (stored === "0") return false;
+      if (stored === "1") return true;
+    } catch {
+      // ignore
+    }
     return window.innerWidth >= 1024;
   });
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -331,12 +487,17 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [kpis, setKpis] = useState([]);
   const [kpisLoading, setKpisLoading] = useState(false);
   const [kpisError, setKpisError] = useState("");
-  const [kpisCursor, setKpisCursor] = useState(null);
+  const [kpisCursor, setKpisCursor] = useState(KPI_FIRST_CURSOR);
   const [kpisNextCursor, setKpisNextCursor] = useState(null);
   const [kpisCursorStack, setKpisCursorStack] = useState([]);
+  const [kpiPageSize, setKpiPageSize] = useState(DIRECTORY_PAGE_SIZE);
+  const kpisCursorRef = useRef(KPI_FIRST_CURSOR);
   const [kpiDraft, setKpiDraft] = useState({ title: "", stream: "", band: "", weight: "" });
   const [editingKpiId, setEditingKpiId] = useState(null);
   const [kpiSaving, setKpiSaving] = useState(false);
+  const [pendingDeleteKpi, setPendingDeleteKpi] = useState(null);
+  const [directoryBands, setDirectoryBands] = useState([]);
+  const [directoryStreams, setDirectoryStreams] = useState([]);
 
   // Webknot Values (from API)
   const [valuesSearchQuery, setValuesSearchQuery] = useState("");
@@ -346,11 +507,13 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [valuesCursor, setValuesCursor] = useState(null);
   const [valuesNextCursor, setValuesNextCursor] = useState(null);
   const [valuesCursorStack, setValuesCursorStack] = useState([]);
+  const valuesCursorRef = useRef(null);
   const [showValueModal, setShowValueModal] = useState(false);
   const [valueModalMode, setValueModalMode] = useState("add"); // "add" | "edit"
   const [editingValueId, setEditingValueId] = useState(null);
   const [valueDraft, setValueDraft] = useState({ title: "", pillar: "", description: "" });
   const [valueSaving, setValueSaving] = useState(false);
+  const [pendingDeleteValue, setPendingDeleteValue] = useState(null);
 
   // Certifications (admin registry)
   const [certificationCatalog, setCertificationCatalog] = useState(() => {
@@ -359,6 +522,10 @@ export default function AdminControlCenter({ onLogout, auth }) {
   });
   const [certificationsLoading, setCertificationsLoading] = useState(false);
   const [certificationsError, setCertificationsError] = useState("");
+  const [certificationsCursor, setCertificationsCursor] = useState(null);
+  const [certificationsNextCursor, setCertificationsNextCursor] = useState(null);
+  const [certificationsCursorStack, setCertificationsCursorStack] = useState([]);
+  const certificationsCursorRef = useRef(null);
 
   const [toast, setToast] = useState(null); // { title: string, message?: string }
   const toastTimerRef = useRef(null);
@@ -367,6 +534,26 @@ export default function AdminControlCenter({ onLogout, auth }) {
     setToast(nextToast);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(ADMIN_SIDEBAR_PREF_KEY, isSidebarOpen ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [isSidebarOpen]);
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      const key = String(e.key || "").toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === "b") {
+        e.preventDefault();
+        setIsSidebarOpen((prev) => !prev);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   useEffect(() => {
@@ -387,12 +574,65 @@ export default function AdminControlCenter({ onLogout, auth }) {
     };
   }, [onLogout]);
 
-  const reloadCertifications = useCallback(async ({ signal } = {}) => {
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+    async function loadDirectory(fetcher) {
+      const rows = [];
+      let cursor = null;
+      for (let i = 0; i < 20; i += 1) {
+        const data = await fetcher({ limit: 100, cursor, signal: controller.signal });
+        const page = normalizeDirectoryPage(data);
+        rows.push(...page.items);
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+      return rows;
+    }
+    (async () => {
+      try {
+        const [bands, streams] = await Promise.all([
+          loadDirectory(fetchBands),
+          loadDirectory(fetchStreams),
+        ]);
+        if (!mounted) return;
+        setDirectoryBands(bands);
+        setDirectoryStreams(streams);
+      } catch {
+        if (!mounted) return;
+        setDirectoryBands([]);
+        setDirectoryStreams([]);
+      }
+    })();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, []);
+
+  const reloadCertifications = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
+    const resolvedCursor = cursor === undefined ? (certificationsCursorRef.current ?? null) : (cursor ?? null);
+    const previousCursor = certificationsCursorRef.current ?? null;
     setCertificationsError("");
     setCertificationsLoading(true);
     try {
-      const data = await fetchCertifications({ activeOnly: false, signal });
-      setCertificationCatalog(normalizeCertifications(data));
+      const data = await fetchCertifications({
+        activeOnly: null,
+        limit: DIRECTORY_PAGE_SIZE,
+        cursor: resolvedCursor,
+        signal,
+      });
+      const page = normalizeCursorPage(data);
+      setCertificationCatalog(normalizeCertifications(page.items));
+      setCertificationsNextCursor(page.nextCursor);
+      setCertificationsCursor(resolvedCursor);
+      certificationsCursorRef.current = resolvedCursor;
+      setCertificationsCursorStack((prev) => {
+        if (pageAction === "next") return [...prev, previousCursor];
+        if (pageAction === "prev") return prev.slice(0, -1);
+        if (pageAction === "reset") return [];
+        return prev;
+      });
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err?.status === 401) {
@@ -409,14 +649,16 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    reloadCertifications({ signal: controller.signal }).catch(() => {});
+    reloadCertifications({ signal: controller.signal, cursor: null, pageAction: "reset" }).catch(() => {});
     return () => controller.abort();
   }, [reloadCertifications]);
 
   function openKpiModal() {
+    const defaultBand = kpiBandOptions[0] || "";
+    const defaultStream = kpiStreamOptions[0] || "";
     setKpiModalMode("add");
     setEditingKpiId(null);
-    setKpiDraft({ title: "", stream: "", band: "", weight: "" });
+    setKpiDraft({ title: "", stream: defaultStream, band: defaultBand, weight: "" });
     setShowKPIModal(true);
   }
 
@@ -438,6 +680,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
     setShowKPIModal(false);
   }
 
+  function requestDeleteKpi(kpi) {
+    if (!kpi) return;
+    setPendingDeleteKpi(kpi);
+  }
+
   function openValueModal() {
     setValueModalMode("add");
     setEditingValueId(null);
@@ -447,8 +694,13 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
   function openEditValueModal(v) {
     if (!v) return;
+    const canonicalId = getCanonicalValueId(v);
+    if (!canonicalId) {
+      showToast({ title: "Edit unavailable", message: "This value has no editable id." });
+      return;
+    }
     setValueModalMode("edit");
-    setEditingValueId(v.id);
+    setEditingValueId(canonicalId);
     setValueDraft({
       title: String(v.title ?? ""),
       pillar: String(v.pillar ?? ""),
@@ -479,6 +731,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
     try {
       let res;
       if (valueModalMode === "edit") {
+        if (!String(editingValueId ?? "").trim()) {
+          throw new Error("Missing value id for edit.");
+        }
         res = await updateValue(String(editingValueId), payload);
       } else {
         res = await addValue(payload);
@@ -518,26 +773,67 @@ export default function AdminControlCenter({ onLogout, auth }) {
     }
   }
 
+  const kpiBandOptions = useMemo(() => {
+    const fromDirectory = directoryBands
+      .filter((row) => Boolean(row?.active))
+      .map((row) => String(row?.code || "").trim())
+      .filter(Boolean);
+    const fromKpis = kpis.map((k) => String(k?.band || "").trim()).filter(Boolean);
+    const fallback = ["B1", "B2", "B3", "B4", "B5", "B5H", "B5L", "B6H", "B6L", "B7H", "B7L", "B8"];
+    return Array.from(new Set([...fromDirectory, ...fromKpis, ...fallback]));
+  }, [directoryBands, kpis]);
+
+  const kpiStreamOptions = useMemo(() => {
+    const fromDirectory = directoryStreams
+      .filter((row) => Boolean(row?.active))
+      .map((row) => String(row?.code || "").trim())
+      .filter(Boolean);
+    const fromKpis = kpis.map((k) => String(k?.stream || "").trim()).filter(Boolean);
+    const fallback = ["Development", "QA", "Devops", "DATA", "UI_UX"];
+    return Array.from(new Set([...fromDirectory, ...fromKpis, ...fallback]));
+  }, [directoryStreams, kpis]);
+
   function deleteValue(v) {
     if (!v) return;
-    const ok = window.confirm(`Delete "${v.title}"?`);
-    if (!ok) return;
-    
-    (async () => {
-      try {
-        await deleteValueApi(String(v.id));
-        setValues((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
-        showToast({ title: "Value deleted", message: v.title });
-        await reloadValues().catch(() => {});
-      } catch (err) {
-        if (err?.status === 401) {
-          showToast({ title: "Session expired", message: "Please login again." });
-          onLogout?.();
-          return;
-        }
-        showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+    setPendingDeleteValue(v);
+  }
+
+  async function confirmDeleteValue() {
+    const v = pendingDeleteValue;
+    if (!v) return;
+    setPendingDeleteValue(null);
+    try {
+      await deleteValueApi(String(v.id));
+      setValues((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
+      showToast({ title: "Value deleted", message: v.title });
+      await reloadValues().catch(() => {});
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
       }
-    })();
+      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+    }
+  }
+
+  async function confirmDeleteKpi() {
+    const kpi = pendingDeleteKpi;
+    if (!kpi) return;
+    setPendingDeleteKpi(null);
+    try {
+      await deleteKpiDefinition(String(kpi.id));
+      setKpis((prev) => prev.filter((x) => String(x.id) !== String(kpi.id)));
+      showToast({ title: "KPI deleted", message: kpi.title });
+      await reloadKpis().catch(() => {});
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      showToast({ title: "Delete KPI failed", message: err?.message || "Please try again." });
+    }
   }
 
   async function submitKpi(e) {
@@ -563,18 +859,20 @@ export default function AdminControlCenter({ onLogout, auth }) {
       return Number.isFinite(parsed) ? parsed : 0;
     };
 
-    // Enforce: per band, total weightage must not exceed 100%.
+    // Enforce: per band + stream pair, total weightage must not exceed 100%.
     const nextBand = payload.band;
+    const nextStream = payload.stream;
     const nextWeight = toPercent(payload.weight);
     const existingSum = kpis
       .filter((k) => String(k?.band ?? "").trim() === nextBand)
+      .filter((k) => String(k?.stream ?? "").trim() === nextStream)
       .filter((k) => String(k?.id) !== String(payload.id))
       .reduce((sum, k) => sum + toPercent(k?.weight), 0);
     const nextTotal = Math.round((existingSum + nextWeight) * 10) / 10;
     if (nextTotal > 100) {
       showToast({
         title: "Invalid weightage",
-        message: `Total for ${nextBand} would be ${nextTotal}%. Keep it within 100%.`,
+        message: `Total for ${nextBand} • ${nextStream} would be ${nextTotal}%. Keep it within 100%.`,
       });
       return;
     }
@@ -616,17 +914,21 @@ export default function AdminControlCenter({ onLogout, auth }) {
     }
   }
 
-  const reloadKpis = useCallback(async ({ signal, cursor = kpisCursor, pageAction = "stay" } = {}) => {
+  const reloadKpis = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
+    const resolvedCursorRaw = cursor === undefined ? kpisCursorRef.current : cursor;
+    const resolvedCursor = String(resolvedCursorRaw ?? "").trim() || KPI_FIRST_CURSOR;
+    const previousCursor = String(kpisCursorRef.current ?? "").trim() || KPI_FIRST_CURSOR;
     setKpisError("");
     setKpisLoading(true);
     try {
-      const data = await fetchKpiDefinitions({ limit: DIRECTORY_PAGE_SIZE, cursor, signal });
+      const data = await fetchKpiDefinitions({ limit: kpiPageSize, cursor: resolvedCursor, signal });
       const page = normalizeCursorPage(data);
       setKpis(normalizeKpiDefinitions(page.items));
       setKpisNextCursor(page.nextCursor);
-      setKpisCursor(cursor ?? null);
+      setKpisCursor(resolvedCursor);
+      kpisCursorRef.current = resolvedCursor;
       setKpisCursorStack((prev) => {
-        if (pageAction === "next") return [...prev, kpisCursor ?? null];
+        if (pageAction === "next") return [...prev, previousCursor];
         if (pageAction === "prev") return prev.slice(0, -1);
         if (pageAction === "reset") return [];
         return prev;
@@ -644,20 +946,23 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setKpisLoading(false);
     }
-  }, [kpisCursor, onLogout, showToast]);
+  }, [kpiPageSize, onLogout, showToast]);
 
-  const reloadValues = useCallback(async ({ signal, cursor = valuesCursor, pageAction = "stay" } = {}) => {
+  const reloadValues = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
+    const resolvedCursor = cursor === undefined ? (valuesCursorRef.current ?? null) : (cursor ?? null);
+    const previousCursor = valuesCursorRef.current ?? null;
     setValuesError("");
     setValuesLoading(true);
     try {
-      const data = await fetchValues(false, { limit: DIRECTORY_PAGE_SIZE, cursor, signal });
+      const data = await fetchValues(false, { limit: DIRECTORY_PAGE_SIZE, cursor: resolvedCursor, signal });
       const page = normalizeCursorPage(data);
       const normalized = normalizeWebknotValuesList(page.items);
       setValues(normalized.sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true })));
       setValuesNextCursor(page.nextCursor);
-      setValuesCursor(cursor ?? null);
+      setValuesCursor(resolvedCursor);
+      valuesCursorRef.current = resolvedCursor;
       setValuesCursorStack((prev) => {
-        if (pageAction === "next") return [...prev, valuesCursor ?? null];
+        if (pageAction === "next") return [...prev, previousCursor];
         if (pageAction === "prev") return prev.slice(0, -1);
         if (pageAction === "reset") return [];
         return prev;
@@ -675,11 +980,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setValuesLoading(false);
     }
-  }, [onLogout, showToast, valuesCursor]);
+  }, [onLogout, showToast]);
 
   useEffect(() => {
     const controller = new AbortController();
-    reloadKpis({ signal: controller.signal }).catch(() => {});
+    reloadKpis({ signal: controller.signal, cursor: KPI_FIRST_CURSOR, pageAction: "reset" }).catch(() => {});
     return () => controller.abort();
   }, [reloadKpis]);
 
@@ -737,20 +1042,28 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [employeesCursor, setEmployeesCursor] = useState(null);
   const [employeesNextCursor, setEmployeesNextCursor] = useState(null);
   const [employeesCursorStack, setEmployeesCursorStack] = useState([]);
+  const employeesCursorRef = useRef(null);
 
-  const reloadEmployees = useCallback(async ({ signal, cursor = employeesCursor, pageAction = "stay" } = {}) => {
+  const [ability6m, setAbility6m] = useState(() =>
+    buildLastMonths(6).map((m) => ({ month: m.label, avg: 0 }))
+  );
+
+  const reloadEmployees = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
+    const resolvedCursor = cursor === undefined ? (employeesCursorRef.current ?? null) : (cursor ?? null);
+    const previousCursor = employeesCursorRef.current ?? null;
     setEmployeesError("");
     setEmployeesLoading(true);
     try {
-      const data = await fetchEmployees({ limit: DIRECTORY_PAGE_SIZE, cursor, signal });
+      const data = await fetchEmployees({ limit: DIRECTORY_PAGE_SIZE, cursor: resolvedCursor, signal });
       const page = normalizeCursorPage(data);
       const base = normalizeEmployees(page.items);
       const extras = loadEmployeeExtras();
       setEmployees(applyEmployeeExtras(base, extras));
       setEmployeesNextCursor(page.nextCursor);
-      setEmployeesCursor(cursor ?? null);
+      setEmployeesCursor(resolvedCursor);
+      employeesCursorRef.current = resolvedCursor;
       setEmployeesCursorStack((prev) => {
-        if (pageAction === "next") return [...prev, employeesCursor ?? null];
+        if (pageAction === "next") return [...prev, previousCursor];
         if (pageAction === "prev") return prev.slice(0, -1);
         if (pageAction === "reset") return [];
         return prev;
@@ -768,7 +1081,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setEmployeesLoading(false);
     }
-  }, [employeesCursor, onLogout, showToast]);
+  }, [onLogout, showToast]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -776,9 +1089,65 @@ export default function AdminControlCenter({ onLogout, auth }) {
     return () => controller.abort();
   }, [reloadEmployees]);
 
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const data = await fetchAdminAllSubmissions({ status: "SUBMITTED", signal: controller.signal });
+        if (!mounted) return;
+
+        const rows = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+            ? data.data
+            : [];
+
+        const buckets = new Map();
+        for (const raw of rows) {
+          const normalized = normalizeMonthlySubmission(raw);
+          const monthKey = String(normalized?.month ?? raw?.month ?? "").trim();
+          if (!monthKey) continue;
+          const score = computeSubmissionAbilityScore(normalized);
+          if (!Number.isFinite(score)) continue;
+          const prev = buckets.get(monthKey) || { sum: 0, count: 0 };
+          prev.sum += score;
+          prev.count += 1;
+          buckets.set(monthKey, prev);
+        }
+
+        const months = buildLastMonths(6);
+        const points = months.map(({ key, label }) => {
+          const bucket = buckets.get(key);
+          const avg = bucket?.count ? Math.round((bucket.sum / bucket.count) * 10) / 10 : 0;
+          return { month: label, avg };
+        });
+        setAbility6m(points);
+      } catch (err) {
+        if (!mounted) return;
+        if (err?.name === "AbortError") return;
+        if (err?.status === 401) {
+          showToast({ title: "Session expired", message: "Please login again." });
+          onLogout?.();
+          return;
+        }
+        setAbility6m(buildLastMonths(6).map((m) => ({ month: m.label, avg: 0 })));
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [onLogout, showToast]);
+
   const employeePager = useMemo(() => ({
     canPrev: employeesCursorStack.length > 0,
     canNext: Boolean(employeesNextCursor),
+    onReset: () => {
+      reloadEmployees({ cursor: null, pageAction: "reset" }).catch(() => {});
+    },
     onPrev: () => {
       const prevCursor = employeesCursorStack[employeesCursorStack.length - 1] ?? null;
       reloadEmployees({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
@@ -803,8 +1172,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
       reloadKpis({ cursor: kpisNextCursor, pageAction: "next" }).catch(() => {});
     },
     loading: kpisLoading,
-    label: `Page ${kpisCursorStack.length + 1}`,
-  }), [kpisCursorStack, kpisNextCursor, kpisLoading, reloadKpis]);
+    label: `Page ${kpisCursorStack.length + 1} • ${kpiPageSize}/page`,
+  }), [kpiPageSize, kpisCursorStack, kpisNextCursor, kpisLoading, reloadKpis]);
 
   const valuesPager = useMemo(() => ({
     canPrev: valuesCursorStack.length > 0,
@@ -820,6 +1189,26 @@ export default function AdminControlCenter({ onLogout, auth }) {
     loading: valuesLoading,
     label: `Page ${valuesCursorStack.length + 1}`,
   }), [reloadValues, valuesCursorStack, valuesLoading, valuesNextCursor]);
+
+  const certificationsPager = useMemo(() => ({
+    canPrev: certificationsCursorStack.length > 0,
+    canNext: Boolean(certificationsNextCursor),
+    onPrev: () => {
+      const prevCursor = certificationsCursorStack[certificationsCursorStack.length - 1] ?? null;
+      reloadCertifications({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
+    },
+    onNext: () => {
+      if (!certificationsNextCursor) return;
+      reloadCertifications({ cursor: certificationsNextCursor, pageAction: "next" }).catch(() => {});
+    },
+    loading: certificationsLoading,
+    label: "Page " + (certificationsCursorStack.length + 1),
+  }), [
+    certificationsCursorStack,
+    certificationsLoading,
+    certificationsNextCursor,
+    reloadCertifications,
+  ]);
 
   useEffect(() => {
     saveCertificationCatalogToStorage(certificationCatalog);
@@ -957,6 +1346,67 @@ export default function AdminControlCenter({ onLogout, auth }) {
     });
   }, [certificationCatalog]);
 
+  const setEmployeeSubmissionWindowOverride = useCallback((employeeId, mode) => {
+    const id = String(employeeId ?? "").trim();
+    if (!id) return;
+
+    const action = String(mode ?? "").trim().toLowerCase();
+    if (action !== "open" && action !== "close") return;
+
+    return (async () => {
+      if (action === "open") {
+        await openSubmissionWindowForEmployeeNow(id);
+      } else {
+        await closeSubmissionWindowForEmployeeNow(id);
+      }
+
+      let nextForceOpen = action === "open";
+      let nextForceClosed = action === "close";
+
+      try {
+        const status = await fetchEmployeeSubmissionWindowStatus(id);
+        const root = status && typeof status === "object" ? status : {};
+        const employeeScopedIsOpen =
+          root?.employeeWindowOpen ??
+          root?.windowOpenForEmployee ??
+          root?.isOpenForEmployee ??
+          root?.employee?.isOpen ??
+          root?.status?.employeeWindowOpen;
+
+        if (typeof employeeScopedIsOpen === "boolean") {
+          nextForceOpen = employeeScopedIsOpen;
+          nextForceClosed = !employeeScopedIsOpen;
+        }
+      } catch {
+      }
+
+      setEmployees((prev) =>
+        prev.map((emp) =>
+          String(emp?.id) === id
+            ? {
+                ...emp,
+                submissionWindowForceOpen: nextForceOpen,
+                submissionWindowForceClosed: nextForceClosed,
+              }
+            : emp
+        )
+      );
+
+      const extras = loadEmployeeExtras();
+      const current = extras[id] && typeof extras[id] === "object" ? extras[id] : {};
+      saveEmployeeExtras({
+        ...extras,
+        [id]: {
+          ...current,
+          recognitions: Number(current.recognitions) || 0,
+          certifications: Array.isArray(current.certifications) ? current.certifications : [],
+          submissionWindowForceOpen: nextForceOpen,
+          submissionWindowForceClosed: nextForceClosed,
+        },
+      });
+    })();
+  }, []);
+
   const account = useMemo(() => {
     const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
     const rawEmail = String(auth?.email || auth?.claims?.sub || "").trim();
@@ -1006,15 +1456,10 @@ export default function AdminControlCenter({ onLogout, auth }) {
     return match?.id ?? null;
   }, [auth?.employeeId, auth?.email, auth?.claims?.sub, employees]);
 
-  // Ability trend (demo)
-  const ability6m = useMemo(() => ([
-    { month: "Sep", avg: 3.6 },
-    { month: "Oct", avg: 3.7 },
-    { month: "Nov", avg: 3.8 },
-    { month: "Dec", avg: 3.9 },
-    { month: "Jan", avg: 4.0 },
-    { month: "Feb", avg: 4.1 },
-  ]), [])
+  const globalWindowOpen = useMemo(
+    () => isPortalWindowOpenNow(portalWindow, new Date()),
+    [portalWindow]
+  );
 
   function generateReport() {
     const lines = [
@@ -1036,7 +1481,25 @@ export default function AdminControlCenter({ onLogout, auth }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-[#080808] text-slate-100 font-sans overflow-x-hidden">
+    <div className="rt-shell flex overflow-x-hidden bg-[rgb(var(--bg))]">
+      {isSidebarOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-label="Close sidebar"
+        />
+      ) : null}
+
+      <button
+        type="button"
+        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
+        onClick={() => setIsSidebarOpen((prev) => !prev)}
+        aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
+      >
+        {isSidebarOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+      </button>
+
       <Sidebar
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
@@ -1046,7 +1509,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'ml-64' : 'ml-20'} p-6 lg:p-12`}>
+      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? 'md:ml-72' : 'md:ml-24'} p-4 pt-20 md:pt-6 lg:p-10`}>
+        <div className="pointer-events-none absolute inset-0 -z-10">
+          <div className="absolute -top-28 right-10 h-72 w-72 rounded-full bg-blue-500/10 blur-3xl" />
+          <div className="absolute bottom-6 left-1/3 h-64 w-64 rounded-full bg-cyan-400/10 blur-3xl" />
+        </div>
         {activeTab === "dashboard" && (
           <AdminDashboard
             portalWindow={portalWindow}
@@ -1071,12 +1538,12 @@ export default function AdminControlCenter({ onLogout, auth }) {
         {activeTab === "certifications" && (
           <>
             {certificationsError ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
                 Failed to load certifications: <span className="font-mono">{certificationsError}</span>
               </div>
             ) : null}
             {certificationsLoading ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+              <div className="max-w-7xl mx-auto mb-6 rt-panel-subtle p-4 text-sm text-[rgb(var(--muted))]">
                 Loading certifications…
               </div>
             ) : null}
@@ -1086,6 +1553,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               onEditCertificationInCatalog={editCertificationInCatalog}
               onSetCertificationListed={setCertificationListed}
               onDeleteCertificationFromCatalog={deleteCertificationFromCatalog}
+              pager={certificationsPager}
             />
           </>
         )}
@@ -1099,6 +1567,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
             employeesError={employeesError}
             currentEmployeeId={currentEmployeeId}
             pager={employeePager}
+            onSetEmployeeSubmissionWindow={setEmployeeSubmissionWindowOverride}
+            globalWindowOpen={globalWindowOpen}
           />
         )}
 
@@ -1109,22 +1579,30 @@ export default function AdminControlCenter({ onLogout, auth }) {
             setSearchQuery={setSearchQuery}
             onAddKpi={openKpiModal}
             onEditKpi={openEditKpiModal}
+            onDeleteKpi={requestDeleteKpi}
             loading={kpisLoading}
             error={kpisError}
             onReload={() => reloadKpis({ pageAction: "stay" }).catch(() => {})}
             pager={kpiPager}
+            pageSize={kpiPageSize}
+            pageSizeOptions={KPI_PAGE_SIZE_OPTIONS}
+            onPageSizeChange={(nextSize) => {
+              const parsed = Number.parseInt(String(nextSize), 10);
+              if (!Number.isFinite(parsed) || parsed <= 0) return;
+              setKpiPageSize(parsed);
+            }}
           />
         )}
 
         {activeTab === "values" && (
           <>
             {valuesError ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
                 Failed to load values: <span className="font-mono">{valuesError}</span>
               </div>
             ) : null}
             {valuesLoading ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+              <div className="max-w-7xl mx-auto mb-6 rt-panel-subtle p-4 text-sm text-[rgb(var(--muted))]">
                 Loading values…
               </div>
             ) : null}
@@ -1140,6 +1618,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
           </>
         )}
 
+        {activeTab === "band-streams" && <BandStreamDirectory />}
+
         {activeTab === "agents" && isAdmin ? <AIAgentsConfig /> : null}
 
         {activeTab === "settings" && <SettingsPanel />}
@@ -1147,8 +1627,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
       {/* KPI Modal */}
       {showKPIModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">
@@ -1166,7 +1646,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               </div>
               <button
                 onClick={closeKpiModal}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
               >
                 <X size={18} />
@@ -1181,7 +1661,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 <input
                   value={kpiDraft.title}
                   onChange={(e) => setKpiDraft((d) => ({ ...d, title: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., Technical Velocity"
                 />
               </div>
@@ -1191,24 +1671,34 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
                     Stream *
                   </label>
-                  <input
+                  <select
                     value={kpiDraft.stream}
                     onChange={(e) => setKpiDraft((d) => ({ ...d, stream: e.target.value }))}
-                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
-                    placeholder="e.g., Engineering"
-                  />
+                    className="mt-2 rt-input text-sm"
+                  >
+                    {kpiStreamOptions.map((stream) => (
+                      <option key={`kpi-stream:${stream}`} value={stream}>
+                        {stream}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
                   <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
                     Band *
                   </label>
-                  <input
+                  <select
                     value={kpiDraft.band}
                     onChange={(e) => setKpiDraft((d) => ({ ...d, band: e.target.value }))}
-                    className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
-                    placeholder="e.g., B5L"
-                  />
+                    className="mt-2 rt-input text-sm"
+                  >
+                    {kpiBandOptions.map((band) => (
+                      <option key={`kpi-band:${band}`} value={band}>
+                        {band}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -1219,7 +1709,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 <input
                   value={kpiDraft.weight}
                   onChange={(e) => setKpiDraft((d) => ({ ...d, weight: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., 30%"
                 />
               </div>
@@ -1229,14 +1719,14 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   type="button"
                   onClick={closeKpiModal}
                   disabled={kpiSaving}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={kpiSaving}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-primary text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {kpiSaving ? "Saving…" : (kpiModalMode === "edit" ? "Save Changes" : "Add KPI")}
                 </button>
@@ -1248,8 +1738,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
       {/* Values Modal */}
       {showValueModal ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">
@@ -1267,7 +1757,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               </div>
               <button
                 onClick={closeValueModal}
-                className="p-2 rounded-xl hover:bg-white/5"
+                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -1283,7 +1773,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 <input
                   value={valueDraft.title}
                   onChange={(e) => setValueDraft((d) => ({ ...d, title: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., Own The Outcome"
                 />
               </div>
@@ -1295,7 +1785,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 <input
                   value={valueDraft.pillar}
                   onChange={(e) => setValueDraft((d) => ({ ...d, pillar: e.target.value }))}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all"
+                  className="mt-2 rt-input text-sm"
                   placeholder="e.g., Ownership"
                 />
               </div>
@@ -1308,7 +1798,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   value={valueDraft.description}
                   onChange={(e) => setValueDraft((d) => ({ ...d, description: e.target.value }))}
                   rows={4}
-                  className="mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all resize-none"
+                  className="mt-2 rt-input text-sm resize-none"
                   placeholder="Write a short definition of the value..."
                 />
               </div>
@@ -1318,14 +1808,14 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   type="button"
                   onClick={closeValueModal}
                   disabled={valueSaving}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={valueSaving}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-primary text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {valueSaving ? "Saving…" : (valueModalMode === "edit" ? "Save Changes" : "Add Value")}
                 </button>
@@ -1334,6 +1824,27 @@ export default function AdminControlCenter({ onLogout, auth }) {
           </div>
         </div>
       ) : null}
+      <ConfirmDialog
+        open={Boolean(pendingDeleteKpi)}
+        title="Delete KPI"
+        message={'Delete "' + String(pendingDeleteKpi?.title ?? "") + '"?'}
+        confirmText="Delete"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        onCancel={() => setPendingDeleteKpi(null)}
+        onConfirm={confirmDeleteKpi}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteValue)}
+        title="Delete Value"
+        message={`Delete "${String(pendingDeleteValue?.title ?? "")}"?`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        onCancel={() => setPendingDeleteValue(null)}
+        onConfirm={confirmDeleteValue}
+      />
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>

@@ -11,8 +11,8 @@ const TONES = {
     Icon: CheckCircle2,
   },
   success: {
-    container: "bg-emerald-500 text-black border-emerald-200/20",
-    icon: "text-black",
+    container: "bg-emerald-500 text-white border-emerald-200/20",
+    icon: "text-white",
     Icon: CheckCircle2,
   },
   error: {

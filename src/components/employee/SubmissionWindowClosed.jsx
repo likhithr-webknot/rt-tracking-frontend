@@ -58,88 +58,98 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry })
   const start = parseDateTime(portalWindow?.startAt ?? portalWindow?.start);
   const end = parseDateTime(portalWindow?.endAt ?? portalWindow?.end);
   const endValue = portalWindow?.endAt ?? portalWindow?.end;
+  const scopeKey = String(portalWindow?.source ?? "").trim().toLowerCase();
+  const scopeLabel = scopeKey.includes("employee")
+    ? "Employee-specific"
+    : scopeKey.includes("global")
+      ? "Global"
+      : "Effective";
 
   return (
-    <div className="min-h-screen bg-[#080808] text-slate-100 font-sans overflow-x-hidden">
-      <div className="max-w-4xl mx-auto px-6 lg:px-12 py-12 lg:py-20">
-        <div className="relative overflow-hidden rounded-[2.5rem] border border-white/10 bg-[#111] shadow-2xl">
+    <div className="rt-shell font-sans overflow-x-hidden">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-12 py-8 sm:py-12 lg:py-20">
+        <div className="rt-panel relative overflow-hidden rounded-[2rem]">
           <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: "radial-gradient(circle at 20% 20%, #a855f7 0, transparent 55%), radial-gradient(circle at 90% 30%, #22c55e 0, transparent 60%)" }} />
           <div className="relative p-8 sm:p-12">
             <div className="flex items-start justify-between gap-6 flex-wrap">
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-gray-300">
+                <div className="inline-flex items-center gap-2 rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))]">
                   <Lock size={14} className="text-purple-300" /> Submissions Locked
                 </div>
-                <h1 className="mt-4 text-4xl sm:text-5xl font-black uppercase tracking-tighter italic">
+                <h1 className="mt-4 text-4xl sm:text-5xl font-black tracking-tight">
                   Submission Window Closed
                 </h1>
-                <p className="mt-3 text-gray-400">
-                  Submissions are closed for <span className="text-gray-200 font-bold">{monthLabel}</span>.
+                <p className="mt-3 text-[rgb(var(--muted))]">
+                  Submissions are closed for <span className="text-[rgb(var(--text))] font-bold">{monthLabel}</span>.
                 </p>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 min-w-[280px]">
-                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-                  <Calendar size={14} className="text-gray-400" /> Window Schedule
+              <div className="rt-panel-subtle p-4 min-w-[280px]">
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
+                  <Calendar size={14} className="text-slate-400" /> Window Schedule
                 </div>
                 <div className="mt-3 space-y-2 text-sm">
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-gray-500">Opens</span>
-                    <span className="font-mono text-gray-200">{formatLocal(start)}</span>
+                    <span className="text-slate-500">Opens</span>
+                    <span className="font-mono text-[rgb(var(--text))]">{formatLocal(start)}</span>
                   </div>
                   <div className="flex items-center justify-between gap-4">
-                    <span className="text-gray-500">Closes</span>
-                    <span className="font-mono text-gray-200">{endValue ? formatLocal(end) : "—"}</span>
+                    <span className="text-slate-500">Closes</span>
+                    <span className="font-mono text-[rgb(var(--text))]">{endValue ? formatLocal(end) : "—"}</span>
                   </div>
                 </div>
-                <div className="mt-4 text-xs text-gray-500 flex items-center gap-2">
-                  <Clock size={14} className="text-gray-400" />
+                <div className="mt-4 text-xs text-slate-500 flex items-center gap-2">
+                  <Clock size={14} className="text-slate-400" />
                   Check back when the window opens.
+                </div>
+                <div className="mt-3 text-xs text-slate-500 flex items-center justify-between gap-4">
+                  <span>Scope</span>
+                  <span className="font-mono text-[rgb(var(--text))]">{scopeLabel}</span>
                 </div>
               </div>
             </div>
 
             <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+              <div className="rt-panel-subtle rounded-2xl p-6">
                 <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
                   What You Can Do
                 </div>
-                <ul className="mt-3 text-sm text-gray-300 space-y-2">
+                <ul className="mt-3 text-sm text-[rgb(var(--text))] space-y-2">
                   <li>Prepare your self review and collect certification proofs.</li>
                   <li>When the window opens, submit in one go.</li>
                   <li>If this looks incorrect, contact support.</li>
                 </ul>
               </div>
 
-              <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-6">
-                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-amber-200">
+              <div className="rounded-2xl border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-6">
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-amber-700 dark:text-amber-200">
                   <ShieldAlert size={14} /> Support
                 </div>
-                <div className="mt-3 text-sm text-amber-100">
+                <div className="mt-3 text-sm text-amber-800 dark:text-amber-100">
                   {error ? "Unable to load the submission window status." : "If you believe the window should be open, please contact:"}
                 </div>
                 {error ? (
-                  <div className="mt-2 text-xs text-amber-100/90 font-mono whitespace-pre-wrap">{String(error)}</div>
+                  <div className="mt-2 text-xs text-amber-800/90 dark:text-amber-100/90 font-mono whitespace-pre-wrap">{String(error)}</div>
                 ) : null}
-                <div className="mt-2 text-sm font-mono text-amber-100">
+                <div className="mt-2 text-sm font-mono text-amber-800 dark:text-amber-100">
                   hr@webknot.in
                 </div>
                 {typeof onRetry === "function" ? (
                   <button
                     onClick={onRetry}
-                    className="mt-5 inline-flex items-center justify-center rounded-2xl bg-white text-black px-5 py-3 font-black text-[11px] uppercase tracking-widest hover:bg-gray-200 transition-all"
+                    className="mt-5 inline-flex items-center justify-center rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] px-5 py-3 font-black text-[11px] uppercase tracking-widest hover:bg-[rgb(var(--surface-2))] transition-all"
                     type="button"
                   >
                     Retry
                   </button>
                 ) : null}
-                <div className="mt-4 text-xs text-amber-200/80">
+                <div className="mt-4 text-xs text-amber-700/90 dark:text-amber-200/80">
                   Note: monthly and 6-month aggregations will be handled automatically once the backend workflow is wired.
                 </div>
               </div>
             </div>
 
-            <div className="mt-10 text-xs text-gray-600">
+            <div className="mt-10 text-xs text-[rgb(var(--muted))]">
               This view is based on the server submission window state.
             </div>
           </div>

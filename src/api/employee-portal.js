@@ -26,6 +26,21 @@ function unwrapRoot(data) {
   return data;
 }
 
+function normalizeCursorToken(value) {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === "bigint") {
+    return String(value);
+  }
+  return null;
+}
+
 export function normalizeCursorPage(data) {
   const root = unwrapRoot(data);
   const items =
@@ -43,21 +58,34 @@ export function normalizeCursorPage(data) {
                 ? data
                 : [];
 
-  const nextCursor =
-    (typeof root.nextCursor === "string" && root.nextCursor) ||
-    (typeof root.next === "string" && root.next) ||
-    (typeof root.nextToken === "string" && root.nextToken) ||
-    (typeof root.nextPageToken === "string" && root.nextPageToken) ||
-    null;
+  const nextCursor = normalizeCursorToken(
+    root?.nextCursor ??
+      root?.next ??
+      root?.nextToken ??
+      root?.nextPageToken ??
+      root?.page?.nextCursor ??
+      root?.pageInfo?.nextCursor ??
+      null
+  );
 
   return { items, nextCursor: nextCursor ? String(nextCursor) : null, raw: root };
 }
 
-export async function fetchEmployeePortalKpiDefinitions({ limit = 10, cursor = null, signal } = {}) {
+export async function fetchEmployeePortalKpiDefinitions({
+  limit = 10,
+  cursor = null,
+  employeeId = null,
+  band = null,
+  stream = null,
+  signal,
+} = {}) {
   const auth = getAuthHeader();
   const qs = new URLSearchParams();
   if (limit != null) qs.set("limit", String(limit));
   if (cursor) qs.set("cursor", String(cursor));
+  if (employeeId) qs.set("employeeId", String(employeeId));
+  if (band) qs.set("band", String(band));
+  if (stream) qs.set("stream", String(stream));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   const res = await fetch(buildApiUrl(`/employee-portal/kpi-definitions${suffix}`), {
     signal,

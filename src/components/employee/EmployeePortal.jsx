@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
+import ThemeToggle from "../shared/ThemeToggle.jsx";
 
 import { fetchMe } from "../../api/auth.js";
 import { fetchCertifications, normalizeCertifications } from "../../api/certifications.js";
@@ -24,7 +25,6 @@ import {
   submitMonthlySubmission
 } from "../../api/monthly-submissions.js";
 import { fetchPortalEmployee } from "../../api/portal.js";
-import CursorPagination from "../shared/CursorPagination.jsx";
 import {
   fetchEmployeePortalKpiDefinitions,
   fetchEmployeePortalWebknotValues,
@@ -32,12 +32,12 @@ import {
   normalizeWebknotValues
 } from "../../api/employee-portal.js";
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
+import { enhanceReviewText, fetchActiveAiAgent } from "../../api/ai-agents.js";
 import { getAppSettings } from "../../utils/appSettings.js";
-
-const AI_AGENTS_STORAGE_KEY = "rt_tracking_ai_agents_v1";
-const AI_AGENTS_LEGACY_KEY = "rt_tracking_ai_agents_config_v1";
+import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
 
 const DEFAULT_PAGE_LIMIT = 10;
+const EMPLOYEE_SIDEBAR_PREF_KEY = "rt_tracking_employee_sidebar_open_v1";
 
 function getEmployeeValuesPageSize() {
   const n = Number.parseInt(String(getAppSettings()?.employeeValuesPageSize ?? DEFAULT_PAGE_LIMIT), 10);
@@ -59,12 +59,46 @@ function toPercentNumber(weight) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function formatReviewTimestamp(value) {
+  if (!value) return "—";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  return dt.toLocaleString();
+}
+
+function preventWheelInputChange(e) {
+  e.currentTarget.blur();
+}
+
 function normalizeFilterKey(value) {
   return String(value ?? "").trim().toLowerCase();
 }
 
+function normalizeBandKey(value) {
+  return normalizeFilterKey(value).replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeStreamKey(value) {
+  const key = normalizeFilterKey(value).replace(/[^a-z0-9]/g, "");
+  if (!key) return "";
+  if (key === "*" || key === "all" || key === "any" || key === "general" || key === "global") {
+    return key;
+  }
+  if (key === "qa" || key === "qualityassurance" || key === "qualityengineering") return "qa";
+  if (key === "devops" || key === "devsecops" || key === "sre" || key === "ops" || key === "operations") return "devops";
+  if (key === "data" || key === "datascience" || key === "analytics" || key === "aiml" || key === "ai" || key === "ml") return "data";
+  if (key === "uiux" || key === "uxui" || key === "ui" || key === "ux" || key === "design" || key === "uidesign" || key === "uxdesign") {
+    return "uiux";
+  }
+  if (key === "development" || key === "dev" || key === "backend" || key === "frontend" || key === "mobile" || key === "fullstack" || key === "engineering") {
+    return "development";
+  }
+  return key;
+}
+
 function isWildcardValue(key) {
-  return key === "" || key === "*" || key === "all" || key === "any";
+  const normalized = normalizeFilterKey(key);
+  return normalized === "" || normalized === "*" || normalized === "all" || normalized === "any" || normalized === "general" || normalized === "global";
 }
 
 function isPlaceholderValueTitle(value, id) {
@@ -83,55 +117,19 @@ function hasReadableValueItems(items) {
 }
 
 function kpiAppliesToEmployee(kpi, employee) {
-  const empBand = normalizeFilterKey(employee?.band);
-  const empStream = normalizeFilterKey(employee?.stream);
+  const empBand = normalizeBandKey(employee?.band);
+  const empStream = normalizeStreamKey(employee?.stream);
 
   // If employee metadata is missing, do not filter out KPIs.
   if (!empBand && !empStream) return true;
 
-  const kpiBand = normalizeFilterKey(kpi?.band);
-  const kpiStream = normalizeFilterKey(kpi?.stream);
+  const kpiBand = normalizeBandKey(kpi?.band);
+  const kpiStream = normalizeStreamKey(kpi?.stream);
 
-  const bandOk = isWildcardValue(kpiBand) || !empBand || kpiBand === empBand;
-
-  // Treat "general" as a wildcard stream so global KPIs still show up.
-  const streamOk =
-    isWildcardValue(kpiStream) ||
-    kpiStream === "general" ||
-    !empStream ||
-    kpiStream === empStream;
+  const bandOk = isWildcardValue(kpiBand) || !kpiBand || !empBand || kpiBand === empBand;
+  const streamOk = isWildcardValue(kpiStream) || !kpiStream || !empStream || kpiStream === empStream;
 
   return bandOk && streamOk;
-}
-
-function tryParseJson(raw) {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function loadFirstAIAgent() {
-  if (typeof window === "undefined") return null;
-
-  const parsed = tryParseJson(window.localStorage.getItem(AI_AGENTS_STORAGE_KEY));
-  if (Array.isArray(parsed) && parsed.length) {
-    const first = parsed[0];
-    const provider = String(first?.provider ?? "").trim() || "openai";
-    const apiKey = String(first?.apiKey ?? "").trim();
-    if (!apiKey) return null;
-    return { provider, apiKey };
-  }
-
-  // Backward-compat: old single config.
-  const legacy = tryParseJson(window.localStorage.getItem(AI_AGENTS_LEGACY_KEY));
-  if (!legacy || typeof legacy !== "object") return null;
-  const provider = String(legacy?.provider ?? "").trim() || "openai";
-  const apiKey = String(legacy?.apiKey ?? "").trim();
-  if (!apiKey) return null;
-  return { provider, apiKey };
 }
 
 function normalizeEmployeeFromMe(me, { fallbackEmail, fallbackRole } = {}) {
@@ -263,7 +261,13 @@ function buildMonthlySubmissionPayload({
   kpiRatings,
   selectedValues,
   recognitionsCount,
+  submissionType = "EMPLOYEE_MONTHLY_SUBMISSION",
+  actorRole = "EMPLOYEE",
+  subjectEmployeeId = null,
+  reviewStatus = null,
+  reopenedForResubmission = null,
 }) {
+  const cycleMeta = buildCycleMeta(month);
   const certifications = normalizeCertificationsForState(selectedCertifications)
     .sort((a, b) =>
       String(a.name).localeCompare(String(b.name), undefined, { numeric: true })
@@ -282,8 +286,18 @@ function buildMonthlySubmissionPayload({
   const stableValueRatings = Object.fromEntries(valueRatingEntries);
   const values = valueRatingEntries.map(([id]) => String(id));
 
-  return {
-    month: String(month || "").trim() || null,
+  const next = {
+    month: normalizeYearMonth(month) || String(month || "").trim() || null,
+    monthKey: normalizeYearMonth(month) || String(month || "").trim() || null,
+    cycleKey: cycleMeta.cycleKey,
+    cycleLabel: cycleMeta.cycleLabel,
+    cycleShortLabel: cycleMeta.cycleShortLabel,
+    cycleStartMonth: cycleMeta.cycleStartMonth,
+    cycleEndMonth: cycleMeta.cycleEndMonth,
+    cycleMonth: cycleMeta.month,
+    submissionType: String(submissionType || "").trim() || null,
+    actorRole: String(actorRole || "").trim() || null,
+    subjectEmployeeId: String(subjectEmployeeId || "").trim() || null,
     selfReviewText: String(selfReviewText || ""),
     certifications,
     kpiRatings: stableRatings,
@@ -294,6 +308,9 @@ function buildMonthlySubmissionPayload({
         ? recognitionsCount
         : Number.parseInt(String(recognitionsCount || "0"), 10) || 0,
   };
+  if (reviewStatus != null) next.reviewStatus = String(reviewStatus || "").trim() || null;
+  if (reopenedForResubmission != null) next.reopenedForResubmission = Boolean(reopenedForResubmission);
+  return next;
 }
 
 function isFinalSubmissionStatus(status, meta) {
@@ -301,6 +318,11 @@ function isFinalSubmissionStatus(status, meta) {
   if (s === "SUBMITTED" || s === "APPROVED" || s === "COMPLETED" || s === "FINAL") return true;
   if (meta?.submittedAt) return true;
   return false;
+}
+
+function isAuthorSubmissionLocked(meta) {
+  if (!isFinalSubmissionStatus(meta?.status, meta)) return false;
+  return !isResubmissionRequested(meta);
 }
 
 function payloadHash(payload) {
@@ -311,51 +333,17 @@ function payloadHash(payload) {
   }
 }
 
+function isAiEnhancementConfigured(raw) {
+  const obj = raw && typeof raw === "object" ? raw : {};
+  if (typeof obj.configured === "boolean") return obj.configured;
+  return Boolean(String(obj.provider ?? "").trim());
+}
+
 async function enhanceSelfReviewText({ agent, text, signal }) {
-  const provider = String(agent?.provider || "").trim().toLowerCase() || "openai";
-  const apiKey = String(agent?.apiKey || "").trim();
+  if (!agent) throw new Error("AI agent is not configured.");
   const input = String(text || "").trim();
-  if (!apiKey) throw new Error("AI agent is not configured.");
   if (!input) throw new Error("Write your self review first.");
-
-  if (provider !== "openai") {
-    throw new Error(`Provider "${provider}" is not wired yet.`);
-  }
-
-  // Note: This calls OpenAI directly from the browser using the locally stored key.
-  // We will move this server-side later.
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    signal,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      temperature: 0.3,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You improve writing quality. Keep the meaning, do not invent facts. Make it concise, professional, and structured with short bullets when helpful.",
-        },
-        {
-          role: "user",
-          content: `Enhance this self review text:\n\n${input}`,
-        },
-      ],
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `AI request failed: ${res.status} ${res.statusText}`);
-  }
-  const data = await res.json().catch(() => ({}));
-  const enhanced = String(data?.choices?.[0]?.message?.content ?? "").trim();
-  if (!enhanced) throw new Error("AI returned an empty response.");
-  return enhanced;
+  return enhanceReviewText({ text: input, mode: "self_review", signal });
 }
 
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
@@ -371,31 +359,35 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
   return (
     <aside
       className={[
-        "fixed left-0 top-0 h-full bg-[#111] border-r border-white/5 transition-all duration-300 z-50",
-        isOpen ? "w-64" : "w-20",
+        "fixed left-0 top-0 h-full bg-[linear-gradient(180deg,_rgb(var(--surface))_0%,_rgb(var(--surface-2))_100%)] backdrop-blur-xl transition-all duration-300 z-50 shadow-[0_16px_36px_rgba(8,22,45,0.18)]",
+        "flex flex-col",
+        "md:translate-x-0",
+        isOpen ? "translate-x-0 w-72" : "-translate-x-full md:translate-x-0 md:w-24",
       ].join(" ")}
     >
       <div className="p-6 flex items-center justify-between">
         {isOpen ? (
           <div className="flex items-center gap-2">
-            <div className="h-8 w-8 bg-purple-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-purple-500/20">
-              W
-            </div>
-            <span className="font-black tracking-tighter uppercase italic text-white">
+            <img
+              src="/unnamed.webp"
+              alt="Webknot Technologies logo"
+              className="h-9 w-9 rounded-xl object-cover bg-white"
+            />
+            <span className="font-black tracking-tight uppercase text-[rgb(var(--text))]">
               Webknot
             </span>
           </div>
         ) : null}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="p-2 hover:bg-white/5 rounded-lg text-gray-500 transition-colors"
+          className="p-2 hover:bg-[rgb(var(--surface-2))] rounded-xl text-slate-500 transition-colors"
           aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
           {isOpen ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
         </button>
       </div>
 
-      <nav className="mt-10 px-3 space-y-2">
+      <nav className="mt-6 px-3 space-y-1.5 flex-1 overflow-y-auto pb-6">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
@@ -403,16 +395,23 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
               key={item.id}
               onClick={() => setActiveTab(item.id)}
               className={[
-                "w-full rounded-2xl transition-all duration-200",
-                "px-4 py-4",
+                "w-full rounded-xl transition-all duration-150 border group",
+                "px-4 py-3.5",
                 isOpen ? "flex items-center justify-start gap-4" : "flex items-center justify-center",
                 isActive
-                  ? "bg-purple-600 text-white shadow-xl shadow-purple-900/20"
-                  : "text-gray-500 hover:bg-white/5 hover:text-white",
+                  ? "bg-[rgb(var(--primary-soft))] border-transparent text-[rgb(var(--text))] shadow-[0_10px_18px_rgba(46,103,220,0.16)]"
+                  : "border-transparent text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]",
               ].join(" ")}
               title={!isOpen ? item.label : undefined}
             >
-              <span className="w-6 grid place-items-center shrink-0">{item.icon}</span>
+              <span
+                className={[
+                  "w-6 grid place-items-center shrink-0 transition-colors",
+                  isActive ? "text-[rgb(var(--primary))]" : "text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))]",
+                ].join(" ")}
+              >
+                {item.icon}
+              </span>
               {isOpen ? (
                 <span className="text-sm font-bold tracking-tight whitespace-nowrap">
                   {item.label}
@@ -423,30 +422,29 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         })}
       </nav>
 
-      <div className="absolute bottom-24 w-full px-3">
+      <div className="mt-auto w-full px-3 pb-6 space-y-3">
         <div
           className={[
-            "rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-gray-200",
+            "rounded-xl bg-[rgb(var(--surface-2))] p-3 text-[rgb(var(--text))]",
             isOpen ? "" : "hidden",
           ].join(" ")}
         >
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-            Signed In
-          </div>
-          <div className="mt-2 font-bold tracking-tight text-white truncate">
+          <div className="font-bold tracking-tight text-[rgb(var(--text))] truncate">
             {account?.name || account?.email || "Unknown"}
           </div>
-          <div className="mt-1 text-xs text-purple-300 truncate">
-            {account?.designation || "—"}
+          <div className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))] truncate">
+            {account?.role || "Employee"}
           </div>
-          <div className="mt-2 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-            Role
-          </div>
-          <div className="mt-1 text-xs text-gray-200">{account?.role || "Employee"}</div>
+          <div className="mt-1 text-xs text-slate-500 truncate">{account?.designation || "—"}</div>
         </div>
-      </div>
+        {isOpen ? (
+          <ThemeToggle />
+        ) : (
+          <div className="grid place-items-center">
+            <ThemeToggle compact />
+          </div>
+        )}
 
-      <div className="absolute bottom-8 w-full px-3 text-red-500">
         <button
           onClick={onLogout}
           className={[
@@ -468,11 +466,42 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
 
 function InfoRow({ label, value }) {
   return (
-    <div className="flex items-start justify-between gap-6 py-3 border-b border-white/5 last:border-b-0">
+    <div className="flex items-start justify-between gap-6 py-3 border-b border-[rgb(var(--border))] last:border-b-0">
       <div className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
         {label}
       </div>
-      <div className="text-sm text-gray-200 font-mono text-right break-all">{value}</div>
+      <div className="text-sm text-[rgb(var(--text))] font-mono text-right break-all">{value}</div>
+    </div>
+  );
+}
+
+function SubmissionStepper({ activeTab, steps, onNavigate }) {
+  const list = Array.isArray(steps) ? steps : [];
+  return (
+    <div className="rt-stepper max-w-4xl mx-auto mb-6">
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        {list.map((step, idx) => {
+          const status = step?.status || "pending";
+          const active = activeTab === step.id;
+          return (
+            <button
+              key={step.id}
+              type="button"
+              onClick={() => onNavigate?.(step.id)}
+              className={[
+                "rt-step-chip transition-all",
+                active ? "rt-step-chip--active" : "",
+                status === "done" ? "rt-step-chip--done" : "",
+              ].join(" ")}
+              title={String(step?.label || "")}
+            >
+              <span className="font-mono">{String(idx + 1).padStart(2, "0")}</span>
+              <span>{step?.label}</span>
+              {status === "done" ? <CheckCircle2 size={13} /> : null}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -483,29 +512,29 @@ function ProfileTab({ employee, authEmail }) {
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header>
-        <h2 className="text-3xl font-black uppercase tracking-tighter italic">Profile</h2>
-        <p className="text-gray-500 text-sm mt-2">
+      <header className="rt-page-header">
+        <h2 className="rt-page-title">Profile</h2>
+        <p className="rt-page-subtitle">
           If anything looks wrong, please contact support.
         </p>
       </header>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
         <div className="flex items-start justify-between gap-6 flex-wrap">
           <div>
             <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
               Employee Details
             </div>
-            <div className="mt-3 text-2xl font-black tracking-tight text-white">
+            <div className="mt-3 text-2xl font-black tracking-tight text-[rgb(var(--text))]">
               {display?.name || email}
             </div>
-            <div className="mt-1 text-sm text-purple-300 font-mono">{display?.id || "—"}</div>
+            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300 font-mono">{display?.id || "—"}</div>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+          <div className="rt-panel-subtle rounded-2xl px-4 py-3">
             <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
               Support
             </div>
-            <div className="mt-1 text-sm text-gray-200 font-mono">hr@webknot.in</div>
+            <div className="mt-1 text-sm text-[rgb(var(--text))] font-mono">hr@webknot.in</div>
           </div>
         </div>
 
@@ -524,13 +553,13 @@ function ProfileTab({ employee, authEmail }) {
 function Placeholder({ title, note }) {
   return (
     <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header>
-        <h2 className="text-3xl font-black uppercase tracking-tighter italic">{title}</h2>
-        <p className="text-gray-500 text-sm mt-2">{note}</p>
+      <header className="rt-page-header">
+        <h2 className="rt-page-title">{title}</h2>
+        <p className="rt-page-subtitle">{note}</p>
       </header>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
-        <div className="text-gray-300">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
+        <div className="text-[rgb(var(--text))]">
           Coming soon.
         </div>
       </section>
@@ -565,7 +594,7 @@ function SelfReviewEditor({
           <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
             Self Review
           </div>
-          <div className="mt-2 text-sm text-gray-300">
+          <div className="mt-2 text-sm text-[rgb(var(--muted))]">
             Write your self review. Use AI Enhance only when you want to improve clarity.
           </div>
         </div>
@@ -594,7 +623,7 @@ function SelfReviewEditor({
             className={[
               "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
               locked || enhancing || !String(text || "").trim() || !aiAgent
-                ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
+                ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
                 : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
             ].join(" ")}
             title={!aiAgent ? "AI Agent is not configured" : "Enhance text using AI"}
@@ -617,8 +646,8 @@ function SelfReviewEditor({
               className={[
                 "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
                 locked || !canFinalSubmit || enhancing
-                  ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
-                  : "bg-emerald-500 text-black hover:bg-emerald-400 shadow-xl shadow-emerald-900/20",
+                  ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
+                  : "bg-emerald-500 text-white hover:bg-emerald-400 shadow-xl shadow-emerald-900/20",
               ].join(" ")}
               title={locked ? "This month's review is locked" : (!canFinalSubmit ? "Complete required fields first" : "Submit your self review")}
             >
@@ -629,7 +658,7 @@ function SelfReviewEditor({
       </div>
 
       {!aiAgent ? (
-        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
           AI Enhance is not configured. Please contact support/admin.
         </div>
       ) : null}
@@ -640,7 +669,7 @@ function SelfReviewEditor({
         readOnly={locked}
         rows={10}
         className={[
-          "w-full bg-[#0c0c0c] border border-white/10 rounded-2xl p-4 text-sm outline-none transition-all resize-none",
+          "rt-input resize-none p-4 text-sm",
           locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
         ].join(" ")}
         placeholder="Write your self review here..."
@@ -664,7 +693,6 @@ function KpisTab({
   error,
   fullyLoaded,
   prefetching,
-  pager,
   aiAgent,
   selfReviewText,
   setSelfReviewText,
@@ -695,35 +723,35 @@ function KpisTab({
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header>
-        <h2 className="text-3xl font-black uppercase tracking-tighter italic">KPIs</h2>
-        <p className="text-gray-500 text-sm mt-2">
+      <header className="rt-page-header">
+        <h2 className="rt-page-title">KPIs</h2>
+        <p className="rt-page-subtitle">
           Rate yourself from 1.0 to 5.0 (1 decimal allowed). Weightage is out of 100%.
         </p>
       </header>
 
       {error ? (
-        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
           Failed to load KPIs: <span className="font-mono">{error}</span>
         </div>
       ) : null}
 
       {loading ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
           Loading KPIs…
         </div>
       ) : null}
       {!fullyLoaded && (prefetching || loading) ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
           Loading full KPI list for this month…
         </div>
       ) : null}
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
         <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
-          <div>
-            <h3 className="text-xl font-black uppercase tracking-tight">KPI Ratings</h3>
-            <p className="text-gray-500 text-sm mt-1">
+          <div className="rt-section-header">
+            <h3 className="rt-section-title">KPI Ratings</h3>
+            <p className="rt-section-subtitle">
               Total weightage: <span className="font-mono">{Math.round(totalWeight * 10) / 10}%</span>
             </p>
           </div>
@@ -731,14 +759,14 @@ function KpisTab({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">KPI</th>
                 <th className="p-6 font-black">Weightage</th>
                 <th className="p-6 font-black">Your Rating (1-5)</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {items.map((k) => {
                 const id = String(k?.id || "");
                 const title = String(k?.title || "");
@@ -746,9 +774,9 @@ function KpisTab({
                 const value = ratings?.[id];
                 const display = typeof value === "number" && Number.isFinite(value) ? value : "";
                 return (
-                  <tr key={id} className="hover:bg-white/[0.01] transition-colors">
+                  <tr key={id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                     <td className="p-6">
-                      <div className="font-bold text-white tracking-tight">{title || id}</div>
+                      <div className="font-bold text-[rgb(var(--text))] tracking-tight">{title || id}</div>
                       {k?.stream ? (
                         <div className="text-xs text-gray-500 mt-1">{String(k.stream)}</div>
                       ) : null}
@@ -763,6 +791,7 @@ function KpisTab({
                         max={5}
                         step={0.1}
                         value={display}
+                        onWheel={preventWheelInputChange}
                         onChange={(e) => {
                           if (locked) return;
                           const text = String(e.target.value ?? "").trim();
@@ -781,7 +810,7 @@ function KpisTab({
                         }}
                         disabled={locked}
                         className={[
-                          "w-40 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+                          "rt-input w-40 py-3 px-4 text-sm",
                           locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
                         ].join(" ")}
                         placeholder="e.g., 4.2"
@@ -803,7 +832,7 @@ function KpisTab({
         </div>
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
         <SelfReviewEditor
           aiAgent={aiAgent}
           text={selfReviewText}
@@ -815,8 +844,8 @@ function KpisTab({
 
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="text-sm text-gray-500">
-          Rated: <span className="font-mono text-gray-200">{ratedCount}</span>
-          /<span className="font-mono text-gray-200">{all.length}</span>
+          Rated: <span className="font-mono text-[rgb(var(--text))]">{ratedCount}</span>
+          /<span className="font-mono text-[rgb(var(--text))]">{all.length}</span>
           {locked ? " (locked)" : null}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
@@ -827,7 +856,7 @@ function KpisTab({
             className={[
               "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
               proceedDisabled
-                ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
+                ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
                 : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
             ].join(" ")}
             title={
@@ -840,16 +869,6 @@ function KpisTab({
           >
             Proceed
           </button>
-          <div className="ml-auto">
-            <CursorPagination
-              canPrev={Boolean(pager?.canPrev)}
-              canNext={Boolean(pager?.canNext)}
-              onPrev={pager?.onPrev}
-              onNext={pager?.onNext}
-              loading={Boolean(pager?.loading)}
-              label="KPIs"
-            />
-          </div>
         </div>
       </div>
     </div>
@@ -864,7 +883,7 @@ function ValuesTab({
   setSelectedValues,
   onProceed,
   locked,
-  pager,
+  canProceed,
 }) {
   const valueRatings = useMemo(
     () => normalizeWebknotValueRatingsForState(selectedValues),
@@ -885,29 +904,29 @@ function ValuesTab({
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header>
-        <h2 className="text-3xl font-black uppercase tracking-tighter italic">Webknot Values</h2>
-        <p className="text-gray-500 text-sm mt-2">
+      <header className="rt-page-header">
+        <h2 className="rt-page-title">Webknot Values</h2>
+        <p className="rt-page-subtitle">
           Select the values you feel you demonstrated this cycle.
         </p>
       </header>
 
       {error ? (
-        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
           Failed to load values: <span className="font-mono">{error}</span>
         </div>
       ) : null}
       {loading ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
           Loading values…
         </div>
       ) : null}
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
         <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
-          <div>
-            <h3 className="text-xl font-black uppercase tracking-tight">Values</h3>
-            <p className="text-gray-500 text-sm mt-1">
+          <div className="rt-section-header">
+            <h3 className="rt-section-title">Values</h3>
+            <p className="rt-section-subtitle">
               Rated: <span className="font-mono">{ratedCount}</span> / {list.length}
             </p>
           </div>
@@ -915,14 +934,14 @@ function ValuesTab({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">Value</th>
                 <th className="p-6 font-black">Evaluation Criteria</th>
                 <th className="p-6 font-black">Your Rating (1-5)</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {list.map((v) => {
                 const id = String(v?.id || "");
                 const value = valueRatings?.[id];
@@ -930,9 +949,9 @@ function ValuesTab({
                 const pillar = String(v?.pillar || "—");
                 const isPillarMissing = !pillar || pillar === "—";
                 return (
-                  <tr key={id} className="hover:bg-white/[0.01] transition-colors">
+                  <tr key={id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                     <td className="p-6">
-                      <div className="font-bold text-white tracking-tight">{String(v?.title || id)}</div>
+                      <div className="font-bold text-[rgb(var(--text))] tracking-tight">{String(v?.title || id)}</div>
                       <div className="text-[10px] text-gray-500 font-bold uppercase mt-1 font-mono">{id}</div>
                     </td>
                     <td className="p-6">
@@ -940,7 +959,7 @@ function ValuesTab({
                         className={[
                           "inline-flex text-[10px] font-black uppercase px-3 py-1 rounded-lg border",
                           isPillarMissing
-                            ? "bg-white/5 text-gray-400 border-white/10"
+                            ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
                             : "bg-blue-500/10 text-blue-400 border-blue-500/20",
                         ].join(" ")}
                       >
@@ -956,6 +975,7 @@ function ValuesTab({
                           step={0.1}
                           value={display}
                           disabled={locked}
+                          onWheel={preventWheelInputChange}
                           onChange={(e) => {
                             if (locked) return;
                             const text = String(e.target.value ?? "").trim();
@@ -976,7 +996,7 @@ function ValuesTab({
                             });
                           }}
                           className={[
-                            "w-32 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+                            "rt-input w-32 py-3 px-4 text-sm",
                             locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
                           ].join(" ")}
                           placeholder="e.g., 4.2"
@@ -1000,21 +1020,25 @@ function ValuesTab({
       </section>
 
       <div className="flex items-center justify-end gap-3 flex-wrap">
+        {!locked && !canProceed ? (
+          <div className="text-xs text-[rgb(var(--muted))] mr-2">
+            Rate at least one value to continue.
+          </div>
+        ) : null}
         <button
           type="button"
           onClick={onProceed}
-          className="inline-flex items-center gap-2 rounded-2xl bg-purple-600 text-white px-6 py-3 font-black text-xs uppercase tracking-widest hover:bg-purple-500 shadow-xl shadow-purple-900/20 transition-all"
+          disabled={locked ? false : !canProceed}
+          className={[
+            "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
+            locked || canProceed
+              ? "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20"
+              : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed",
+          ].join(" ")}
+          title={locked || canProceed ? "Proceed" : "Rate at least one value to proceed"}
         >
           Proceed
         </button>
-        <CursorPagination
-          canPrev={Boolean(pager?.canPrev)}
-          canNext={Boolean(pager?.canNext)}
-          onPrev={pager?.onPrev}
-          onNext={pager?.onNext}
-          loading={Boolean(pager?.loading)}
-          label="Values"
-        />
       </div>
     </div>
   );
@@ -1028,6 +1052,7 @@ function CertificationsTab({
   loading,
   error,
   locked,
+  canProceed,
 }) {
   const [proofModal, setProofModal] = useState({ open: false, name: "" });
   const [proofDraft, setProofDraft] = useState("");
@@ -1054,43 +1079,43 @@ function CertificationsTab({
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header>
-        <h2 className="text-3xl font-black uppercase tracking-tighter italic">Certifications</h2>
-        <p className="text-gray-500 text-sm mt-2">
+      <header className="rt-page-header">
+        <h2 className="rt-page-title">Certifications</h2>
+        <p className="rt-page-subtitle">
           Certifications listed by Admin appear here. If something looks wrong, please contact support.
         </p>
       </header>
 
       {error ? (
-        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
           Failed to load certifications: <span className="font-mono">{error}</span>
         </div>
       ) : null}
 
       {loading ? (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
           Loading certifications…
         </div>
       ) : null}
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-white/[0.02] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-white/5">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">Certification</th>
                 <th className="p-6 font-black">Completed</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody className="divide-y divide-[rgb(var(--border))]">
               {sorted.map((c) => {
                 const name = String(c?.name || "");
                 const key = name.toLowerCase();
                 const checked = selectedKeySet.has(key);
                 return (
-                <tr key={key} className="hover:bg-white/[0.01] transition-colors">
+                <tr key={key} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                   <td className="p-6">
-                    <div className="font-bold text-white tracking-tight">{name}</div>
+                    <div className="font-bold text-[rgb(var(--text))] tracking-tight">{name}</div>
                     <div className="text-xs text-gray-500 mt-1">
                       Select the certifications you have completed.
                     </div>
@@ -1134,18 +1159,27 @@ function CertificationsTab({
           </table>
         </div>
 
-        <div className="p-6 border-t border-white/5 flex items-center justify-between gap-4 flex-wrap">
+        <div className="p-6 border-t border-[rgb(var(--border))] flex items-center justify-between gap-4 flex-wrap">
           <div className="text-sm text-gray-400">
             Selected: <span className="font-mono text-purple-200">{selectedKeySet.size}</span>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
+            {!locked && !canProceed ? (
+              <div className="text-xs text-[rgb(var(--muted))]">
+                Add proof for selected certifications.
+              </div>
+            ) : null}
             <button
               type="button"
               onClick={onProceed}
+              disabled={locked ? false : !canProceed}
               className={[
                 "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
-                "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
+                locked || canProceed
+                  ? "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20"
+                  : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed",
               ].join(" ")}
+              title={locked || canProceed ? "Proceed" : "Add proof for selected certifications"}
             >
               Proceed
             </button>
@@ -1155,7 +1189,7 @@ function CertificationsTab({
 
       {proofModal.open ? (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg bg-[#111] border border-white/10 rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
+          <div className="w-full max-w-lg rt-panel rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-black uppercase tracking-tight">Proof of Certification</h3>
@@ -1163,7 +1197,7 @@ function CertificationsTab({
               </div>
               <button
                 onClick={closeProofModal}
-                className="p-2 rounded-xl hover:bg-white/5"
+                  className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -1172,7 +1206,7 @@ function CertificationsTab({
             </div>
 
             {proofError ? (
-              <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+              <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
                 {proofError}
               </div>
             ) : null}
@@ -1217,7 +1251,7 @@ function CertificationsTab({
                   }}
                   disabled={locked}
                   className={[
-                    "mt-2 w-full bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+                    "mt-2 rt-input py-3 px-4 text-sm",
                     locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
                   ].join(" ")}
                   placeholder="Paste certificate URL / credential ID"
@@ -1231,7 +1265,7 @@ function CertificationsTab({
                 <button
                   type="button"
                   onClick={closeProofModal}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
+                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
                 >
                   Cancel
                 </button>
@@ -1240,7 +1274,7 @@ function CertificationsTab({
                   disabled={locked}
                   className={[
                     "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
-                    locked ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-500",
+                    locked ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-500",
                   ].join(" ")}
                 >
                   Save
@@ -1254,17 +1288,17 @@ function CertificationsTab({
   );
 }
 
-function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, locked }) {
+function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, locked, canProceed }) {
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header>
-        <h2 className="text-3xl font-black uppercase tracking-tighter italic">Recognitions</h2>
-        <p className="text-gray-500 text-sm mt-2">
+      <header className="rt-page-header">
+        <h2 className="rt-page-title">Recognitions</h2>
+        <p className="rt-page-subtitle">
           Report the number of awards received at All Hands.
         </p>
       </header>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Awards Received
         </div>
@@ -1274,6 +1308,7 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
             min={0}
             step={1}
             value={Number.isFinite(recognitionsCount) ? recognitionsCount : 0}
+            onWheel={preventWheelInputChange}
             onChange={(e) => {
               if (locked) return;
               const parsed = Number.parseInt(String(e.target.value || "0"), 10);
@@ -1281,7 +1316,7 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
             }}
             disabled={locked}
             className={[
-              "w-40 bg-[#0c0c0c] border border-white/10 rounded-2xl py-3 px-4 text-sm outline-none transition-all",
+              "rt-input w-40 py-3 px-4 text-sm",
               locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
             ].join(" ")}
           />
@@ -1291,10 +1326,21 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
         </div>
 
         <div className="mt-8 flex items-center justify-end gap-3 flex-wrap">
+          {!locked && !canProceed ? (
+            <div className="text-xs text-[rgb(var(--muted))] mr-2">
+              Enter a valid recognition count to continue.
+            </div>
+          ) : null}
           <button
             type="button"
             onClick={onProceed}
-            className="inline-flex items-center gap-2 rounded-2xl bg-purple-600 text-white px-6 py-3 font-black text-xs uppercase tracking-widest hover:bg-purple-500 shadow-xl shadow-purple-900/20 transition-all"
+            disabled={locked ? false : !canProceed}
+            className={[
+              "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
+              locked || canProceed
+                ? "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20"
+                : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed",
+            ].join(" ")}
           >
             Proceed
           </button>
@@ -1308,6 +1354,7 @@ function ReviewTab({
   employee,
   authEmail,
   role,
+  submissionMeta,
   kpis,
   kpiRatings,
   selfReviewText,
@@ -1347,29 +1394,106 @@ function ReviewTab({
     return out;
   }, [selectedValues, valuesIndex]);
 
+  const reviewFeedback = useMemo(() => {
+    const manager = submissionMeta?.managerReview && typeof submissionMeta.managerReview === "object"
+      ? submissionMeta.managerReview
+      : null;
+    const admin = submissionMeta?.adminReview && typeof submissionMeta.adminReview === "object"
+      ? submissionMeta.adminReview
+      : null;
+    const rows = [];
+
+    const managerComment = String(manager?.comments || "").trim();
+    if (managerComment) {
+      rows.push({
+        id: "manager",
+        reviewer: "Manager",
+        action: String(manager?.action || "").trim().toUpperCase(),
+        comment: managerComment,
+        reviewedAt: manager?.reviewedAt || submissionMeta?.managerSubmittedAt || null,
+      });
+    }
+
+    const adminComment = String(admin?.comments || "").trim();
+    if (adminComment) {
+      rows.push({
+        id: "admin",
+        reviewer: "Admin",
+        action: String(admin?.action || "").trim().toUpperCase(),
+        comment: adminComment,
+        reviewedAt: admin?.reviewedAt || submissionMeta?.adminSubmittedAt || null,
+      });
+    }
+
+    const needsResubmission = Boolean(isResubmissionRequested(submissionMeta));
+    return { rows, needsResubmission };
+  }, [
+    submissionMeta,
+    submissionMeta?.adminReview,
+    submissionMeta?.adminSubmittedAt,
+    submissionMeta?.managerReview,
+    submissionMeta?.managerSubmittedAt,
+  ]);
+
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header>
+      <header className="rt-page-header">
         <div>
-          <h2 className="text-3xl font-black uppercase tracking-tighter italic">Review</h2>
-          <p className="text-gray-500 text-sm mt-2">
+          <h2 className="rt-page-title">Review</h2>
+          <p className="rt-page-subtitle">
             Review everything before final submit.
           </p>
         </div>
       </header>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-4">
+      {reviewFeedback.needsResubmission && reviewFeedback.rows.length ? (
+        <section className="rounded-[2rem] border border-amber-500/40 bg-amber-500/10 p-5 sm:p-6 space-y-3">
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-900 dark:text-amber-100">
+            Changes Requested
+          </div>
+          {reviewFeedback.rows.map((row) => {
+            const isReject = row.action === "REJECT";
+            return (
+              <div key={row.id} className="rounded-2xl border border-amber-400/30 bg-white/40 dark:bg-black/20 p-4 space-y-2">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-100">
+                    {row.reviewer}
+                  </div>
+                  <div className={[
+                    "text-[10px] font-black uppercase tracking-wider rounded-full px-2 py-1 border",
+                    isReject
+                      ? "border-amber-500/40 text-amber-900 dark:text-amber-100 bg-amber-500/15"
+                      : "border-[rgb(var(--border))] text-[rgb(var(--muted))] bg-[rgb(var(--surface-2))]",
+                  ].join(" ")}>
+                    {row.action || "COMMENTED"}
+                  </div>
+                </div>
+                <div className="text-sm text-amber-950 dark:text-amber-50 whitespace-pre-wrap break-words">
+                  {row.comment}
+                </div>
+                {row.reviewedAt ? (
+                  <div className="text-[11px] text-amber-800/80 dark:text-amber-200/80 font-mono">
+                    Reviewed at: {formatReviewTimestamp(row.reviewedAt)}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </section>
+      ) : null}
+
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-4">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Employee
         </div>
-        <div className="text-sm text-gray-200">
+        <div className="text-sm text-[rgb(var(--text))]">
           {employee?.name || authEmail || "Unknown"}{" "}
           <span className="text-gray-500 font-mono">({employee?.id || "—"})</span>
         </div>
         <div className="text-xs text-gray-500 font-mono">{authEmail || "—"} • {role}</div>
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           KPI Ratings
         </div>
@@ -1377,7 +1501,7 @@ function ReviewTab({
           <div className="space-y-2">
             {kpis.map((k) => (
               <div key={k.id} className="flex items-center justify-between gap-4">
-                <div className="text-sm text-gray-200">{k.title}</div>
+                <div className="text-sm text-[rgb(var(--text))]">{k.title}</div>
                 <div className="text-sm font-mono text-purple-200">
                   {String(kpiRatings?.[k.id] ?? "—")}
                 </div>
@@ -1389,14 +1513,14 @@ function ReviewTab({
         )}
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Self Review
         </div>
-        <div className="text-sm text-gray-200 whitespace-pre-wrap">{String(selfReviewText || "")}</div>
+        <div className="text-sm text-[rgb(var(--text))] whitespace-pre-wrap">{String(selfReviewText || "")}</div>
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Webknot Values
         </div>
@@ -1404,7 +1528,7 @@ function ReviewTab({
           <div className="space-y-2">
             {valueRatings.map((row) => (
               <div key={row.id} className="flex items-center justify-between gap-4">
-                <div className="text-sm text-gray-200">{row.title}</div>
+                <div className="text-sm text-[rgb(var(--text))]">{row.title}</div>
                 <div className="text-sm font-mono text-purple-200">{row.rating.toFixed(1)}</div>
               </div>
             ))}
@@ -1414,7 +1538,7 @@ function ReviewTab({
         )}
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Certifications
         </div>
@@ -1422,7 +1546,7 @@ function ReviewTab({
           <div className="space-y-2">
             {selectedCertifications.map((c) => (
               <div key={String(c?.name || "")} className="flex items-start justify-between gap-4">
-                <div className="text-sm text-gray-200">{String(c?.name || "")}</div>
+                <div className="text-sm text-[rgb(var(--text))]">{String(c?.name || "")}</div>
                 <div className="text-xs text-gray-500 font-mono break-all">{String(c?.proof || "")}</div>
               </div>
             ))}
@@ -1432,11 +1556,11 @@ function ReviewTab({
         )}
       </section>
 
-      <section className="bg-[#111] border border-white/5 rounded-[2.5rem] p-8 shadow-2xl space-y-3">
+      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
         <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
           Recognitions
         </div>
-        <div className="text-sm text-gray-200">
+        <div className="text-sm text-[rgb(var(--text))]">
           Awards received at All Hands: <span className="font-mono text-purple-200">{Number(recognitionsCount || 0)}</span>
         </div>
       </section>
@@ -1454,7 +1578,7 @@ function ReviewTab({
             }
           }}
           disabled={locked}
-          className="inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest border border-white/10 text-gray-200 hover:bg-white/5 transition-all"
+          className="inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
         >
           Save draft
         </button>
@@ -1473,7 +1597,7 @@ function ReviewTab({
           className={[
             "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
             locked || !canFinalSubmit
-              ? "bg-white/5 text-gray-600 border border-white/10 cursor-not-allowed"
+              ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
               : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
           ].join(" ")}
           title={locked ? "This month's review is locked" : (!canFinalSubmit ? "Complete required fields first" : "Final submit")}
@@ -1490,6 +1614,13 @@ function ReviewTab({
 export default function EmployeePortal({ onLogout, auth }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
     if (typeof window === "undefined") return true;
+    try {
+      const stored = window.localStorage.getItem(EMPLOYEE_SIDEBAR_PREF_KEY);
+      if (stored === "0") return false;
+      if (stored === "1") return true;
+    } catch {
+      // ignore
+    }
     return window.innerWidth >= 1024;
   });
   const [activeTab, setActiveTab] = useState("profile");
@@ -1507,7 +1638,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [certificationCatalog, setCertificationCatalog] = useState([]);
   const [certificationsLoading, setCertificationsLoading] = useState(false);
   const [certificationsError, setCertificationsError] = useState("");
-  const [aiAgent, setAiAgent] = useState(() => loadFirstAIAgent());
+  const [aiAgent, setAiAgent] = useState(null);
   const [submissionMonth, setSubmissionMonth] = useState(() => formatYearMonth(new Date()));
   const [hydratingSubmission, setHydratingSubmission] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
@@ -1526,95 +1657,60 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [valuesIndex, setValuesIndex] = useState({}); // { [id]: { title, pillar } }
   const [valuesPage, setValuesPage] = useState({ cursor: null, nextCursor: null, stack: [], items: [] });
   const [valuesLoading, setValuesLoading] = useState(false);
-  const [valuesPageLoading, setValuesPageLoading] = useState(false);
   const [valuesError, setValuesError] = useState("");
   const [selectedValues, setSelectedValues] = useState({}); // { [valueId]: rating }
   const [recognitionsCount, setRecognitionsCount] = useState(0);
 
   const authEmail = String(auth?.email || auth?.claims?.sub || "").trim();
   const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
+  const subjectEmployeeId = useMemo(
+    () => String(
+      employee?.id ??
+      auth?.employeeId ??
+      auth?.empId ??
+      auth?.id ??
+      auth?.claims?.employeeId ??
+      ""
+    ).trim(),
+    [auth?.claims?.employeeId, auth?.empId, auth?.employeeId, auth?.id, employee?.id]
+  );
+  const cycleInfo = useMemo(
+    () => getCycleForMonth(submissionMonth || new Date()),
+    [submissionMonth]
+  );
+  const cycleMonthOptions = useMemo(
+    () => buildCycleMonthOptions(submissionMonth || new Date()),
+    [submissionMonth]
+  );
+
+  useEffect(() => {
+    if (!cycleMonthOptions.length) return;
+    const current = normalizeYearMonth(submissionMonth);
+    if (current && cycleMonthOptions.some((opt) => opt.value === current)) return;
+    setSubmissionMonth(cycleMonthOptions[cycleMonthOptions.length - 1].value);
+  }, [cycleMonthOptions, submissionMonth]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(EMPLOYEE_SIDEBAR_PREF_KEY, isSidebarOpen ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [isSidebarOpen]);
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      const key = String(e.key || "").toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === "b") {
+        e.preventDefault();
+        setIsSidebarOpen((prev) => !prev);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const kpiPrefetchCursorRef = useRef(null);
-
-  const loadKpiPage = useCallback(async ({ cursor, stack }, { signal } = {}) => {
-    setKpisError("");
-    setKpiPageLoading(true);
-    try {
-      const data = await fetchEmployeePortalKpiDefinitions({
-        limit: DEFAULT_PAGE_LIMIT,
-        cursor,
-        signal,
-      });
-      const page = normalizeCursorPage(data);
-      const normalized = normalizeKpiDefinitions(page.items);
-      setKpiPage({ cursor: cursor || null, nextCursor: page.nextCursor, stack: Array.isArray(stack) ? stack : [], items: normalized });
-      setKpis((prev) => {
-        const seen = new Set((prev || []).map((k) => String(k.id)));
-        const out = Array.isArray(prev) ? prev.slice() : [];
-        for (const k of normalized) {
-          const id = String(k?.id || "");
-          if (!id || seen.has(id)) continue;
-          seen.add(id);
-          out.push(k);
-        }
-        return out;
-      });
-    } catch (err) {
-      if (err?.name === "AbortError") return;
-      if (err?.status === 401) {
-        onLogout?.();
-        return;
-      }
-      setKpisError(err?.message || "Failed to load KPIs.");
-    } finally {
-      setKpiPageLoading(false);
-    }
-  }, [onLogout]);
-
-  const loadValuesPage = useCallback(async ({ cursor, stack }, { signal } = {}) => {
-    setValuesError("");
-    setValuesPageLoading(true);
-    try {
-      const data = await fetchEmployeePortalWebknotValues({
-        limit: getEmployeeValuesPageSize(),
-        cursor,
-        signal,
-      });
-      const page = normalizeCursorPage(data);
-      let normalized = normalizeWebknotValues(page.items);
-      let nextCursor = page.nextCursor;
-
-      if (!hasReadableValueItems(normalized)) {
-        const fallbackRaw = await fetchValues(true, { signal });
-        normalized = normalizeWebknotValuesList(fallbackRaw).map((v) => ({
-          id: String(v?.id || ""),
-          title: String(v?.title || v?.id || ""),
-          pillar: String(v?.pillar || "—"),
-        }));
-        nextCursor = null;
-      }
-
-      setValuesPage({ cursor: cursor || null, nextCursor, stack: Array.isArray(stack) ? stack : [], items: normalized });
-      setValuesIndex((prev) => {
-        const next = { ...(prev && typeof prev === "object" ? prev : {}) };
-        for (const v of normalized) {
-          const id = String(v?.id || "").trim();
-          if (!id) continue;
-          next[id] = { title: v.title, pillar: v.pillar };
-        }
-        return next;
-      });
-    } catch (err) {
-      if (err?.name === "AbortError") return;
-      if (err?.status === 401) {
-        onLogout?.();
-        return;
-      }
-      setValuesError(err?.message || "Failed to load values.");
-    } finally {
-      setValuesPageLoading(false);
-    }
-  }, [onLogout]);
 
   // If the browser duplicates the tab, it may clone in-memory state (including active tab).
   // This resets the UI to the first tab for the duplicated copy.
@@ -1646,14 +1742,25 @@ export default function EmployeePortal({ onLogout, auth }) {
   }, [onLogout]);
 
   useEffect(() => {
-    function onStorage(e) {
-      if (e?.key === AI_AGENTS_STORAGE_KEY || e?.key === AI_AGENTS_LEGACY_KEY) {
-        setAiAgent(loadFirstAIAgent());
+    let mounted = true;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        if (!mounted) return;
+        const data = await fetchActiveAiAgent({ signal: controller.signal });
+        const provider = String(data?.provider || "").trim();
+        setAiAgent(isAiEnhancementConfigured(data) ? { provider: provider || "openai" } : null);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        setAiAgent(null);
       }
-    }
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, [onLogout]);
+    })();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -1768,6 +1875,9 @@ export default function EmployeePortal({ onLogout, auth }) {
         const data = await fetchEmployeePortalKpiDefinitions({
           limit: DEFAULT_PAGE_LIMIT,
           cursor: null,
+          employeeId: employee?.id || null,
+          band: employee?.band || null,
+          stream: employee?.stream || null,
           signal: controller.signal,
         });
         const page = normalizeCursorPage(data);
@@ -1808,7 +1918,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       mounted = false;
       controller.abort();
     };
-  }, [onLogout]);
+  }, [employee?.band, employee?.id, employee?.stream, onLogout]);
 
   useEffect(() => {
     // Prefetch all remaining KPI pages while the user is on the KPI tab so we can enforce "rate all KPIs".
@@ -1832,6 +1942,9 @@ export default function EmployeePortal({ onLogout, auth }) {
           const data = await fetchEmployeePortalKpiDefinitions({
             limit: DEFAULT_PAGE_LIMIT,
             cursor,
+            employeeId: employee?.id || null,
+            band: employee?.band || null,
+            stream: employee?.stream || null,
             signal: controller.signal,
           });
           const page = normalizeCursorPage(data);
@@ -1868,39 +1981,66 @@ export default function EmployeePortal({ onLogout, auth }) {
       alive = false;
       controller.abort();
     };
-  }, [activeTab, kpiPrefetching, kpisFullyLoaded, onLogout]);
+  }, [activeTab, employee?.band, employee?.id, employee?.stream, kpiPrefetching, kpisFullyLoaded, onLogout]);
 
   useEffect(() => {
-    // Load first Webknot Values page on portal init (for values tab + review labels).
+    // Load all Webknot Values pages on portal init (for values tab + review labels).
     let mounted = true;
     const controller = new AbortController();
     (async () => {
       setValuesError("");
       setValuesLoading(true);
       try {
-        const data = await fetchEmployeePortalWebknotValues({
-          limit: getEmployeeValuesPageSize(),
-          cursor: null,
-          signal: controller.signal,
-        });
-        const page = normalizeCursorPage(data);
-        let normalized = normalizeWebknotValues(page.items);
-        let nextCursor = page.nextCursor;
+        const limit = getEmployeeValuesPageSize();
+        const allPortalValues = [];
+        let cursor = null;
+        for (let i = 0; i < 100; i += 1) {
+          const data = await fetchEmployeePortalWebknotValues({
+            limit,
+            cursor,
+            signal: controller.signal,
+          });
+          const page = normalizeCursorPage(data);
+          allPortalValues.push(...normalizeWebknotValues(page.items));
+          if (!page.nextCursor) break;
+          cursor = page.nextCursor;
+        }
+        let normalized = allPortalValues;
+        let nextCursor = null;
 
         if (!hasReadableValueItems(normalized)) {
-          const fallbackRaw = await fetchValues(true, { signal: controller.signal });
-          normalized = normalizeWebknotValuesList(fallbackRaw).map((v) => ({
+          const fallbackValues = [];
+          let fallbackCursor = null;
+          for (let i = 0; i < 100; i += 1) {
+            const fallbackRaw = await fetchValues(true, {
+              limit: 100,
+              cursor: fallbackCursor,
+              signal: controller.signal,
+            });
+            const page = normalizeCursorPage(fallbackRaw);
+            fallbackValues.push(...normalizeWebknotValuesList(page.items));
+            if (!page.nextCursor) break;
+            fallbackCursor = page.nextCursor;
+          }
+          normalized = fallbackValues.map((v) => ({
             id: String(v?.id || ""),
             title: String(v?.title || v?.id || ""),
             pillar: String(v?.pillar || "—"),
           }));
-          nextCursor = null;
         }
 
         if (!mounted) return;
-        setValuesPage({ cursor: null, nextCursor, stack: [], items: normalized });
+        const deduped = [];
+        const seen = new Set();
+        for (const v of normalized) {
+          const id = String(v?.id || "").trim();
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          deduped.push(v);
+        }
+        setValuesPage({ cursor: null, nextCursor, stack: [], items: deduped });
         const idx = {};
-        for (const v of normalized) idx[String(v.id)] = { title: v.title, pillar: v.pillar };
+        for (const v of deduped) idx[String(v.id)] = { title: v.title, pillar: v.pillar };
         setValuesIndex(idx);
       } catch (err) {
         if (err?.name === "AbortError") return;
@@ -1953,6 +2093,11 @@ export default function EmployeePortal({ onLogout, auth }) {
             kpiRatings: {},
             selectedValues: {},
             recognitionsCount: 0,
+            submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
+            actorRole: "EMPLOYEE",
+            subjectEmployeeId,
+            reviewStatus: "DRAFT",
+            reopenedForResubmission: false,
           });
           lastSavedDraftHashRef.current = payloadHash(cleared);
           return;
@@ -1962,6 +2107,16 @@ export default function EmployeePortal({ onLogout, auth }) {
           id: normalized.id,
           month: normalized.month || submissionMonth,
           status: normalized.status || null,
+          submissionType: normalized.submissionType || null,
+          cycleKey: normalized.cycleKey || null,
+          cycleLabel: normalized.cycleLabel || null,
+          reviewStatus: normalized.reviewStatus || null,
+          managerReview: normalized.managerReview || null,
+          managerSubmittedAt: normalized.managerSubmittedAt || null,
+          adminReview: normalized.adminReview || null,
+          adminSubmittedAt: normalized.adminSubmittedAt || null,
+          reopenedForResubmission: Boolean(normalized.reopenedForResubmission),
+          resubmissionRequested: Boolean(normalized.resubmissionRequested),
           submittedAt: normalized.submittedAt || null,
           updatedAt: normalized.updatedAt || null,
         });
@@ -1989,6 +2144,11 @@ export default function EmployeePortal({ onLogout, auth }) {
           kpiRatings: nextRatings,
           selectedValues: nextValues,
           recognitionsCount: normalized.recognitionsCount,
+          submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
+          actorRole: "EMPLOYEE",
+          subjectEmployeeId,
+          reviewStatus: normalized.reviewStatus || "DRAFT",
+          reopenedForResubmission: normalized.reopenedForResubmission,
         });
         lastSavedDraftHashRef.current = payloadHash(loaded);
       } catch (err) {
@@ -2009,10 +2169,10 @@ export default function EmployeePortal({ onLogout, auth }) {
       mounted = false;
       controller.abort();
     };
-  }, [onLogout, submissionMonth]);
+  }, [onLogout, subjectEmployeeId, submissionMonth]);
 
   const locked = useMemo(
-    () => isFinalSubmissionStatus(submissionMeta?.status, submissionMeta),
+    () => isAuthorSubmissionLocked(submissionMeta),
     [submissionMeta]
   );
 
@@ -2027,6 +2187,11 @@ export default function EmployeePortal({ onLogout, auth }) {
       kpiRatings,
       selectedValues,
       recognitionsCount,
+      submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
+      actorRole: "EMPLOYEE",
+      subjectEmployeeId,
+      reviewStatus: submissionMeta?.reviewStatus || "DRAFT",
+      reopenedForResubmission: submissionMeta?.reopenedForResubmission,
     });
     const hash = payloadHash(payload);
     if (hash === lastSavedDraftHashRef.current) return;
@@ -2059,6 +2224,9 @@ export default function EmployeePortal({ onLogout, auth }) {
     selectedCertifications,
     selectedValues,
     selfReviewText,
+    subjectEmployeeId,
+    submissionMeta?.reviewStatus,
+    submissionMeta?.reopenedForResubmission,
     submissionMonth,
   ]);
 
@@ -2072,6 +2240,11 @@ export default function EmployeePortal({ onLogout, auth }) {
       kpiRatings,
       selectedValues,
       recognitionsCount,
+      submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
+      actorRole: "EMPLOYEE",
+      subjectEmployeeId,
+      reviewStatus: submissionMeta?.reviewStatus || "DRAFT",
+      reopenedForResubmission: submissionMeta?.reopenedForResubmission,
     });
     const hash = payloadHash(payload);
     setDraftSaveError("");
@@ -2123,6 +2296,11 @@ export default function EmployeePortal({ onLogout, auth }) {
         kpiRatings,
         selectedValues,
         recognitionsCount,
+        submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
+        actorRole: "EMPLOYEE",
+        subjectEmployeeId,
+        reviewStatus: "SUBMITTED",
+        reopenedForResubmission: false,
       }),
       submittedAt: new Date().toISOString(),
     };
@@ -2137,6 +2315,16 @@ export default function EmployeePortal({ onLogout, auth }) {
         id: normalized?.id ?? submissionMeta?.id ?? null,
         month: normalized?.month ?? submissionMonth,
         status: normalized?.status ?? submissionMeta?.status ?? null,
+        submissionType: normalized?.submissionType ?? "EMPLOYEE_MONTHLY_SUBMISSION",
+        cycleKey: normalized?.cycleKey ?? buildCycleMeta(submissionMonth).cycleKey,
+        cycleLabel: normalized?.cycleLabel ?? buildCycleMeta(submissionMonth).cycleLabel,
+        reviewStatus: normalized?.reviewStatus ?? "SUBMITTED",
+        managerReview: normalized?.managerReview ?? null,
+        managerSubmittedAt: normalized?.managerSubmittedAt ?? null,
+        adminReview: normalized?.adminReview ?? null,
+        adminSubmittedAt: normalized?.adminSubmittedAt ?? null,
+        reopenedForResubmission: Boolean(normalized?.reopenedForResubmission),
+        resubmissionRequested: Boolean(normalized?.resubmissionRequested),
         submittedAt: normalized?.submittedAt ?? submissionMeta?.submittedAt ?? payload.submittedAt ?? now,
         updatedAt: normalized?.updatedAt ?? now,
       });
@@ -2148,6 +2336,11 @@ export default function EmployeePortal({ onLogout, auth }) {
           kpiRatings,
           selectedValues,
           recognitionsCount,
+          submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
+          actorRole: "EMPLOYEE",
+          subjectEmployeeId,
+          reviewStatus: "SUBMITTED",
+          reopenedForResubmission: false,
         })
       );
     } catch (err) {
@@ -2165,11 +2358,6 @@ export default function EmployeePortal({ onLogout, auth }) {
     const list = Array.isArray(kpis) ? kpis : [];
     return list.filter((k) => kpiAppliesToEmployee(k, employee));
   }, [employee, kpis]);
-
-  const visibleKpiPage = useMemo(() => {
-    const list = Array.isArray(kpiPage?.items) ? kpiPage.items : [];
-    return list.filter((k) => kpiAppliesToEmployee(k, employee));
-  }, [employee, kpiPage?.items]);
 
   const canFinalSubmit = useMemo(() => {
     if (locked) return false;
@@ -2191,6 +2379,60 @@ export default function EmployeePortal({ onLogout, auth }) {
       : true;
     return textOk && kpisOk && certsOk;
   }, [kpiRatings, kpisFullyLoaded, locked, selectedCertifications, selfReviewText, visibleKpis]);
+
+  const valuesRatedCount = useMemo(() => {
+    const list = Array.isArray(valuesPage?.items) ? valuesPage.items : [];
+    if (!list.length) return 0;
+    const ratings = normalizeWebknotValueRatingsForState(selectedValues);
+    let count = 0;
+    for (const row of list) {
+      const id = String(row?.id || "").trim();
+      if (!id) continue;
+      const value = ratings?.[id];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 5) count += 1;
+    }
+    return count;
+  }, [selectedValues, valuesPage?.items]);
+
+  const valuesCanProceed = useMemo(() => {
+    if (locked) return true;
+    const total = Array.isArray(valuesPage?.items) ? valuesPage.items.length : 0;
+    if (total === 0) return true;
+    return valuesRatedCount > 0;
+  }, [locked, valuesPage?.items, valuesRatedCount]);
+
+  const certificationsCanProceed = useMemo(() => {
+    if (locked) return true;
+    return Array.isArray(selectedCertifications)
+      ? selectedCertifications.every((c) => Boolean(String(c?.name || "").trim()) && Boolean(String(c?.proof || "").trim()))
+      : true;
+  }, [locked, selectedCertifications]);
+
+  const recognitionsCanProceed = useMemo(() => {
+    if (locked) return true;
+    return Number.isFinite(Number(recognitionsCount)) && Number(recognitionsCount) >= 0;
+  }, [locked, recognitionsCount]);
+
+  const kpisReadyForNext = useMemo(() => {
+    if (locked) return true;
+    if (!kpisFullyLoaded) return false;
+    const textOk = Boolean(String(selfReviewText || "").trim());
+    const visible = Array.isArray(visibleKpis) ? visibleKpis : [];
+    const kpisOk = visible.length === 0
+      ? true
+      : visible.every((k) => {
+          const v = kpiRatings?.[k.id];
+          return typeof v === "number" && Number.isFinite(v) && v >= 1 && v <= 5;
+        });
+    return textOk && kpisOk;
+  }, [kpiRatings, kpisFullyLoaded, locked, selfReviewText, visibleKpis]);
+
+  function goToTab(nextTab) {
+    setActiveTab(nextTab);
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    }
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -2239,65 +2481,47 @@ export default function EmployeePortal({ onLogout, auth }) {
     return { name, email: authEmail, role, designation };
   }, [auth?.designation, auth?.employeeName, authEmail, employee?.designation, employee?.name, role]);
 
-  const kpiPager = useMemo(() => {
-    const stack = Array.isArray(kpiPage?.stack) ? kpiPage.stack : [];
-    const cursor = kpiPage?.cursor ?? null;
-    const nextCursor = kpiPage?.nextCursor ?? null;
-    return {
-      canPrev: stack.length > 0,
-      canNext: Boolean(nextCursor),
-      loading: kpiPageLoading,
-      onPrev: () => {
-        if (stack.length === 0) return;
-        const prevCursor = stack[stack.length - 1] ?? null;
-        const nextStack = stack.slice(0, -1);
-        loadKpiPage({ cursor: prevCursor, stack: nextStack }).catch(() => {});
-      },
-      onNext: () => {
-        if (!nextCursor) return;
-        const nextStack = stack.concat([cursor]);
-        loadKpiPage({ cursor: nextCursor, stack: nextStack }).catch(() => {});
-      },
-    };
-  }, [kpiPage?.cursor, kpiPage?.nextCursor, kpiPage?.stack, kpiPageLoading, loadKpiPage]);
+  const needsResubmission = useMemo(
+    () => Boolean(isResubmissionRequested(submissionMeta)),
+    [submissionMeta]
+  );
 
-  const valuesPager = useMemo(() => {
-    const stack = Array.isArray(valuesPage?.stack) ? valuesPage.stack : [];
-    const cursor = valuesPage?.cursor ?? null;
-    const nextCursor = valuesPage?.nextCursor ?? null;
-    const busy = valuesLoading || valuesPageLoading;
-    return {
-      canPrev: stack.length > 0,
-      canNext: Boolean(nextCursor),
-      loading: busy,
-      onPrev: () => {
-        if (stack.length === 0) return;
-        const prevCursor = stack[stack.length - 1] ?? null;
-        const nextStack = stack.slice(0, -1);
-        loadValuesPage({ cursor: prevCursor, stack: nextStack }).catch(() => {});
-      },
-      onNext: () => {
-        if (!nextCursor) return;
-        const nextStack = stack.concat([cursor]);
-        loadValuesPage({ cursor: nextCursor, stack: nextStack }).catch(() => {});
-      },
-    };
-  }, [loadValuesPage, valuesLoading, valuesPage?.cursor, valuesPage?.nextCursor, valuesPage?.stack, valuesPageLoading]);
+  const latestReviewComment = useMemo(() => {
+    const manager = String(submissionMeta?.managerReview?.comments || "").trim();
+    const admin = String(submissionMeta?.adminReview?.comments || "").trim();
+    return admin || manager || "";
+  }, [submissionMeta?.adminReview?.comments, submissionMeta?.managerReview?.comments]);
+
+  const stepItems = useMemo(() => ([
+    { id: "profile", label: "Profile", status: "done" },
+    { id: "kpis", label: "KPIs", status: kpisReadyForNext ? "done" : "pending" },
+    { id: "values", label: "Values", status: valuesCanProceed ? "done" : "pending" },
+    { id: "certifications", label: "Certifications", status: certificationsCanProceed ? "done" : "pending" },
+    { id: "recognitions", label: "Recognitions", status: recognitionsCanProceed ? "done" : "pending" },
+    { id: "review", label: "Review", status: canFinalSubmit || locked ? "done" : "pending" },
+  ]), [
+    canFinalSubmit,
+    certificationsCanProceed,
+    kpisReadyForNext,
+    locked,
+    recognitionsCanProceed,
+    valuesCanProceed,
+  ]);
 
   const main = (() => {
     if (activeTab === "profile") {
       return (
         <>
           {error ? (
-            <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+            <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
               Failed to load employee details: <span className="font-mono">{error}</span>
-              <div className="mt-2 text-xs text-gray-300">
+              <div className="mt-2 text-xs text-slate-600 dark:text-slate-300">
                 If this is unexpected, please contact support: <span className="font-mono">hr@webknot.in</span>
               </div>
             </div>
           ) : null}
           {loading ? (
-            <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-gray-300">
+            <div className="max-w-4xl mx-auto mb-6 rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
               Loading profile…
             </div>
           ) : null}
@@ -2308,7 +2532,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     if (activeTab === "kpis") {
       return (
         <KpisTab
-          pageKpis={visibleKpiPage}
+          pageKpis={visibleKpis}
           allKpis={visibleKpis}
           ratings={kpiRatings}
           setRatings={setKpiRatings}
@@ -2316,12 +2540,11 @@ export default function EmployeePortal({ onLogout, auth }) {
           error={kpisError}
           fullyLoaded={kpisFullyLoaded}
           prefetching={kpiPrefetching}
-          pager={kpiPager}
           aiAgent={aiAgent}
           selfReviewText={selfReviewText}
           setSelfReviewText={setSelfReviewText}
           locked={locked}
-          onProceed={() => setActiveTab("values")}
+          onProceed={() => goToTab("values")}
         />
       );
     }
@@ -2329,13 +2552,13 @@ export default function EmployeePortal({ onLogout, auth }) {
       return (
         <ValuesTab
           items={valuesPage.items}
-          loading={valuesLoading || valuesPageLoading}
+          loading={valuesLoading}
           error={valuesError}
           selectedValues={selectedValues}
           setSelectedValues={setSelectedValues}
-          pager={valuesPager}
           locked={locked}
-          onProceed={() => setActiveTab("certifications")}
+          canProceed={valuesCanProceed}
+          onProceed={() => goToTab("certifications")}
         />
       );
     }
@@ -2345,7 +2568,8 @@ export default function EmployeePortal({ onLogout, auth }) {
           catalog={certificationCatalog}
           selectedCertifications={selectedCertifications}
           setSelectedCertifications={setSelectedCertifications}
-          onProceed={() => setActiveTab("recognitions")}
+          canProceed={certificationsCanProceed}
+          onProceed={() => goToTab("recognitions")}
           loading={certificationsLoading}
           error={certificationsError}
           locked={locked}
@@ -2358,7 +2582,8 @@ export default function EmployeePortal({ onLogout, auth }) {
           recognitionsCount={recognitionsCount}
           setRecognitionsCount={setRecognitionsCount}
           locked={locked}
-          onProceed={() => setActiveTab("review")}
+          canProceed={recognitionsCanProceed}
+          onProceed={() => goToTab("review")}
         />
       );
     }
@@ -2368,6 +2593,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           employee={employee}
           authEmail={authEmail}
           role={role}
+          submissionMeta={submissionMeta}
           kpis={visibleKpis}
           kpiRatings={kpiRatings}
           selfReviewText={selfReviewText}
@@ -2386,7 +2612,25 @@ export default function EmployeePortal({ onLogout, auth }) {
   })();
 
   return (
-    <div className="flex min-h-screen bg-[#080808] text-slate-100 font-sans overflow-x-hidden">
+    <div className="rt-shell flex min-h-screen text-[rgb(var(--text))] font-sans overflow-x-hidden">
+      {isSidebarOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-label="Close sidebar"
+        />
+      ) : null}
+
+      <button
+        type="button"
+        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
+        onClick={() => setIsSidebarOpen((prev) => !prev)}
+        aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
+      >
+        {isSidebarOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
+      </button>
+
       <Sidebar
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
@@ -2396,15 +2640,36 @@ export default function EmployeePortal({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? "ml-64" : "ml-20"} p-6 lg:p-12`}>
+      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-72" : "md:ml-24"} p-4 pt-20 md:pt-6 lg:p-12`}>
+        <div className="pointer-events-none absolute inset-0 -z-10">
+          <div className="absolute -top-24 right-8 h-64 w-64 rounded-full bg-blue-500/10 blur-3xl" />
+          <div className="absolute bottom-6 left-1/3 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
+        </div>
+        <div className="max-w-4xl mx-auto mb-6 rt-page-header">
+          <div className="rt-kicker">Employee Portal</div>
+          <h1 className="rt-page-title">Monthly Performance Workspace</h1>
+          <p className="rt-page-subtitle">
+            Complete each step, then submit your final review for manager evaluation.
+          </p>
+        </div>
         {portalBootstrapError ? (
-          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-200">
+          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
             {portalBootstrapError}
           </div>
         ) : null}
-        {locked ? (
-          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-200">
-            This month's self review is locked (already submitted). No further edits or submissions are allowed.
+        {locked && !needsResubmission ? (
+          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-200">
+            This month's self review is submitted and locked. No further edits are allowed.
+          </div>
+        ) : null}
+        {!locked && needsResubmission ? (
+          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
+            Changes requested on your submission. Please update and resubmit this month.
+            {latestReviewComment ? (
+              <div className="mt-2 text-xs font-mono text-amber-900 dark:text-amber-100 break-words">
+                Feedback: {latestReviewComment}
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className="max-w-4xl mx-auto mb-6 flex items-end justify-between gap-4 flex-wrap">
@@ -2412,25 +2677,33 @@ export default function EmployeePortal({ onLogout, auth }) {
             <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
               Month
             </div>
-            <input
-              type="month"
+            <select
               value={submissionMonth}
               onChange={(e) => {
-                const next = String(e.target.value || "").trim();
+                const next = normalizeYearMonth(e.target.value);
                 if (!next) return;
                 setSubmissionMonth(next);
               }}
-              className="bg-[#111] border border-white/10 rounded-2xl py-3 px-4 text-sm focus:border-purple-500 outline-none transition-all text-gray-200"
+              className="rt-input py-3 px-4 text-sm"
               aria-label="Select submission month"
               title="Select submission month"
-            />
+            >
+              {cycleMonthOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <div className="text-[10px] text-slate-600 dark:text-slate-400">
+              Cycle: {cycleInfo?.label || "May-Oct / Nov-Apr"}
+            </div>
           </div>
 
           <div className="text-right">
             <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
               Draft
             </div>
-            <div className="mt-1 text-xs text-gray-300">
+            <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">
               {locked
                 ? "Locked"
                 : hydratingSubmission
@@ -2442,12 +2715,14 @@ export default function EmployeePortal({ onLogout, auth }) {
                     : "Saved"}
             </div>
             {draftSaveError ? (
-              <div className="mt-1 text-[10px] font-mono text-red-300 max-w-[260px] break-words">
+              <div className="mt-1 text-[10px] font-mono text-red-700 dark:text-red-300 max-w-[260px] break-words">
                 {draftSaveError}
               </div>
             ) : null}
           </div>
         </div>
+
+        <SubmissionStepper activeTab={activeTab} steps={stepItems} onNavigate={goToTab} />
 
         {main}
       </main>
