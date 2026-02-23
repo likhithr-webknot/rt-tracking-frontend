@@ -21,6 +21,15 @@ export default function WebknotValueDirectory({
       return title.includes(q) || pillar.includes(q) || description.includes(q);
     });
   }, [values, searchQuery]);
+  const pillarCount = useMemo(
+    () =>
+      new Set(
+        (Array.isArray(values) ? values : [])
+          .map((v) => String(v?.pillar || "").trim())
+          .filter(Boolean)
+      ).size,
+    [values]
+  );
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -40,6 +49,21 @@ export default function WebknotValueDirectory({
           <Plus size={18} /> Add New Value
         </button>
       </header>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-4xl">
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Total Values</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{values.length}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Pillars</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{pillarCount}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">On Page</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{filtered.length}</div>
+        </div>
+      </div>
 
       <div className="relative group max-w-2xl">
         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
@@ -130,4 +154,3 @@ export default function WebknotValueDirectory({
     </div>
   );
 }
-

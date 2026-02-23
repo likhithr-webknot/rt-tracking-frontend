@@ -4,6 +4,7 @@ import EmployeePortal from "./components/employee/EmployeePortal.jsx";
 import ManagerPortal from "./components/manager/ManagerPortal.jsx";
 import LoginPage from "./components/auth/LoginPage.jsx";
 import SubmissionWindowClosed from "./components/employee/SubmissionWindowClosed.jsx";
+import { fetchManagerReportees, normalizeEmployees } from "./api/employees.js";
 import {
   clearAuth,
   clearManualLogoutMark,
@@ -13,10 +14,7 @@ import {
   markManualLogout,
   setAuth,
 } from "./api/auth.js";
-import {
-  fetchSubmissionWindowCurrent,
-} from "./api/submission-window.js";
-import { fetchManagerReportees, normalizeEmployees } from "./api/employees.js";
+import { fetchSubmissionWindowCurrent } from "./api/submission-window.js";
 
 function withWindowSource(data, source) {
   const obj = data && typeof data === "object" ? data : {};
@@ -30,24 +28,11 @@ function withWindowSource(data, source) {
 export default function App() {
   const [auth, setAuthState] = useState(() => getAuth());
   const [authChecking, setAuthChecking] = useState(() => !getAuth());
+  const [hasReportees, setHasReportees] = useState(null);
   const [windowData, setWindowData] = useState(null);
   const [windowLoading, setWindowLoading] = useState(false);
   const [windowError, setWindowError] = useState("");
   const [windowRefreshNonce, setWindowRefreshNonce] = useState(0);
-  const [managerAccessLoading, setManagerAccessLoading] = useState(false);
-  const [managerHasReportees, setManagerHasReportees] = useState(null);
-
-  const authEmployeeId = useMemo(
-    () => String(
-      auth?.employeeId ??
-      auth?.empId ??
-      auth?.id ??
-      auth?.claims?.employeeId ??
-      auth?.claims?.empId ??
-      ""
-    ).trim(),
-    [auth?.claims?.empId, auth?.claims?.employeeId, auth?.empId, auth?.employeeId, auth?.id]
-  );
 
   const roleLabel = useMemo(() => {
     const role = String(auth?.role ?? "").trim();
@@ -66,34 +51,35 @@ export default function App() {
   }, [auth?.portal, auth?.role]);
 
   useEffect(() => {
-    if (!auth || roleLabel !== "Manager") {
-      setManagerAccessLoading(false);
-      setManagerHasReportees(null);
+    if (!auth) {
+      setHasReportees(null);
+      return;
+    }
+    if (roleLabel === "Admin") {
+      setHasReportees(false);
       return;
     }
 
-    if (!authEmployeeId) {
-      setManagerAccessLoading(false);
-      setManagerHasReportees(false);
+    const managerId = String(auth?.employeeId ?? auth?.empId ?? auth?.id ?? "").trim();
+    if (!managerId) {
+      setHasReportees(false);
       return;
     }
 
     let alive = true;
     const controller = new AbortController();
+    setHasReportees(null);
 
     (async () => {
-      setManagerAccessLoading(true);
       try {
-        const data = await fetchManagerReportees(authEmployeeId, { signal: controller.signal });
+        const data = await fetchManagerReportees(managerId, { signal: controller.signal });
         if (!alive) return;
-        const count = normalizeEmployees(data).length;
-        setManagerHasReportees(count > 0);
+        const list = normalizeEmployees(data);
+        setHasReportees(list.length > 0);
       } catch (err) {
-        if (!alive) return;
-        if (err?.name === "AbortError") return;
-        setManagerHasReportees(false);
-      } finally {
-        if (alive) setManagerAccessLoading(false);
+        if (!alive || err?.name === "AbortError") return;
+        // Fallback to role-based behavior if reportee probing fails.
+        setHasReportees(roleLabel === "Manager");
       }
     })();
 
@@ -101,17 +87,20 @@ export default function App() {
       alive = false;
       controller.abort();
     };
-  }, [auth, authEmployeeId, roleLabel]);
+  }, [auth, roleLabel]);
 
   const effectivePortalRole = useMemo(() => {
-    if (roleLabel !== "Manager") return roleLabel;
-    return managerHasReportees ? "Manager" : "Employee";
-  }, [managerHasReportees, roleLabel]);
+    if (roleLabel === "Admin") return "Admin";
+    if (hasReportees === true) return "Manager";
+    return "Employee";
+  }, [hasReportees, roleLabel]);
+
+  const roleProbeLoading = Boolean(auth) && roleLabel !== "Admin" && hasReportees === null;
 
   useEffect(() => {
-    // Restore session from cookie on refresh/new tab.
     let alive = true;
     const controller = new AbortController();
+
     async function run() {
       setAuthChecking(true);
       if (hasManualLogoutMark()) {
@@ -120,11 +109,11 @@ export default function App() {
         setAuthChecking(false);
         return;
       }
+
       try {
         const me = await fetchMe({ signal: controller.signal });
         if (!alive) return;
         if (!me) {
-          // Server says no session: clear any client-side cached session and go to login.
           clearAuth();
           setAuthState(null);
           return;
@@ -133,13 +122,12 @@ export default function App() {
         setAuthState(getAuth() || me);
       } catch {
         if (!alive) return;
-        // If /auth/me fails, fall back to whatever sessionStorage has.
         setAuthState(getAuth());
       } finally {
-        const stillAlive = alive;
-        if (stillAlive) setAuthChecking(false);
+        if (alive) setAuthChecking(false);
       }
     }
+
     run();
     return () => {
       alive = false;
@@ -148,7 +136,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // Gate Employee/Manager portal by the server submission-window state.
     if (!auth) {
       setWindowData(null);
       setWindowError("");
@@ -168,18 +155,16 @@ export default function App() {
 
       if (showSpinner) setWindowLoading(true);
       setWindowError("");
+
       try {
         const globalWindow = await fetchSubmissionWindowCurrent({ signal: controller.signal });
-        const data = withWindowSource(globalWindow, "global");
-
         if (!alive) return;
-        setWindowData(data);
+        setWindowData(withWindowSource(globalWindow, "global"));
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!alive) return;
+
         if (err?.status === 401) {
-          // Some backends return 401 for "not permitted" (not just "not authenticated").
-          // Confirm whether the session is actually gone before forcing a logout.
           try {
             const me = await fetchMe({ signal: controller.signal }).catch(() => null);
             if (!me) {
@@ -190,14 +175,14 @@ export default function App() {
             setAuth(me);
             setAuthState(getAuth() || me);
           } catch {
-            // If we can't verify, keep the session and show an error instead of looping to login.
+            // Keep session state and show error.
           }
         }
+
         setWindowError(err?.message || "Failed to load submission window status.");
         setWindowData(null);
       } finally {
-        const stillAlive = alive;
-        if (stillAlive) {
+        if (alive) {
           setWindowLoading(false);
           timer = window.setTimeout(() => load({ showSpinner: false }), 30_000);
         }
@@ -211,7 +196,7 @@ export default function App() {
       if (timer) window.clearTimeout(timer);
       if (controller) controller.abort();
     };
-  }, [auth, authEmployeeId, effectivePortalRole, windowRefreshNonce]);
+  }, [auth, effectivePortalRole, windowRefreshNonce]);
 
   const logout = useCallback(() => {
     markManualLogout();
@@ -228,9 +213,7 @@ export default function App() {
       <div className="rt-shell grid place-items-center px-6">
         <div className="rt-panel text-center px-8 py-10 w-full max-w-xl">
           <div className="rt-kicker">Loading</div>
-          <div className="mt-2 rt-title">
-            Restoring Session
-          </div>
+          <div className="mt-2 rt-title">Restoring Session</div>
           <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">Checking authentication…</div>
         </div>
       </div>
@@ -253,13 +236,13 @@ export default function App() {
     return <AdminControlCenter onLogout={logout} auth={auth} />;
   }
 
-  if (roleLabel === "Manager" && managerAccessLoading) {
+  if (roleProbeLoading) {
     return (
       <div className="rt-shell grid place-items-center px-6">
         <div className="rt-panel text-center px-8 py-10 w-full max-w-xl">
           <div className="rt-kicker">Loading</div>
-          <div className="mt-2 rt-title">Checking Manager Access</div>
-          <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">Validating reportees…</div>
+          <div className="mt-2 rt-title">Resolving Access</div>
+          <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">Checking reportee access…</div>
         </div>
       </div>
     );
@@ -270,9 +253,7 @@ export default function App() {
       <div className="rt-shell grid place-items-center px-6">
         <div className="rt-panel text-center px-8 py-10 w-full max-w-xl">
           <div className="rt-kicker">Loading</div>
-          <div className="mt-2 rt-title">
-            Checking Submission Window
-          </div>
+          <div className="mt-2 rt-title">Checking Submission Window</div>
           <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">Please wait…</div>
         </div>
       </div>

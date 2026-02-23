@@ -2,11 +2,22 @@ import { getAuthHeader } from "./auth.js";
 import { buildApiUrl, withCsrfHeaders } from "./http.js";
 
 export function normalizeEmployees(data) {
-  const arr = Array.isArray(data)
-    ? data
-    : Array.isArray(data?.data)
-      ? data.data
-      : [];
+  const root = data && typeof data === "object" ? data : {};
+  const nested = root?.data && typeof root.data === "object" ? root.data : null;
+  const arr =
+    (Array.isArray(data) && data) ||
+    (Array.isArray(root?.data) && root.data) ||
+    (Array.isArray(root?.employees) && root.employees) ||
+    (Array.isArray(root?.reportees) && root.reportees) ||
+    (Array.isArray(root?.items) && root.items) ||
+    (Array.isArray(root?.results) && root.results) ||
+    (Array.isArray(root?.content) && root.content) ||
+    (Array.isArray(nested?.employees) && nested.employees) ||
+    (Array.isArray(nested?.reportees) && nested.reportees) ||
+    (Array.isArray(nested?.items) && nested.items) ||
+    (Array.isArray(nested?.results) && nested.results) ||
+    (Array.isArray(nested?.content) && nested.content) ||
+    [];
 
   return arr.map((e, i) => ({
     id: String(e.employeeId ?? e.id ?? e.empId ?? `EMP_${i}`),

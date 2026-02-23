@@ -4,6 +4,12 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -38,7 +44,7 @@ function StatCard({ label, value, icon }) {
     <div className="rt-panel p-8 relative overflow-hidden group">
       <div className="absolute -right-2 -top-2 opacity-10 transform rotate-12">{icon}</div>
       <p className="rt-kicker mb-1">{label}</p>
-      <p className="text-4xl font-black mb-1 text-[rgb(var(--text))]">{value}</p>
+      <p className="text-4xl mb-1 rt-stat-value">{value}</p>
     </div>
   );
 }
@@ -49,9 +55,9 @@ function clampAbility(n) {
 }
 
 function classifyBellCurve(avg) {
-  if (avg >= 4.2) return { label: "Top", className: "bg-emerald-500/10 text-emerald-300 border-emerald-500/20" };
-  if (avg >= 3.3) return { label: "Core", className: "bg-blue-500/10 text-blue-300 border-blue-500/20" };
-  return { label: "Low", className: "bg-amber-500/10 text-amber-300 border-amber-500/20" };
+  if (avg >= 4.2) return { label: "Top", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20" };
+  if (avg >= 3.3) return { label: "Core", className: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20" };
+  return { label: "Low", className: "bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/20" };
 }
 
 function formatDelta(delta) {
@@ -66,6 +72,24 @@ function getDepartmentLabel(emp) {
 
 function getProjectLabel(emp) {
   return String(emp?.project || emp?.projectName || emp?.account || emp?.client || "Unassigned").trim() || "Unassigned";
+}
+
+function computeEmployeePerformanceScore(emp) {
+  const directRaw = Number(emp?.submissionAbility ?? emp?.abilityScore ?? emp?.avgScore ?? NaN);
+  const direct = Number.isFinite(directRaw) ? Math.min(5, Math.max(1, directRaw)) : null;
+  const submitted = Boolean(emp?.submitted);
+  const recognitions = Number(emp?.recognitions || 0) || 0;
+  const certCount = Array.isArray(emp?.certifications) ? emp.certifications.length : 0;
+  const role = String(emp?.role || "").trim().toLowerCase();
+
+  const baseline = submitted ? 2.9 : 1.8;
+  const recognitionBonus = Math.min(1.0, recognitions * 0.22);
+  const certificationBonus = Math.min(0.9, certCount * 0.18);
+  const leadershipBonus = role === "manager" ? 0.2 : role === "admin" ? 0.1 : 0;
+
+  const inferred = Math.min(5, Math.max(1, baseline + recognitionBonus + certificationBonus + leadershipBonus));
+  const score = direct == null ? inferred : (direct * 0.7) + (inferred * 0.3);
+  return Math.round(score * 10) / 10;
 }
 
 function buildBreakdownRows({ employees, ability6m, keySelector }) {
@@ -215,6 +239,216 @@ export default function AdminDashboard({
     [employees, ability6m]
   );
 
+  const roleThroughputData = useMemo(() => {
+    const roleGroups = ["Employee", "Manager", "Admin"];
+    return roleGroups.map((roleLabel) => {
+      const subset = employees.filter((emp) => String(emp?.role || "").trim().toLowerCase() === roleLabel.toLowerCase());
+      const submitted = subset.filter((emp) => Boolean(emp?.submitted)).length;
+      const pending = Math.max(0, subset.length - submitted);
+      return {
+        role: roleLabel,
+        submitted,
+        pending,
+      };
+    }).filter((row) => row.submitted > 0 || row.pending > 0);
+  }, [employees]);
+
+  const bandDistributionData = useMemo(() => {
+    const groups = new Map();
+    for (const emp of employees) {
+      const band = String(emp?.band || "Unassigned").trim() || "Unassigned";
+      const prev = groups.get(band) || { total: 0, submitted: 0 };
+      prev.total += 1;
+      if (emp?.submitted) prev.submitted += 1;
+      groups.set(band, prev);
+    }
+    return Array.from(groups.entries())
+      .map(([band, stats]) => ({
+        band,
+        total: stats.total,
+        submittedRate: stats.total ? Math.round((stats.submitted / stats.total) * 100) : 0,
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 8);
+  }, [employees]);
+
+  const cycleHealthPieData = useMemo(() => {
+    const submitted = Math.max(0, stats.employeesSubmitted);
+    const pending = Math.max(0, stats.totalEmployees - submitted);
+    const managerSubmitted = Math.max(0, stats.managersSubmitted);
+    const managerPending = Math.max(0, stats.totalManagers - managerSubmitted);
+    return [
+      { name: "Employee Submitted", value: submitted, color: "#1d4ed8" },
+      { name: "Employee Pending", value: pending, color: "#f59e0b" },
+      { name: "Manager Submitted", value: managerSubmitted, color: "#059669" },
+      { name: "Manager Pending", value: managerPending, color: "#fb7185" },
+    ].filter((row) => row.value > 0);
+  }, [stats.employeesSubmitted, stats.managersSubmitted, stats.totalEmployees, stats.totalManagers]);
+
+  const enrichedEmployees = useMemo(() => {
+    return employees.map((emp) => {
+      const recognitions = Number(emp?.recognitions || 0) || 0;
+      const certCount = Array.isArray(emp?.certifications) ? emp.certifications.length : 0;
+      return {
+        ...emp,
+        recognitions,
+        certCount,
+        performanceScore: computeEmployeePerformanceScore(emp),
+      };
+    });
+  }, [employees]);
+
+  const departmentPerformanceData = useMemo(() => {
+    const groups = new Map();
+    for (const emp of enrichedEmployees) {
+      const department = getDepartmentLabel(emp);
+      const prev = groups.get(department) || { total: 0, submitted: 0, scoreSum: 0 };
+      prev.total += 1;
+      prev.scoreSum += Number(emp?.performanceScore || 0);
+      if (emp?.submitted) prev.submitted += 1;
+      groups.set(department, prev);
+    }
+    return Array.from(groups.entries())
+      .map(([department, statsRow]) => ({
+        department,
+        headcount: statsRow.total,
+        submissionRate: statsRow.total ? Math.round((statsRow.submitted / statsRow.total) * 100) : 0,
+        avgScore: statsRow.total ? Math.round((statsRow.scoreSum / statsRow.total) * 10) / 10 : 0,
+      }))
+      .sort((a, b) => b.avgScore - a.avgScore)
+      .slice(0, 10);
+  }, [enrichedEmployees]);
+
+  const bandPerformanceData = useMemo(() => {
+    const groups = new Map();
+    for (const emp of enrichedEmployees) {
+      const band = String(emp?.band || "Unassigned").trim() || "Unassigned";
+      const prev = groups.get(band) || { total: 0, submitted: 0, scoreSum: 0 };
+      prev.total += 1;
+      prev.scoreSum += Number(emp?.performanceScore || 0);
+      if (emp?.submitted) prev.submitted += 1;
+      groups.set(band, prev);
+    }
+    return Array.from(groups.entries())
+      .map(([band, statsRow]) => ({
+        band,
+        headcount: statsRow.total,
+        submissionRate: statsRow.total ? Math.round((statsRow.submitted / statsRow.total) * 100) : 0,
+        avgScore: statsRow.total ? Math.round((statsRow.scoreSum / statsRow.total) * 10) / 10 : 0,
+      }))
+      .sort((a, b) => b.avgScore - a.avgScore)
+      .slice(0, 10);
+  }, [enrichedEmployees]);
+
+  const managerOwnershipData = useMemo(() => {
+    const managerNameById = new Map(
+      enrichedEmployees
+        .filter((emp) => String(emp?.role || "").trim().toLowerCase() === "manager")
+        .map((mgr) => [String(mgr?.id || "").trim(), String(mgr?.name || "Unknown Manager").trim()])
+    );
+
+    const grouped = new Map();
+    for (const emp of enrichedEmployees) {
+      const roleKey = String(emp?.role || "").trim().toLowerCase();
+      if (roleKey === "admin" || roleKey === "manager") continue;
+      const managerId = String(emp?.managerId || "").trim() || "UNMAPPED";
+      const prev = grouped.get(managerId) || { teamSize: 0, submitted: 0, scoreSum: 0 };
+      prev.teamSize += 1;
+      prev.scoreSum += Number(emp?.performanceScore || 0);
+      if (emp?.submitted) prev.submitted += 1;
+      grouped.set(managerId, prev);
+    }
+    return Array.from(grouped.entries())
+      .map(([managerId, row]) => ({
+        managerId,
+        managerName: managerId === "UNMAPPED" ? "Unmapped Manager" : (managerNameById.get(managerId) || managerId),
+        teamSize: row.teamSize,
+        submitted: row.submitted,
+        pending: Math.max(0, row.teamSize - row.submitted),
+        avgScore: row.teamSize ? Math.round((row.scoreSum / row.teamSize) * 10) / 10 : 0,
+      }))
+      .sort((a, b) => {
+        if (b.teamSize !== a.teamSize) return b.teamSize - a.teamSize;
+        return b.avgScore - a.avgScore;
+      })
+      .slice(0, 10);
+  }, [enrichedEmployees]);
+
+  const topPerformers = useMemo(() => {
+    return enrichedEmployees
+      .filter((emp) => String(emp?.role || "").trim().toLowerCase() !== "admin")
+      .sort((a, b) => {
+        if (b.performanceScore !== a.performanceScore) return b.performanceScore - a.performanceScore;
+        if (b.recognitions !== a.recognitions) return b.recognitions - a.recognitions;
+        return b.certCount - a.certCount;
+      })
+      .slice(0, 6);
+  }, [enrichedEmployees]);
+
+  const departmentGranularityRows = useMemo(() => {
+    const rows = [];
+    const managersById = new Map(
+      enrichedEmployees
+        .filter((emp) => String(emp?.role || "").trim().toLowerCase() === "manager")
+        .map((mgr) => [String(mgr?.id || "").trim(), mgr])
+    );
+    const grouped = new Map();
+    for (const emp of enrichedEmployees) {
+      const dept = getDepartmentLabel(emp);
+      const prev = grouped.get(dept) || { employees: [], managerIds: new Set(), scoreSum: 0 };
+      prev.employees.push(emp);
+      prev.scoreSum += Number(emp?.performanceScore || 0);
+      if (emp?.managerId) prev.managerIds.add(String(emp.managerId).trim());
+      grouped.set(dept, prev);
+    }
+
+    for (const [department, row] of grouped.entries()) {
+      const headcount = row.employees.length;
+      const managerIds = Array.from(row.managerIds).filter(Boolean);
+      const managerCount = managerIds.length;
+      const avgScore = headcount ? Math.round((row.scoreSum / headcount) * 10) / 10 : 0;
+      const submitted = row.employees.filter((emp) => emp?.submitted).length;
+      const submissionRate = headcount ? Math.round((submitted / headcount) * 100) : 0;
+      const topEmployee = row.employees
+        .slice()
+        .sort((a, b) => Number(b.performanceScore || 0) - Number(a.performanceScore || 0))[0];
+      const topManager = managerIds
+        .map((id) => managersById.get(id))
+        .filter(Boolean)
+        .sort((a, b) => Number(b.performanceScore || 0) - Number(a.performanceScore || 0))[0];
+
+      rows.push({
+        department,
+        headcount,
+        managerCount,
+        submissionRate,
+        avgScore,
+        topEmployeeName: String(topEmployee?.name || "—"),
+        topManagerName: String(topManager?.name || (managerIds[0] || "—")),
+      });
+    }
+
+    return rows.sort((a, b) => b.avgScore - a.avgScore);
+  }, [enrichedEmployees]);
+
+  const intelligenceHighlights = useMemo(() => {
+    const bestDepartment = departmentPerformanceData[0] || null;
+    const bestBand = bandPerformanceData[0] || null;
+    const strongestManager = managerOwnershipData
+      .slice()
+      .sort((a, b) => {
+        if (b.avgScore !== a.avgScore) return b.avgScore - a.avgScore;
+        return b.submitted - a.submitted;
+      })[0] || null;
+    const topPerformer = topPerformers[0] || null;
+    return {
+      bestDepartment,
+      bestBand,
+      strongestManager,
+      topPerformer,
+    };
+  }, [bandPerformanceData, departmentPerformanceData, managerOwnershipData, topPerformers]);
+
   async function promoteEmployee(employeeId) {
     const emp = employees.find((e) => e.id === employeeId);
     if (!emp) return;
@@ -361,8 +595,8 @@ export default function AdminDashboard({
 			                className={[
 			                  "w-full px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all grid place-items-center",
 			                  portalIsOpenNow
-			                    ? "bg-red-500/10 text-red-200 hover:bg-red-500 hover:text-white shadow-xl shadow-red-900/20 border border-red-500/20"
-			                    : "bg-emerald-500 text-black hover:bg-emerald-400 shadow-xl shadow-emerald-900/20",
+			                    ? "bg-red-500/10 text-red-700 dark:text-red-200 hover:bg-red-500 hover:text-white shadow-xl shadow-red-900/20 border border-red-500/20"
+			                    : "bg-emerald-500 text-white hover:bg-emerald-400 shadow-xl shadow-emerald-900/20",
 			                ].join(" ")}
 			                disabled={portalWindowBusy || portalWindowLoading}
 			                title={portalIsOpenNow ? "Stop window" : "Start window"}
@@ -426,13 +660,13 @@ export default function AdminDashboard({
 		                Schedule
 		              </button>
 		              {portalWindowError ? (
-		                <div className="text-xs text-red-200/90">
+		                <div className="text-xs text-red-700 dark:text-red-200/90">
 		                  Failed to sync window: {portalWindowError}
 		                  {typeof reloadPortalWindow === "function" ? (
 		                    <button
 		                      type="button"
 		                      onClick={() => reloadPortalWindow?.().catch(() => {})}
-		                      className="ml-2 underline text-red-200 hover:text-white"
+		                      className="ml-2 underline text-red-700 dark:text-red-200 hover:text-white"
 		                    >
 		                      Retry
 		                    </button>
@@ -453,11 +687,9 @@ export default function AdminDashboard({
       </div>
 
       <section className="rt-panel p-8">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div>
-            <h3 className="text-xl font-black tracking-tight">Admin Insights</h3>
-            <p className="text-slate-500 text-sm mt-1">Submission health and pending workload at a glance.</p>
-          </div>
+        <div className="rt-section-header">
+          <h3 className="rt-section-title">Admin Insights</h3>
+          <p className="rt-section-subtitle">Submission health and pending workload at a glance.</p>
         </div>
 
         <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -497,11 +729,9 @@ export default function AdminDashboard({
 
       {/* 6-month chart */}
       <section className="rt-panel p-8">
-        <div className="mb-6">
-          <h3 className="text-xl font-black tracking-tight">
-            Average Ability Trend (6 months)
-          </h3>
-          <p className="text-slate-500 text-sm mt-1">
+        <div className="mb-6 rt-section-header">
+          <h3 className="rt-section-title">Average Ability Trend (6 months)</h3>
+          <p className="rt-section-subtitle">
             Includes department/project bell-curve and intervention view for reporting.
           </p>
         </div>
@@ -509,21 +739,21 @@ export default function AdminDashboard({
         <div className="w-full">
           <ResponsiveContainer width="100%" height={288}>
             <LineChart data={ability6m} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#222" vertical={false} />
-              <XAxis dataKey="month" stroke="#666" fontSize={12} tickLine={false} axisLine={false} />
-              <YAxis stroke="#666" fontSize={12} tickLine={false} axisLine={false} domain={[0, 5]} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(91,120,160,0.25)" vertical={false} />
+              <XAxis dataKey="month" stroke="rgb(91,120,160)" fontSize={12} tickLine={false} axisLine={false} />
+              <YAxis stroke="rgb(91,120,160)" fontSize={12} tickLine={false} axisLine={false} domain={[0, 5]} />
               <Tooltip
-                contentStyle={{ backgroundColor: '#0c0c0c', border: '1px solid #333', borderRadius: '12px' }}
-                labelStyle={{ color: '#e5e7eb', fontWeight: 700 }}
-                itemStyle={{ color: '#93c5fd' }}
-                cursor={{ stroke: 'rgba(255,255,255,0.12)' }}
+                contentStyle={{ backgroundColor: "rgba(255,255,255,0.97)", border: "1px solid rgba(124,146,178,0.45)", borderRadius: "12px" }}
+                labelStyle={{ color: "rgb(16,35,61)", fontWeight: 700 }}
+                itemStyle={{ color: "rgb(17,88,181)" }}
+                cursor={{ stroke: "rgba(60,96,144,0.35)" }}
               />
               <Line
                 type="monotone"
                 dataKey="avg"
-                stroke="#007acc"
+                stroke="#155dbe"
                 strokeWidth={3}
-                dot={{ r: 4, strokeWidth: 2, fill: "#0c0c0c" }}
+                dot={{ r: 4, strokeWidth: 2, fill: "#ffffff" }}
                 activeDot={{ r: 6 }}
               />
             </LineChart>
@@ -548,7 +778,7 @@ export default function AdminDashboard({
                     <span className="font-mono">Δ {formatDelta(row.delta)}</span>
                     <span>Headcount {row.headcount}</span>
                     <span>Submitted {Math.round(row.submissionRate * 100)}%</span>
-                    <span className={row.needsIntervention ? "text-amber-300 font-semibold" : "text-emerald-300 font-semibold"}>
+                    <span className={row.needsIntervention ? "text-amber-800 dark:text-amber-300 font-semibold" : "text-emerald-700 dark:text-emerald-300 font-semibold"}>
                       {row.needsIntervention ? "Intervention Needed" : "Stable"}
                     </span>
                   </div>
@@ -574,7 +804,7 @@ export default function AdminDashboard({
                     <span className="font-mono">Δ {formatDelta(row.delta)}</span>
                     <span>Headcount {row.headcount}</span>
                     <span>Submitted {Math.round(row.submissionRate * 100)}%</span>
-                    <span className={row.needsIntervention ? "text-amber-300 font-semibold" : "text-emerald-300 font-semibold"}>
+                    <span className={row.needsIntervention ? "text-amber-800 dark:text-amber-300 font-semibold" : "text-emerald-700 dark:text-emerald-300 font-semibold"}>
                       {row.needsIntervention ? "Intervention Needed" : "Stable"}
                     </span>
                   </div>
@@ -585,15 +815,277 @@ export default function AdminDashboard({
         </div>
       </section>
 
+      <section className="rt-panel p-8">
+        <div className="rt-section-header">
+          <h3 className="rt-section-title">Granular Delivery Analytics</h3>
+          <p className="rt-section-subtitle">Role throughput, band load profile, and cycle submission mix.</p>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Role Throughput</div>
+            <div className="mt-4 h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={roleThroughputData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(91,120,160,0.2)" vertical={false} />
+                  <XAxis dataKey="role" stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <YAxis stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "rgba(255,255,255,0.97)", border: "1px solid rgba(124,146,178,0.45)", borderRadius: "12px" }}
+                    labelStyle={{ color: "rgb(16,35,61)", fontWeight: 700 }}
+                  />
+                  <Legend />
+                  <Bar dataKey="submitted" stackId="a" name="Submitted" fill="#1d4ed8" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="pending" stackId="a" name="Pending" fill="#f59e0b" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Band Distribution</div>
+            <div className="mt-4 space-y-3">
+              {bandDistributionData.length ? (
+                bandDistributionData.map((row) => (
+                  <div key={`band:${row.band}`} className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-3">
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <span className="font-semibold text-[rgb(var(--text))]">{row.band}</span>
+                      <span className="font-mono text-[rgb(var(--muted))]">{row.total}</span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-[rgb(var(--surface-3))] overflow-hidden">
+                      <div className="h-full bg-emerald-500" style={{ width: `${row.submittedRate}%` }} />
+                    </div>
+                    <div className="mt-2 text-[11px] text-[rgb(var(--muted))]">
+                      Submitted: <span className="font-mono">{row.submittedRate}%</span>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-sm text-[rgb(var(--muted))]">No band distribution data yet.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Cycle Health Mix</div>
+            <div className="mt-4 h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={cycleHealthPieData}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={56}
+                    outerRadius={92}
+                    paddingAngle={2}
+                  >
+                    {cycleHealthPieData.map((entry) => (
+                      <Cell key={`health:${entry.name}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "rgba(255,255,255,0.97)", border: "1px solid rgba(124,146,178,0.45)", borderRadius: "12px" }}
+                    labelStyle={{ color: "rgb(16,35,61)", fontWeight: 700 }}
+                  />
+                  <Legend verticalAlign="bottom" height={36} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="rt-panel p-8">
+        <div className="rt-section-header">
+          <h3 className="rt-section-title">Department, Band, Manager Performance Intelligence</h3>
+          <p className="rt-section-subtitle">Full granulation for department performance, band strength, manager ownership, and top performers.</p>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="rt-panel-subtle p-4">
+            <div className="rt-kicker">Best Department</div>
+            <div className="mt-2 font-semibold text-[rgb(var(--text))]">
+              {intelligenceHighlights.bestDepartment?.department || "—"}
+            </div>
+            <div className="mt-1 text-xs text-[rgb(var(--muted))]">
+              Score {Number(intelligenceHighlights.bestDepartment?.avgScore || 0).toFixed(1)} • Submission {intelligenceHighlights.bestDepartment?.submissionRate || 0}%
+            </div>
+          </div>
+          <div className="rt-panel-subtle p-4">
+            <div className="rt-kicker">Strongest Band</div>
+            <div className="mt-2 font-semibold text-[rgb(var(--text))]">
+              {intelligenceHighlights.bestBand?.band || "—"}
+            </div>
+            <div className="mt-1 text-xs text-[rgb(var(--muted))]">
+              Score {Number(intelligenceHighlights.bestBand?.avgScore || 0).toFixed(1)} • Submission {intelligenceHighlights.bestBand?.submissionRate || 0}%
+            </div>
+          </div>
+          <div className="rt-panel-subtle p-4">
+            <div className="rt-kicker">Strongest Manager Team</div>
+            <div className="mt-2 font-semibold text-[rgb(var(--text))]">
+              {intelligenceHighlights.strongestManager?.managerName || "—"}
+            </div>
+            <div className="mt-1 text-xs text-[rgb(var(--muted))]">
+              Team {intelligenceHighlights.strongestManager?.teamSize || 0} • Avg {Number(intelligenceHighlights.strongestManager?.avgScore || 0).toFixed(1)}
+            </div>
+          </div>
+          <div className="rt-panel-subtle p-4">
+            <div className="rt-kicker">Highest Performer</div>
+            <div className="mt-2 font-semibold text-[rgb(var(--text))]">
+              {intelligenceHighlights.topPerformer?.name || "—"}
+            </div>
+            <div className="mt-1 text-xs text-[rgb(var(--muted))]">
+              Score {Number(intelligenceHighlights.topPerformer?.performanceScore || 0).toFixed(1)} • {intelligenceHighlights.topPerformer?.band || "—"}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Department Performance</div>
+            <div className="mt-4 h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={departmentPerformanceData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(91,120,160,0.2)" vertical={false} />
+                  <XAxis dataKey="department" stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="left" domain={[0, 5]} stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="right" orientation="right" domain={[0, 100]} stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "rgba(255,255,255,0.97)", border: "1px solid rgba(124,146,178,0.45)", borderRadius: "12px" }}
+                    labelStyle={{ color: "rgb(16,35,61)", fontWeight: 700 }}
+                  />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="avgScore" name="Avg Score" fill="#2563eb" radius={[8, 8, 0, 0]} />
+                  <Bar yAxisId="right" dataKey="submissionRate" name="Submission %" fill="#0f766e" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Band Performance</div>
+            <div className="mt-4 h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={bandPerformanceData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(91,120,160,0.2)" vertical={false} />
+                  <XAxis dataKey="band" stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="left" domain={[0, 5]} stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <YAxis yAxisId="right" orientation="right" domain={[0, 100]} stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "rgba(255,255,255,0.97)", border: "1px solid rgba(124,146,178,0.45)", borderRadius: "12px" }}
+                    labelStyle={{ color: "rgb(16,35,61)", fontWeight: 700 }}
+                  />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="avgScore" name="Avg Score" fill="#7c3aed" radius={[8, 8, 0, 0]} />
+                  <Bar yAxisId="right" dataKey="submissionRate" name="Submission %" fill="#f59e0b" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Manager Team Ownership</div>
+            <div className="mt-4 h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={managerOwnershipData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(91,120,160,0.2)" vertical={false} />
+                  <XAxis dataKey="managerName" stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <YAxis stroke="rgb(91,120,160)" tickLine={false} axisLine={false} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "rgba(255,255,255,0.97)", border: "1px solid rgba(124,146,178,0.45)", borderRadius: "12px" }}
+                    labelStyle={{ color: "rgb(16,35,61)", fontWeight: 700 }}
+                  />
+                  <Legend />
+                  <Bar dataKey="submitted" stackId="a" name="Submitted" fill="#15803d" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="pending" stackId="a" name="Pending" fill="#ea580c" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="rt-panel-subtle p-5">
+            <div className="rt-kicker">Highest Performers</div>
+            <div className="mt-4 space-y-3">
+              {topPerformers.length ? (
+                topPerformers.map((emp, idx) => (
+                  <div key={`top:${emp.id}`} className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-widest text-[rgb(var(--muted))]">
+                          Rank #{idx + 1}
+                        </div>
+                        <div className="mt-1 font-semibold text-[rgb(var(--text))]">{emp.name}</div>
+                        <div className="text-[11px] text-[rgb(var(--muted))]">
+                          {getDepartmentLabel(emp)} • {String(emp?.band || "—")}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg rt-stat-value">{Number(emp?.performanceScore || 0).toFixed(1)}</div>
+                        <div className="text-[11px] text-[rgb(var(--muted))]">
+                          Rec {emp.recognitions} • Cert {emp.certCount}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-sm text-[rgb(var(--muted))]">No performance ranking data yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 rt-panel-subtle p-5">
+          <div className="rt-kicker">Department Granularity</div>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="text-[10px] uppercase tracking-[0.2em] text-[rgb(var(--muted))]">
+                <tr>
+                  <th className="py-2 pr-3">Department</th>
+                  <th className="py-2 pr-3">Employees</th>
+                  <th className="py-2 pr-3">Managers</th>
+                  <th className="py-2 pr-3">Avg Score</th>
+                  <th className="py-2 pr-3">Submission %</th>
+                  <th className="py-2 pr-3">Top Employee</th>
+                  <th className="py-2">Top Manager</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[rgb(var(--border))] text-sm">
+                {departmentGranularityRows.map((row) => (
+                  <tr key={`dept-row:${row.department}`}>
+                    <td className="py-3 pr-3 font-semibold text-[rgb(var(--text))]">{row.department}</td>
+                    <td className="py-3 pr-3 font-mono text-[rgb(var(--muted))]">{row.headcount}</td>
+                    <td className="py-3 pr-3 font-mono text-[rgb(var(--muted))]">{row.managerCount}</td>
+                    <td className="py-3 pr-3 font-mono text-[rgb(var(--text))]">{row.avgScore.toFixed(1)}</td>
+                    <td className="py-3 pr-3 font-mono text-[rgb(var(--muted))]">{row.submissionRate}%</td>
+                    <td className="py-3 pr-3 text-[rgb(var(--text))]">{row.topEmployeeName}</td>
+                    <td className="py-3 text-[rgb(var(--text))]">{row.topManagerName}</td>
+                  </tr>
+                ))}
+                {!departmentGranularityRows.length ? (
+                  <tr>
+                    <td className="py-6 text-[rgb(var(--muted))]" colSpan={7}>
+                      No department granularity data available.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       {/* Employee management (dashboard view) */}
       <section className="rt-panel overflow-hidden">
         <div className="p-8">
-          <h3 className="text-xl font-black tracking-tight">Employee Management</h3>
+          <h3 className="rt-section-title">Employee Management</h3>
         </div>
 
         {employeesError ? (
           <div className="px-8 pb-6">
-            <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+            <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
               Failed to load employees: <span className="font-mono">{employeesError}</span>
             </div>
           </div>
@@ -626,8 +1118,8 @@ export default function AdminDashboard({
                   <td className="p-6">
                     <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-lg border ${
                       emp.submitted
-                        ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
-                        : "bg-red-500/10 text-red-300 border-red-500/20"
+                        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
+                        : "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20"
                     }`}>
                       {emp.submitted ? "Yes" : "No"}
                     </span>
@@ -646,7 +1138,7 @@ export default function AdminDashboard({
                         onClick={() => {
                           removeEmployee(emp.id).catch(() => {});
                         }}
-                        className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
+                        className="p-2.5 bg-red-500/10 text-red-700 dark:text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
                         title="Remove"
                       >
                         <Trash2 size={18} />

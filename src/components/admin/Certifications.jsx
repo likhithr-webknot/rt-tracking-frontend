@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from "react";
 import { Edit3, Eye, EyeOff, Plus, Search, Trash2, X } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
+import CursorPagination from "../shared/CursorPagination.jsx";
 
 function extractCertificationName(raw) {
   if (typeof raw === "string") return raw.trim();
@@ -53,6 +54,7 @@ export default function Certifications({
   onEditCertificationInCatalog,
   onSetCertificationListed,
   onDeleteCertificationFromCatalog,
+  pager,
 }) {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -82,6 +84,11 @@ export default function Certifications({
     if (!q) return catalog;
     return catalog.filter((item) => item.name.toLowerCase().includes(q));
   }, [catalog, query]);
+  const listedCount = useMemo(
+    () => catalog.filter((item) => Boolean(item?.listed)).length,
+    [catalog]
+  );
+  const unlistedCount = Math.max(0, catalog.length - listedCount);
 
   function closeCatalogModal() {
     setShowCatalogModal(false);
@@ -108,6 +115,21 @@ export default function Certifications({
           </p>
         </div>
       </header>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-4xl">
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Total</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{catalog.length}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Listed</div>
+          <div className="mt-1 text-2xl font-black text-emerald-500">{listedCount}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Unlisted</div>
+          <div className="mt-1 text-2xl font-black text-amber-500">{unlistedCount}</div>
+        </div>
+      </div>
 
       <div className="relative group max-w-2xl">
         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
@@ -202,8 +224,8 @@ export default function Certifications({
                         className={[
                           "p-2.5 rounded-xl transition-all border",
                           item.listed
-                            ? "bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-black border-amber-500/20"
-                            : "bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500 hover:text-black border-emerald-500/20",
+                            ? "bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white border-amber-500/20"
+                            : "bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500 hover:text-white border-emerald-500/20",
                         ].join(" ")}
                         title={item.listed ? "Unlist" : "List"}
                         aria-label={`${item.listed ? "Unlist" : "List"} ${item.name}`}
@@ -434,6 +456,19 @@ export default function Certifications({
           }
         }}
       />
+
+      {pager ? (
+        <div className="pt-4">
+          <CursorPagination
+            canPrev={Boolean(pager.canPrev)}
+            canNext={Boolean(pager.canNext)}
+            onPrev={pager.onPrev}
+            onNext={pager.onNext}
+            loading={Boolean(pager.loading)}
+            label={pager.label}
+          />
+        </div>
+      ) : null}
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>

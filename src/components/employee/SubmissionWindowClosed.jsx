@@ -137,7 +137,7 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry })
                 {typeof onRetry === "function" ? (
                   <button
                     onClick={onRetry}
-                    className="mt-5 inline-flex items-center justify-center rounded-2xl bg-white text-black px-5 py-3 font-black text-[11px] uppercase tracking-widest hover:bg-gray-200 transition-all"
+                    className="mt-5 inline-flex items-center justify-center rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] px-5 py-3 font-black text-[11px] uppercase tracking-widest hover:bg-[rgb(var(--surface-2))] transition-all"
                     type="button"
                   >
                     Retry

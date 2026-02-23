@@ -1,101 +1,15 @@
-import React, { useMemo, useRef, useState } from "react";
-import { Edit3, Eye, EyeOff, KeyRound, Plug, Plus, Trash2, X } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Edit3, Eye, EyeOff, KeyRound, Loader2, Plug, Plus, RefreshCcw, Trash2, X } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
-
-const LEGACY_STORAGE_KEY = "rt_tracking_ai_agents_config_v1";
-const STORAGE_KEY = "rt_tracking_ai_agents_v1";
-
-function tryParseJson(raw) {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function loadLegacyConfig() {
-  if (typeof window === "undefined") return null;
-  try {
-    const parsed = tryParseJson(window.localStorage.getItem(LEGACY_STORAGE_KEY));
-    if (!parsed || typeof parsed !== "object") return null;
-    const provider = String(parsed?.provider ?? "").trim() || "openai";
-    const apiKey = String(parsed?.apiKey ?? "").trim();
-    if (!apiKey) return null;
-    return { provider, apiKey };
-  } catch {
-    return null;
-  }
-}
-
-function hashFNV1a32(text) {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i += 1) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-function makeAgentId({ provider, apiKey }) {
-  const p = String(provider ?? "").trim().toLowerCase();
-  const k = String(apiKey ?? "").trim();
-  const base = `${p}:${k.slice(-6)}`;
-  return `AGENT_${hashFNV1a32(base).toString(36)}`;
-}
-
-function normalizeAgents(items) {
-  const list = Array.isArray(items) ? items : [];
-  const out = [];
-  const seen = new Set();
-  for (const raw of list) {
-    const provider = String(raw?.provider ?? "").trim() || "openai";
-    const apiKey = String(raw?.apiKey ?? "").trim();
-    if (!apiKey) continue;
-    const id = String(raw?.id ?? "").trim() || makeAgentId({ provider, apiKey });
-    if (seen.has(id)) continue;
-    seen.add(id);
-    out.push({
-      id,
-      provider,
-      apiKey,
-      createdAt:
-        typeof raw?.createdAt === "number" && Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
-      updatedAt:
-        typeof raw?.updatedAt === "number" && Number.isFinite(raw.updatedAt) ? raw.updatedAt : null,
-    });
-  }
-  return out;
-}
-
-function loadAgentsFromStorage() {
-  if (typeof window === "undefined") return [];
-
-  const stored = tryParseJson(window.localStorage.getItem(STORAGE_KEY));
-  if (Array.isArray(stored)) return normalizeAgents(stored);
-
-  // One-time migration from legacy single-config key.
-  const legacy = loadLegacyConfig();
-  if (!legacy) return [];
-  const migrated = normalizeAgents([{ id: makeAgentId(legacy), ...legacy, createdAt: Date.now() }]);
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
-    window.localStorage.removeItem(LEGACY_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
-  return migrated;
-}
-
-function saveAgentsToStorage(items) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeAgents(items)));
-  } catch {
-    // ignore
-  }
-}
+import {
+  addAiAgent,
+  deleteAiAgent,
+  fetchAiAgents,
+  normalizeAiAgents,
+  updateAiAgent,
+} from "../../api/ai-agents.js";
+import { normalizeCursorPage } from "../../api/employee-portal.js";
 
 function providerLabel(provider) {
   const p = String(provider ?? "").trim();
@@ -116,16 +30,21 @@ function maskApiKey(apiKey) {
 }
 
 export default function AIAgentsConfig() {
-  const [agents, setAgents] = useState(() => loadAgentsFromStorage());
+  const [agents, setAgents] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [query, setQuery] = useState("");
 
   const [modal, setModal] = useState({ open: false, mode: "add", agentId: null });
   const [draftProvider, setDraftProvider] = useState("openai");
   const [draftApiKey, setDraftApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [pendingDeleteAgent, setPendingDeleteAgent] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  const [toast, setToast] = useState(null); // { title, message? }
+  const [pendingDeleteAgent, setPendingDeleteAgent] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
 
   function showToast(nextToast) {
@@ -145,13 +64,55 @@ export default function AIAgentsConfig() {
     []
   );
 
+  async function reloadAgents() {
+    setLoading(true);
+    setError("");
+    try {
+      const all = [];
+      let cursor = null;
+      for (let i = 0; i < 20; i += 1) {
+        const data = await fetchAiAgents({ limit: 100, cursor });
+        const page = normalizeCursorPage(data);
+        const items = normalizeAiAgents(page.items);
+        all.push(...items);
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+
+      const deduped = [];
+      const seen = new Set();
+      for (const item of all) {
+        const key = String(item?.id ?? "").trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(item);
+      }
+      setAgents(deduped);
+    } catch (err) {
+      setAgents([]);
+      setError(err?.message || "Failed to load AI agents.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    reloadAgents().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const q = String(query || "").trim().toLowerCase();
   const filteredAgents = !q
     ? agents
     : agents.filter((a) => {
-        const provider = String(a?.provider || "").toLowerCase();
-        return provider.includes(q) || providerLabel(provider).toLowerCase().includes(q);
-      });
+      const provider = String(a?.provider || "").toLowerCase();
+      return provider.includes(q) || providerLabel(provider).toLowerCase().includes(q);
+    });
+  const activeAgents = useMemo(
+    () => agents.filter((row) => Boolean(row?.active)).length,
+    [agents]
+  );
+  const inactiveAgents = Math.max(0, agents.length - activeAgents);
 
   function openAddModal() {
     setModal({ open: true, mode: "add", agentId: null });
@@ -169,15 +130,76 @@ export default function AIAgentsConfig() {
   }
 
   function closeModal() {
+    if (saving) return;
     setModal({ open: false, mode: "add", agentId: null });
     setDraftProvider("openai");
     setDraftApiKey("");
     setShowKey(false);
   }
 
-  function persist(next) {
-    setAgents(next);
-    saveAgentsToStorage(next);
+  async function onSubmit(e) {
+    e.preventDefault();
+    const provider = String(draftProvider || "openai").trim() || "openai";
+    const apiKey = String(draftApiKey || "").trim();
+    if (!apiKey) {
+      showToast({ title: "Missing field", message: "Enter an API key." });
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    try {
+      if (modal.mode === "edit") {
+        const targetId = String(modal.agentId || "").trim();
+        const raw = await updateAiAgent(targetId, { provider, apiKey });
+        const nextAgent = normalizeAiAgents([raw])[0] || {
+          id: targetId,
+          provider,
+          apiKey,
+          active: true,
+          createdAt: null,
+          updatedAt: null,
+        };
+        setAgents((prev) => prev.map((a) => (String(a.id) === targetId ? { ...a, ...nextAgent } : a)));
+        showToast({ title: "Agent updated", message: providerLabel(provider) });
+      } else {
+        const raw = await addAiAgent({ provider, apiKey });
+        const nextAgent = normalizeAiAgents([raw])[0];
+        if (nextAgent) {
+          setAgents((prev) => [nextAgent, ...prev.filter((a) => String(a.id) !== String(nextAgent.id))]);
+        } else {
+          await reloadAgents();
+        }
+        showToast({ title: "Agent added", message: providerLabel(provider) });
+      }
+      closeModal();
+    } catch (err) {
+      const message = err?.message || "Failed to save AI agent.";
+      setError(message);
+      showToast({ title: "Save failed", message });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onConfirmDelete() {
+    const agent = pendingDeleteAgent;
+    if (!agent) return;
+
+    setDeleting(true);
+    setError("");
+    try {
+      await deleteAiAgent(agent.id);
+      setAgents((prev) => prev.filter((a) => String(a.id) !== String(agent.id)));
+      showToast({ title: "Agent deleted", message: providerLabel(agent.provider) });
+      setPendingDeleteAgent(null);
+    } catch (err) {
+      const message = err?.message || "Failed to delete AI agent.";
+      setError(message);
+      showToast({ title: "Delete failed", message });
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
@@ -188,10 +210,38 @@ export default function AIAgentsConfig() {
             Configure AI Agents
           </h2>
           <p className="text-slate-500 text-sm mt-2">
-            Stored locally in your browser. Not sent anywhere until we wire the backend.
+            Stored in backend and available across sessions.
           </p>
         </div>
+        <button
+          onClick={() => reloadAgents().catch(() => {})}
+          disabled={loading}
+          className="rt-btn-ghost inline-flex items-center gap-2 text-xs uppercase tracking-widest"
+        >
+          <RefreshCcw size={16} className={loading ? "animate-spin" : ""} /> Refresh
+        </button>
       </header>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-4xl">
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Total Agents</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{agents.length}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Active</div>
+          <div className="mt-1 text-2xl font-black text-emerald-500">{activeAgents}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Inactive</div>
+          <div className="mt-1 text-2xl font-black text-amber-500">{inactiveAgents}</div>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="max-w-7xl mx-auto rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
+          {error}
+        </div>
+      ) : null}
 
       <div className="relative group max-w-2xl">
         <Plug className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
@@ -209,7 +259,7 @@ export default function AIAgentsConfig() {
           <div>
             <h3 className="text-xl font-black tracking-tight">AI Agents</h3>
             <p className="text-slate-500 text-sm mt-1">
-              {agents.length ? `${agents.length} configured` : "No agents configured yet."}
+              {loading ? "Loading..." : agents.length ? `${agents.length} configured` : "No agents configured yet."}
             </p>
           </div>
 
@@ -271,7 +321,7 @@ export default function AIAgentsConfig() {
                 </tr>
               ))}
 
-              {filteredAgents.length === 0 ? (
+              {!loading && filteredAgents.length === 0 ? (
                 <tr>
                   <td className="p-10 text-center text-slate-500" colSpan={3}>
                     No agents to show.
@@ -307,43 +357,7 @@ export default function AIAgentsConfig() {
               </button>
             </div>
 
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const provider = String(draftProvider || "openai").trim() || "openai";
-                const apiKey = String(draftApiKey || "").trim();
-                if (!apiKey) {
-                  showToast({ title: "Missing field", message: "Enter an API key." });
-                  return;
-                }
-
-                if (modal.mode === "edit") {
-                  const targetId = String(modal.agentId || "").trim();
-                  const next = agents.map((a) =>
-                    a.id === targetId
-                      ? { ...a, provider, apiKey, updatedAt: Date.now() }
-                      : a
-                  );
-                  persist(next);
-                  showToast({ title: "Agent updated", message: providerLabel(provider) });
-                  closeModal();
-                  return;
-                }
-
-                const nextAgent = {
-                  id: makeAgentId({ provider, apiKey }),
-                  provider,
-                  apiKey,
-                  createdAt: Date.now(),
-                  updatedAt: null,
-                };
-                const next = normalizeAgents([nextAgent, ...agents]);
-                persist(next);
-                showToast({ title: "Agent added", message: providerLabel(provider) });
-                closeModal();
-              }}
-              className="mt-6 space-y-4"
-            >
+            <form onSubmit={onSubmit} className="mt-6 space-y-4">
               <div>
                 <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
                   Provider *
@@ -389,7 +403,7 @@ export default function AIAgentsConfig() {
                   </button>
                 </div>
                 <div className="text-xs text-slate-500 mt-2">
-                  Keep this secret. Anyone with access to this browser profile can read it.
+                  Keep this secret. Only admins should have access to this screen.
                 </div>
               </div>
 
@@ -398,13 +412,16 @@ export default function AIAgentsConfig() {
                   type="button"
                   onClick={closeModal}
                   className="rt-btn-ghost text-xs uppercase tracking-widest"
+                  disabled={saving}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rt-btn-primary text-xs uppercase tracking-widest"
+                  className="rt-btn-primary text-xs uppercase tracking-widest inline-flex items-center gap-2"
+                  disabled={saving}
                 >
+                  {saving ? <Loader2 size={14} className="animate-spin" /> : null}
                   {modal.mode === "edit" ? "Save" : "Add"}
                 </button>
               </div>
@@ -417,18 +434,13 @@ export default function AIAgentsConfig() {
         open={Boolean(pendingDeleteAgent)}
         title="Delete AI Agent"
         message={`Delete AI Agent (${providerLabel(pendingDeleteAgent?.provider)})?`}
-        confirmText="Delete"
+        confirmText={deleting ? "Deleting..." : "Delete"}
         cancelText="Cancel"
         confirmVariant="danger"
-        onCancel={() => setPendingDeleteAgent(null)}
-        onConfirm={() => {
-          const agent = pendingDeleteAgent;
-          if (!agent) return;
-          const next = agents.filter((a) => a.id !== agent.id);
-          persist(next);
-          setPendingDeleteAgent(null);
-          showToast({ title: "Agent deleted", message: providerLabel(agent.provider) });
+        onCancel={() => {
+          if (!deleting) setPendingDeleteAgent(null);
         }}
+        onConfirm={onConfirmDelete}
       />
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />

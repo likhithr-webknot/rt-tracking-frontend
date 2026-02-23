@@ -21,6 +21,7 @@ import {
   promoteEmployee as promoteEmployeeApi,
   updateEmployee,
 } from "../../api/employees.js";
+import { fetchBands, fetchStreams, normalizeDirectoryPage } from "../../api/band-stream-directory.js";
 
 function computeNextEmployeeId(employees) {
   let maxEmp = -1;
@@ -107,7 +108,8 @@ export default function EmployeeDirectory({
   const [managers, setManagers] = useState([]);
   const [managersLoading, setManagersLoading] = useState(false);
   const [managersError, setManagersError] = useState("");
-  const [managerSearch, setManagerSearch] = useState("");
+  const [directoryBands, setDirectoryBands] = useState([]);
+  const [directoryStreams, setDirectoryStreams] = useState([]);
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -162,6 +164,31 @@ export default function EmployeeDirectory({
     });
   }, [employees, query, roleFilter, designationFilter, bandFilter]);
 
+  const directoryStats = useMemo(() => {
+    const list = Array.isArray(employees) ? employees : [];
+    const uniqueBands = new Set(
+      list
+        .map((emp) => String(emp?.band ?? "").trim())
+        .filter(Boolean)
+    );
+    const roleCounts = list.reduce(
+      (acc, emp) => {
+        const role = String(emp?.role ?? "").trim().toLowerCase();
+        if (role === "manager") acc.managers += 1;
+        else if (role === "admin") acc.admins += 1;
+        else if (role === "employee") acc.employees += 1;
+        return acc;
+      },
+      { managers: 0, admins: 0, employees: 0 }
+    );
+
+    return {
+      totalEmployees: list.length,
+      totalBands: uniqueBands.size,
+      ...roleCounts,
+    };
+  }, [employees]);
+
   const isSelf = useCallback(
     (emp) => Boolean(currentEmployeeId) && String(emp?.id) === String(currentEmployeeId),
     [currentEmployeeId]
@@ -192,6 +219,90 @@ export default function EmployeeDirectory({
     [employees]
   );
   const bandOptions = useMemo(() => buildOptionStats(employees, "band"), [employees]);
+  const bandSelectOptions = useMemo(() => {
+    const fromDirectory = directoryBands
+      .filter((row) => Boolean(row?.active))
+      .map((row) => String(row?.code || "").trim())
+      .filter(Boolean);
+    if (fromDirectory.length) return fromDirectory;
+
+    const defaults = ["B1", "B2", "B3", "B4", "B5", "B5H", "B5L", "B6H", "B6L", "B7H", "B7L", "B8"];
+    const fromEmployees = employees
+      .map((emp) => String(emp?.band ?? "").trim())
+      .filter(Boolean);
+    return Array.from(new Set([...defaults, ...fromEmployees])).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+  }, [directoryBands, employees]);
+  const streamSelectOptions = useMemo(() => {
+    const fromDirectory = directoryStreams
+      .filter((row) => Boolean(row?.active))
+      .map((row) => String(row?.code || "").trim())
+      .filter(Boolean);
+    if (fromDirectory.length) return fromDirectory;
+
+    const fromEmployees = Array.from(
+      new Set(
+        employees
+          .map((emp) => String(emp?.stream ?? "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    if (fromEmployees.length > 0) return fromEmployees;
+    return ["Development"];
+  }, [directoryStreams, employees]);
+  const defaultAddBand = useMemo(
+    () => (bandSelectOptions.includes("B4") ? "B4" : bandSelectOptions[0] || "B4"),
+    [bandSelectOptions]
+  );
+  const defaultAddStream = useMemo(
+    () => streamSelectOptions[0] || "",
+    [streamSelectOptions]
+  );
+  const addRoleIsAdmin = String(addDraft.empRole || "").trim().toLowerCase() === "admin";
+  const managerCount = useMemo(
+    () => employees.filter((emp) => String(emp?.role || "").trim().toLowerCase() === "manager").length,
+    [employees]
+  );
+
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+
+    async function loadDirectory(fetcher) {
+      const rows = [];
+      let cursor = null;
+      for (let i = 0; i < 20; i += 1) {
+        const data = await fetcher({ limit: 100, cursor, signal: controller.signal });
+        const page = normalizeDirectoryPage(data);
+        rows.push(...page.items);
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+      return rows;
+    }
+
+    (async () => {
+      try {
+        const [bands, streams] = await Promise.all([
+          loadDirectory(fetchBands),
+          loadDirectory(fetchStreams),
+        ]);
+        if (!mounted) return;
+        setDirectoryBands(bands);
+        setDirectoryStreams(streams);
+      } catch {
+        if (!mounted) return;
+        setDirectoryBands([]);
+        setDirectoryStreams([]);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, []);
 
   async function promoteEmployee(employeeId) {
     const emp = employees.find((e) => e.id === employeeId);
@@ -408,12 +519,11 @@ export default function EmployeeDirectory({
       email: "",
       empRole: "Employee",
       designation: "",
-      band: "B4",
-      stream: "",
+      band: defaultAddBand,
+      stream: defaultAddStream,
       managerId: "",
     });
     setManagersError("");
-    setManagerSearch("");
     setShowAddModal(true);
   }
 
@@ -450,28 +560,18 @@ export default function EmployeeDirectory({
     };
   }, [showAddModal]);
 
-  const filteredManagers = useMemo(() => {
-    const q = String(managerSearch || "").trim().toLowerCase();
-    if (!q) return managers;
-    return managers.filter((m) => {
-      const name = String(m?.name || "").toLowerCase();
-      const id = String(m?.id || "").toLowerCase();
-      const email = String(m?.email || "").toLowerCase();
-      return name.includes(q) || id.includes(q) || email.includes(q);
-    });
-  }, [managers, managerSearch]);
-
   async function submitAdd(e) {
     e.preventDefault();
 
+    const isAdminRole = String(addDraft.empRole || "").trim().toLowerCase() === "admin";
     const employeeIdValue = (addDraft.useNextEmployeeId ? nextEmployeeId : addDraft.employeeId).trim();
     const payload = {
       ...(employeeIdValue ? { employeeId: employeeIdValue } : {}),
       employeeName: addDraft.employeeName.trim(),
       email: addDraft.email.trim(),
       empRole: addDraft.empRole,
-      band: addDraft.band.trim(),
-      stream: addDraft.stream.trim() || null,
+      band: isAdminRole ? null : addDraft.band.trim() || null,
+      stream: isAdminRole ? null : addDraft.stream.trim() || null,
       designation: addDraft.designation.trim() || null,
       managerId: addDraft.managerId.trim() || null,
     };
@@ -530,7 +630,7 @@ export default function EmployeeDirectory({
             disabled={deletableSelectedCount === 0 || mutating}
             className={[
               "inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border transition-all",
-              "border-red-500/20 bg-red-500/10 text-red-200 hover:bg-red-500 hover:text-white",
+              "border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-200 hover:bg-red-500 hover:text-white",
               deletableSelectedCount === 0 || mutating ? "opacity-60 cursor-not-allowed" : "",
             ].join(" ")}
             title="Delete selected employees"
@@ -540,8 +640,46 @@ export default function EmployeeDirectory({
         </div>
       </header>
 
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-4xl">
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Total Employees</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{employees.length}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Managers</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{managerCount}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-kicker">Filtered</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{visibleEmployees.length}</div>
+        </div>
+      </div>
+
+      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+        <div className="rt-panel-subtle rounded-2xl p-4">
+          <div className="rt-kicker">Total Employees</div>
+          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.totalEmployees}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl p-4">
+          <div className="rt-kicker">Bands</div>
+          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.totalBands}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl p-4">
+          <div className="rt-kicker">Managers</div>
+          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.managers}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl p-4">
+          <div className="rt-kicker">Admins</div>
+          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.admins}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-2xl p-4">
+          <div className="rt-kicker">Employees</div>
+          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.employees}</div>
+        </div>
+      </section>
+
       {employeesError ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
           Failed to load employees: <span className="font-mono">{employeesError}</span>
         </div>
       ) : null}
@@ -851,14 +989,23 @@ export default function EmployeeDirectory({
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className={addRoleIsAdmin ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 sm:grid-cols-2 gap-4"}>
                 <div>
                   <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
                     Role
                   </label>
                   <select
                     value={addDraft.empRole}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, empRole: e.target.value }))}
+                    onChange={(e) => {
+                      const nextRole = e.target.value;
+                      const isAdmin = String(nextRole).trim().toLowerCase() === "admin";
+                      setAddDraft((d) => ({
+                        ...d,
+                        empRole: nextRole,
+                        band: isAdmin ? "" : (d.band || defaultAddBand),
+                        stream: isAdmin ? "" : (d.stream || defaultAddStream),
+                      }));
+                    }}
                     className="mt-2 rt-input text-sm"
                   >
                     <option value="Employee">Employee</option>
@@ -867,18 +1014,31 @@ export default function EmployeeDirectory({
                   </select>
                 </div>
 
-                <div>
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-                    Band
-                  </label>
-                  <input
-                    value={addDraft.band}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, band: e.target.value }))}
-                    className="mt-2 rt-input text-sm"
-                    placeholder="e.g., B5L"
-                  />
-                </div>
+                {!addRoleIsAdmin ? (
+                  <div>
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                      Band
+                    </label>
+                    <select
+                      value={addDraft.band}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, band: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                    >
+                      {bandSelectOptions.map((band) => (
+                        <option key={`add-band:${band}`} value={band}>
+                          {band}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
               </div>
+
+              {addRoleIsAdmin ? (
+                <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
+                  Admin role does not require Band and Stream.
+                </div>
+              ) : null}
 
               <div>
                 <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
@@ -892,40 +1052,41 @@ export default function EmployeeDirectory({
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-                    Stream
-                  </label>
-                  <input
-                    value={addDraft.stream}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, stream: e.target.value }))}
-                    className="mt-2 rt-input text-sm"
-                    placeholder="e.g., Engineering"
-                  />
-                </div>
+              <div className={addRoleIsAdmin ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 sm:grid-cols-2 gap-4"}>
+                {!addRoleIsAdmin ? (
+                  <div>
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                      Stream
+                    </label>
+                    <select
+                      value={addDraft.stream}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, stream: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                    >
+                      {streamSelectOptions.map((stream) => (
+                        <option key={`add-stream:${stream}`} value={stream}>
+                          {stream}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
 
                 <div>
                   <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
                     Manager (optional)
                   </label>
-                  <input
-                    value={managerSearch}
-                    onChange={(e) => setManagerSearch(e.target.value)}
-                    className="mt-2 rt-input text-sm"
-                    placeholder="Search managers by name, id, or email..."
-                  />
                   <select
                     value={addDraft.managerId}
                     onChange={(e) => setAddDraft((d) => ({ ...d, managerId: e.target.value }))}
                     disabled={managersLoading}
                     className={[
-                      "mt-3 w-full rt-input text-sm",
+                      "mt-2 w-full rt-input text-sm",
                       managersLoading ? "opacity-60 cursor-not-allowed" : "",
                     ].join(" ")}
                   >
                     <option value="">No manager</option>
-                    {filteredManagers.map((m) => (
+                    {managers.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name} ({m.id}{m.email ? `, ${m.email}` : ""})
                       </option>

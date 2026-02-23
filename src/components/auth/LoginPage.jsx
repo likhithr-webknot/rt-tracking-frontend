@@ -61,28 +61,29 @@ export default function LoginPage({ onLoginSuccess }) {
   });
 
   return (
-      <div className="fixed inset-0 flex flex-col md:flex-row w-full bg-[rgb(var(--bg))] font-sans selection:bg-purple-500/30 overflow-hidden text-[rgb(var(--text))]">
+      <div className="min-h-screen w-full grid grid-cols-1 lg:grid-cols-[minmax(360px,440px)_1fr] bg-[rgb(var(--bg))] selection:bg-purple-500/30 overflow-hidden text-[rgb(var(--text))]">
 
         {/* Left Panel - Responsive container */}
-        <div className="flex w-full md:w-[35%] lg:w-[30%] xl:w-[25%] flex-col justify-between p-6 md:p-10 lg:p-12 z-40 bg-[rgb(var(--surface))] border-r border-[rgb(var(--border))] shadow-xl overflow-y-auto">
+        <div className="relative flex w-full flex-col justify-between p-6 md:p-10 lg:p-12 z-40 bg-[rgb(var(--surface))]/92 border-r border-[rgb(var(--border))] shadow-[0_24px_60px_rgba(7,24,52,0.14)] backdrop-blur-xl overflow-y-auto">
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-[rgb(var(--primary-soft))/0.9] to-transparent" />
           <div className="flex items-center gap-3">
             <img
               src="/unnamed.webp"
               alt="Webknot Technologies logo"
-              className="h-10 w-10 md:h-12 md:w-12 rounded-xl md:rounded-2xl object-cover border border-[rgb(var(--border))] bg-white"
+              className="h-10 w-10 md:h-12 md:w-12 rounded-xl md:rounded-2xl object-cover border border-[rgb(var(--border))] bg-white shadow-sm"
             />
             <div className="flex flex-col">
-              <span className="text-lg md:text-xl font-black uppercase italic tracking-tight">Webknot</span>
-              <span className="text-[10px] font-bold text-purple-400 uppercase tracking-[0.3em]">Technologies</span>
+              <span className="text-lg md:text-xl font-black uppercase tracking-tight">Webknot</span>
+              <span className="text-[10px] font-black text-blue-600 uppercase tracking-[0.28em]">Performance OS</span>
             </div>
           </div>
 
-          <div className="w-full max-w-sm mx-auto my-8 md:my-0">
-            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">Login</h1>
-            <p className="mt-2 text-sm text-slate-500 font-medium">Professional growth starts here.</p>
+          <div className="w-full max-w-md mx-auto my-8 md:my-0">
+            <h1 className="text-3xl md:text-[2.65rem] font-extrabold tracking-tight leading-tight">Sign in to your workspace</h1>
+            <p className="mt-3 text-sm text-[rgb(var(--muted))] font-medium">Unified portal for KPI operations, submissions, and manager workflows.</p>
 
 	            <form
-	              className="mt-10 md:mt-12 space-y-6 md:space-y-8"
+	              className="mt-10 md:mt-12 space-y-6"
 	              onSubmit={async (e) => {
 	                e.preventDefault();
 	                if (!canSubmit || submitting) return;
@@ -174,7 +175,7 @@ export default function LoginPage({ onLoginSuccess }) {
 	              }}
 	            >
               <div className="space-y-1.5 md:space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Corporate Email</label>
+                <label className="text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))]">Corporate Email</label>
                 <input
                     type="email"
                     value={email}
@@ -185,7 +186,7 @@ export default function LoginPage({ onLoginSuccess }) {
               </div>
 
               <div className="space-y-1.5 md:space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Access Key</label>
+                <label className="text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))]">Access Key</label>
                 <div className="relative">
                   <input
                       type={showPassword ? "text" : "password"}
@@ -222,45 +223,46 @@ export default function LoginPage({ onLoginSuccess }) {
                         setResetSuccess("");
                         setResetEmail(email.trim() || "");
                       }}
-                      className="text-xs font-black uppercase tracking-widest text-gray-500 hover:text-purple-300 transition-colors"
+                      className="text-xs font-black uppercase tracking-widest text-gray-500 hover:text-blue-500 transition-colors"
                     >
                       Forgot password?
                     </button>
                   </div>
 		
 		              {submitError ? (
-		                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+		                <div className="text-sm text-red-700 dark:text-red-200 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
 		                  {submitError}
 		                </div>
 		              ) : null}
                   {submitSuccess ? (
-                    <div className="text-sm text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
+                    <div className="text-sm text-emerald-700 dark:text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
                       {submitSuccess}
                     </div>
                   ) : null}
 		            </form>
 		          </div>
 
-          <div className="flex justify-between items-center text-[10px] text-[rgb(var(--muted))] font-bold uppercase tracking-widest">
+          <div className="flex justify-between items-center text-[10px] text-[rgb(var(--muted))] font-bold uppercase tracking-widest border-t border-[rgb(var(--border))] pt-5">
             <span>© 2026 Webknot</span>
-            <button onClick={() => setShowAdminModal(true)} className="hover:text-purple-500 transition-colors">
+            <button onClick={() => setShowAdminModal(true)} className="hover:text-blue-600 transition-colors">
               <Headset size={14} className="inline mr-1" /> Support
             </button>
           </div>
         </div>
 
         {/* Right Visual Panel - Relative sizing for fit */}
-        <div className="relative hidden md:flex flex-1 flex-col items-center justify-center bg-gradient-to-br from-indigo-600 to-violet-700 overflow-hidden">
-          <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: `linear-gradient(to right, white 1px, transparent 1px), linear-gradient(to bottom, white 1px, transparent 1px)`, backgroundSize: '40px 40px' }} />
-          <div className="absolute h-[50vw] w-[50vw] bg-white/10 rounded-full blur-[120px] animate-pulse" />
+        <div className="relative hidden lg:flex flex-1 flex-col items-center justify-center overflow-hidden">
+          <div className="absolute inset-0 bg-[linear-gradient(130deg,_rgb(10_22_42)_0%,_rgb(15_48_86)_46%,_rgb(12_102_160)_100%)]" />
+          <div className="absolute inset-0 opacity-[0.14]" style={{ backgroundImage: `linear-gradient(to right, rgba(255,255,255,0.38) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.38) 1px, transparent 1px)`, backgroundSize: '34px 34px' }} />
+          <div className="absolute h-[46vw] w-[46vw] bg-cyan-300/25 rounded-full blur-[120px] animate-pulse" />
 
           <div className="relative z-10 w-full max-w-4xl text-center px-4">
             <Motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/20 text-[10px] font-bold text-white mb-4 uppercase tracking-widest">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/12 border border-white/25 text-[10px] font-bold text-white mb-4 uppercase tracking-widest">
                 <Activity size={12} className="text-emerald-400" /> System Synchronized
               </div>
-              <h2 className="text-[4rem] lg:text-[6rem] font-black text-white leading-tight tracking-tighter">PRECISION</h2>
-              <h2 className="text-[4rem] lg:text-[6rem] font-black text-white/40 leading-[0.5] tracking-tighter">TRACKING</h2>
+                <h2 className="text-[3.6rem] lg:text-[5.25rem] font-black text-white leading-tight tracking-tighter">PERFORMANCE</h2>
+                <h2 className="text-[3.6rem] lg:text-[5.25rem] font-black text-white/45 leading-[0.56] tracking-tighter">INTELLIGENCE</h2>
             </Motion.div>
 
             <div className="relative flex justify-center items-center w-full max-h-[500px]">
@@ -342,7 +344,7 @@ export default function LoginPage({ onLoginSuccess }) {
                     animate={{ x: 0, opacity: 1, y: [0, -10, 0] }}
                     exit={{ x: -20, opacity: 0 }}
                     transition={{ x: { duration: 0.3 }, y: { duration: 4, repeat: Infinity, ease: "easeInOut" } }}
-                  className="absolute right-0 lg:-right-8 top-0 rounded-[2rem] bg-white p-5 lg:p-10 shadow-2xl w-56 sm:w-64 lg:w-80 text-gray-900 border border-white/20"
+                  className="absolute right-0 lg:-right-8 top-0 rounded-[1.4rem] bg-white/95 p-5 lg:p-9 shadow-2xl w-56 sm:w-64 lg:w-80 text-gray-900 border border-white/60 backdrop-blur"
                 >
                   <div className="flex items-center gap-4 lg:gap-6">
                     <div className={`h-12 w-12 lg:h-16 lg:w-16 rounded-xl lg:rounded-2xl ${metrics[metricIndex].color} flex items-center justify-center`}>
@@ -368,7 +370,7 @@ export default function LoginPage({ onLoginSuccess }) {
                   <h3 className="text-2xl font-bold text-[rgb(var(--text))] tracking-tight">Support</h3>
                   <p className="mt-4 text-[rgb(var(--muted))] text-sm">Talent Desk Assistance:</p>
                   <div className="mt-6 flex items-center justify-between p-4 rounded-xl rt-panel-subtle overflow-hidden">
-                    <span className="text-sm font-medium text-purple-300 truncate mr-2">{hrEmail}</span>
+                    <span className="text-sm font-medium text-blue-600 truncate mr-2">{hrEmail}</span>
                     <button onClick={handleCopy} className="p-2 text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] shrink-0 transition-colors">
                       {copied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
                     </button>
@@ -414,7 +416,7 @@ export default function LoginPage({ onLoginSuccess }) {
 
                 <div className="mt-8 space-y-6">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Email</label>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))]">Email</label>
                     <input
                       type="email"
                       value={resetEmail}
@@ -426,7 +428,7 @@ export default function LoginPage({ onLoginSuccess }) {
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">New Password</label>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))]">New Password</label>
                       <input
                         type="password"
                         value={newPassword}
@@ -436,7 +438,7 @@ export default function LoginPage({ onLoginSuccess }) {
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Confirm</label>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))]">Confirm</label>
                       <input
                         type="password"
                         value={confirmNewPassword}
@@ -448,12 +450,12 @@ export default function LoginPage({ onLoginSuccess }) {
                   </div>
 
                   {resetError ? (
-                    <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+                    <div className="text-sm text-red-700 dark:text-red-200 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
                       {resetError}
                     </div>
                   ) : null}
                   {resetSuccess ? (
-                    <div className="text-sm text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
+                    <div className="text-sm text-emerald-700 dark:text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
                       {resetSuccess}
                     </div>
                   ) : null}
@@ -485,7 +487,7 @@ export default function LoginPage({ onLoginSuccess }) {
                         setResetLoading(false);
                       }
                     }}
-                    className="w-full rounded-2xl bg-purple-600 py-4 font-black uppercase text-white hover:bg-purple-500 disabled:opacity-30 active:scale-[0.99] transition-all shadow-lg shadow-purple-900/20 text-sm"
+                    className="w-full rt-btn-primary py-4 font-black uppercase disabled:opacity-30 active:scale-[0.99] transition-all text-sm"
                   >
                     {resetLoading ? "Resetting…" : "Reset Password"}
                   </button>
