@@ -78,7 +78,6 @@ export default function App() {
         setHasReportees(list.length > 0);
       } catch (err) {
         if (!alive || err?.name === "AbortError") return;
-        // Fallback to role-based behavior if reportee probing fails.
         setHasReportees(roleLabel === "Manager");
       }
     })();
@@ -174,9 +173,7 @@ export default function App() {
             }
             setAuth(me);
             setAuthState(getAuth() || me);
-          } catch {
-            // Keep session state and show error.
-          }
+          } catch { void 0; }
         }
 
         setWindowError(err?.message || "Failed to load submission window status.");
@@ -266,6 +263,7 @@ export default function App() {
         portalWindow={null}
         error={windowError || "Unable to determine whether submissions are open."}
         onRetry={() => setWindowRefreshNonce((n) => n + 1)}
+        onLogout={logout}
       />
     );
   }
@@ -275,6 +273,7 @@ export default function App() {
       <SubmissionWindowClosed
         portalWindow={windowData}
         onRetry={() => setWindowRefreshNonce((n) => n + 1)}
+        onLogout={logout}
       />
     );
   }

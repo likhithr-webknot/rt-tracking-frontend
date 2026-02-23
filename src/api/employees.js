@@ -32,8 +32,6 @@ export function normalizeEmployees(data) {
     createdAt: e.createdAt ? String(e.createdAt) : null,
     updatedAt: e.updatedAt ? String(e.updatedAt) : null,
     submitted: Boolean(e.submitted ?? e.hasSubmitted ?? false),
-
-    // Optional fields; may be augmented client-side.
     recognitions: Number(e.recognitions ?? e.recognitionCount ?? 0) || 0,
     certifications: Array.isArray(e.certifications) ? e.certifications : [],
   }));
@@ -45,9 +43,7 @@ async function readError(res) {
     const parsed = JSON.parse(text);
     if (parsed?.message) return String(parsed.message);
     if (parsed?.error) return String(parsed.error);
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
   return text || `Request failed: ${res.status} ${res.statusText}`;
 }
 
@@ -85,14 +81,10 @@ export async function addEmployee(payload) {
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw await toHttpError(res);
-
-  // Backend may return the created employee, or nothing.
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json();
   return null;
 }
-
-// POST /employees/add-with-manager
 export async function addEmployeeWithManager(payload) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/employees/add-with-manager"), {
@@ -110,8 +102,6 @@ export async function addEmployeeWithManager(payload) {
   if (contentType.includes("application/json")) return res.json();
   return null;
 }
-
-// PUT /employees/update/{id}
 export async function updateEmployee(employeeId, payload, { signal } = {}) {
   const safeId = encodeURIComponent(String(employeeId));
   const auth = getAuthHeader();
@@ -152,8 +142,6 @@ export async function updateEmployee(employeeId, payload, { signal } = {}) {
 
   throw lastRouteErr || new Error("Employee edit endpoint not found.");
 }
-
-// DELETE /employees/delete/{id}
 export async function deleteEmployee(employeeId, { signal } = {}) {
   const safeId = encodeURIComponent(String(employeeId));
   const auth = getAuthHeader();
@@ -185,8 +173,6 @@ export function normalizeManagers(data) {
     band: String(m.band ?? m.level ?? ""),
   }));
 }
-
-// GET /employees/managers
 export async function fetchManagers({ signal } = {}) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/employees/managers"), {
@@ -197,8 +183,6 @@ export async function fetchManagers({ signal } = {}) {
   if (!res.ok) throw await toHttpError(res);
   return res.json();
 }
-
-// GET /employees/manager/{managerId}/reportees
 export async function fetchManagerReportees(managerId, { signal } = {}) {
   const safeId = encodeURIComponent(String(managerId));
   const auth = getAuthHeader();

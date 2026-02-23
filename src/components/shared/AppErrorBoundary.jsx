@@ -12,7 +12,6 @@ export default class AppErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error) {
-    // Keep console logging for dev debugging.
     console.error("[AppErrorBoundary]", error);
   }
 
@@ -25,8 +24,8 @@ export default class AppErrorBoundary extends React.Component {
     const message = String(error?.message || "The app crashed while rendering.");
 
     return (
-      <div className="rt-shell font-sans grid place-items-center px-6">
-        <div className="rt-panel w-full max-w-2xl rounded-[2rem] p-8">
+      <div className="rt-shell font-sans grid place-items-start sm:place-items-center px-4 sm:px-6 py-4 sm:py-6 overflow-y-auto">
+        <div className="rt-panel w-full max-w-2xl rounded-[2rem] p-5 sm:p-8 max-h-[90dvh] overflow-y-auto">
           <div className="rt-kicker">
             Error
           </div>

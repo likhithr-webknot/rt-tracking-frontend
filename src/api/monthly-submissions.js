@@ -8,9 +8,7 @@ async function readError(res) {
     const parsed = JSON.parse(text);
     if (parsed?.message) return String(parsed.message);
     if (parsed?.error) return String(parsed.error);
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
   return text || `Request failed: ${res.status} ${res.statusText}`;
 }
 
@@ -197,8 +195,6 @@ function toRequestPayload(payload) {
     webknotValueId: String(valueId || "").trim(),
     rating,
   }));
-
-  // Hard guarantee for backend JSON-array validation.
   if (!Array.isArray(next.kpiRatings)) next.kpiRatings = [];
   if (!Array.isArray(next.certifications)) next.certifications = [];
   if (!Array.isArray(next.webknotValueResponses)) next.webknotValueResponses = [];
@@ -274,13 +270,13 @@ export function normalizeMonthlySubmission(data) {
     obj?.monthKey ??
     month
   );
-  const managerReview =
+  const managerReviewRaw =
     (payload?.managerReview && typeof payload.managerReview === "object" ? payload.managerReview : null) ??
     (obj?.managerReview && typeof obj.managerReview === "object" ? obj.managerReview : null);
   const managerEvaluation =
     (payload?.managerEvaluation && typeof payload.managerEvaluation === "object" ? payload.managerEvaluation : null) ??
     (obj?.managerEvaluation && typeof obj.managerEvaluation === "object" ? obj.managerEvaluation : null);
-  const adminReview =
+  const adminReviewRaw =
     (payload?.adminReview && typeof payload.adminReview === "object" ? payload.adminReview : null) ??
     (obj?.adminReview && typeof obj.adminReview === "object" ? obj.adminReview : null);
   const adminEvaluation =
@@ -300,6 +296,38 @@ export function normalizeMonthlySubmission(data) {
     obj?.adminSubmittedAt ??
     obj?.adminReviewedAt ??
     null;
+  const managerFallbackComment = String(
+    payload?.managerComments ??
+    payload?.managerNotes ??
+    managerEvaluation?.comments ??
+    ""
+  ).trim();
+  const adminFallbackComment = String(
+    payload?.adminComments ??
+    payload?.adminNotes ??
+    adminEvaluation?.comments ??
+    ""
+  ).trim();
+  const managerReview =
+    managerReviewRaw ||
+    (managerFallbackComment
+      ? {
+          action: reviewStatus?.toUpperCase().includes("NEEDS_REVIEW") ? "REJECT" : null,
+          comments: managerFallbackComment,
+          reviewedAt: managerSubmittedAt || null,
+          reviewedBy: managerEvaluation?.reviewedBy ?? null,
+        }
+      : null);
+  const adminReview =
+    adminReviewRaw ||
+    (adminFallbackComment
+      ? {
+          action: reviewStatus?.toUpperCase().includes("NEEDS_REVIEW") ? "REJECT" : null,
+          comments: adminFallbackComment,
+          reviewedAt: adminSubmittedAt || null,
+          reviewedBy: adminEvaluation?.reviewedBy ?? null,
+        }
+      : null);
   const submissionType =
     String(
       payload?.submissionType ??
@@ -464,11 +492,13 @@ export async function fetchMyMonthlySubmissionHistory({ signal } = {}) {
   return res.json().catch(() => []);
 }
 
-export async function fetchManagerTeamSubmissions({ month, status, signal } = {}) {
+export async function fetchManagerTeamSubmissions({ month, status, limit = null, cursor = null, signal } = {}) {
   const auth = getAuthHeader();
   const qs = new URLSearchParams();
   if (month) qs.set("month", String(month));
   if (status) qs.set("status", String(status));
+  if (limit != null) qs.set("limit", String(limit));
+  if (cursor) qs.set("cursor", String(cursor));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   const res = await fetch(buildApiUrl(`/monthly-submissions/manager/team${suffix}`), {
     signal,
@@ -476,7 +506,7 @@ export async function fetchManagerTeamSubmissions({ month, status, signal } = {}
     headers: auth ? { Authorization: auth } : undefined,
   });
   if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => []);
+  return res.json().catch(() => ({}));
 }
 
 export async function fetchAdminAllSubmissions({ month, status, signal } = {}) {

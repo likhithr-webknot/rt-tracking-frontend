@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Edit3, Eye, EyeOff, KeyRound, Loader2, Plug, Plus, RefreshCcw, Trash2, X } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
+import CursorPagination from "../shared/CursorPagination.jsx";
 import {
   addAiAgent,
   deleteAiAgent,
@@ -10,6 +11,8 @@ import {
   updateAiAgent,
 } from "../../api/ai-agents.js";
 import { normalizeCursorPage } from "../../api/employee-portal.js";
+
+const AI_AGENT_PAGE_SIZE = 10;
 
 function providerLabel(provider) {
   const p = String(provider ?? "").trim();
@@ -34,6 +37,10 @@ export default function AIAgentsConfig() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState(null);
+  const [nextCursor, setNextCursor] = useState(null);
+  const [cursorStack, setCursorStack] = useState([]);
+  const cursorRef = useRef(null);
 
   const [modal, setModal] = useState({ open: false, mode: "add", agentId: null });
   const [draftProvider, setDraftProvider] = useState("openai");
@@ -46,6 +53,10 @@ export default function AIAgentsConfig() {
 
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
+
+  useEffect(() => {
+    cursorRef.current = cursor;
+  }, [cursor]);
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -64,42 +75,44 @@ export default function AIAgentsConfig() {
     []
   );
 
-  async function reloadAgents() {
-    setLoading(true);
-    setError("");
-    try {
-      const all = [];
-      let cursor = null;
-      for (let i = 0; i < 20; i += 1) {
-        const data = await fetchAiAgents({ limit: 100, cursor });
+  const reloadAgents = useCallback(
+    async ({ signal, cursor: requestedCursor, pageAction = "stay", fromCursor = null } = {}) => {
+      const resolvedCursor = requestedCursor === undefined ? (cursorRef.current ?? null) : (requestedCursor ?? null);
+      setLoading(true);
+      setError("");
+      try {
+        const data = await fetchAiAgents({
+          limit: AI_AGENT_PAGE_SIZE,
+          cursor: resolvedCursor,
+          signal,
+        });
         const page = normalizeCursorPage(data);
-        const items = normalizeAiAgents(page.items);
-        all.push(...items);
-        if (!page.nextCursor) break;
-        cursor = page.nextCursor;
+        setAgents(normalizeAiAgents(page.items));
+        setNextCursor(page.nextCursor ?? null);
+        setCursor(resolvedCursor);
+        cursorRef.current = resolvedCursor;
+        setCursorStack((prev) => {
+          if (pageAction === "next") return [...prev, (fromCursor ?? cursorRef.current ?? null)];
+          if (pageAction === "prev") return prev.slice(0, -1);
+          if (pageAction === "reset") return [];
+          return prev;
+        });
+      } catch (err) {
+        setAgents([]);
+        setNextCursor(null);
+        setError(err?.message || "Failed to load AI agents.");
+      } finally {
+        setLoading(false);
       }
-
-      const deduped = [];
-      const seen = new Set();
-      for (const item of all) {
-        const key = String(item?.id ?? "").trim();
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(item);
-      }
-      setAgents(deduped);
-    } catch (err) {
-      setAgents([]);
-      setError(err?.message || "Failed to load AI agents.");
-    } finally {
-      setLoading(false);
-    }
-  }
+    },
+    []
+  );
 
   useEffect(() => {
-    reloadAgents().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const controller = new AbortController();
+    reloadAgents({ signal: controller.signal, cursor: null, pageAction: "reset" }).catch(() => {});
+    return () => controller.abort();
+  }, [reloadAgents]);
 
   const q = String(query || "").trim().toLowerCase();
   const filteredAgents = !q
@@ -151,25 +164,12 @@ export default function AIAgentsConfig() {
     try {
       if (modal.mode === "edit") {
         const targetId = String(modal.agentId || "").trim();
-        const raw = await updateAiAgent(targetId, { provider, apiKey });
-        const nextAgent = normalizeAiAgents([raw])[0] || {
-          id: targetId,
-          provider,
-          apiKey,
-          active: true,
-          createdAt: null,
-          updatedAt: null,
-        };
-        setAgents((prev) => prev.map((a) => (String(a.id) === targetId ? { ...a, ...nextAgent } : a)));
+        await updateAiAgent(targetId, { provider, apiKey });
+        await reloadAgents({ cursor: cursor ?? null, pageAction: "stay" }).catch(() => {});
         showToast({ title: "Agent updated", message: providerLabel(provider) });
       } else {
-        const raw = await addAiAgent({ provider, apiKey });
-        const nextAgent = normalizeAiAgents([raw])[0];
-        if (nextAgent) {
-          setAgents((prev) => [nextAgent, ...prev.filter((a) => String(a.id) !== String(nextAgent.id))]);
-        } else {
-          await reloadAgents();
-        }
+        await addAiAgent({ provider, apiKey });
+        await reloadAgents({ cursor: null, pageAction: "reset" }).catch(() => {});
         showToast({ title: "Agent added", message: providerLabel(provider) });
       }
       closeModal();
@@ -190,7 +190,7 @@ export default function AIAgentsConfig() {
     setError("");
     try {
       await deleteAiAgent(agent.id);
-      setAgents((prev) => prev.filter((a) => String(a.id) !== String(agent.id)));
+      await reloadAgents({ cursor: cursor ?? null, pageAction: "stay" }).catch(() => {});
       showToast({ title: "Agent deleted", message: providerLabel(agent.provider) });
       setPendingDeleteAgent(null);
     } catch (err) {
@@ -214,7 +214,7 @@ export default function AIAgentsConfig() {
           </p>
         </div>
         <button
-          onClick={() => reloadAgents().catch(() => {})}
+          onClick={() => reloadAgents({ cursor: cursor ?? null, pageAction: "stay" }).catch(() => {})}
           disabled={loading}
           className="rt-btn-ghost inline-flex items-center gap-2 text-xs uppercase tracking-widest"
         >
@@ -224,7 +224,7 @@ export default function AIAgentsConfig() {
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-4xl">
         <div className="rt-panel-subtle rounded-2xl px-4 py-3">
-          <div className="rt-kicker">Total Agents</div>
+          <div className="rt-kicker">Rows On Page</div>
           <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{agents.length}</div>
         </div>
         <div className="rt-panel-subtle rounded-2xl px-4 py-3">
@@ -259,7 +259,7 @@ export default function AIAgentsConfig() {
           <div>
             <h3 className="text-xl font-black tracking-tight">AI Agents</h3>
             <p className="text-slate-500 text-sm mt-1">
-              {loading ? "Loading..." : agents.length ? `${agents.length} configured` : "No agents configured yet."}
+              {loading ? "Loading..." : agents.length ? `${agents.length} shown on this page` : "No agents configured yet."}
             </p>
           </div>
 
@@ -330,6 +330,35 @@ export default function AIAgentsConfig() {
               ) : null}
             </tbody>
           </table>
+        </div>
+        <div className="p-6 border-t border-[rgb(var(--border))]">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={() => reloadAgents({ cursor: null, pageAction: "reset" }).catch(() => {})}
+              disabled={loading}
+              className={[
+                "rt-btn-ghost text-xs uppercase tracking-widest",
+                loading ? "opacity-50 cursor-not-allowed" : "",
+              ].join(" ")}
+            >
+              First Page
+            </button>
+            <CursorPagination
+              canPrev={cursorStack.length > 0}
+              canNext={Boolean(nextCursor)}
+              onPrev={() => {
+                const prevCursor = cursorStack[cursorStack.length - 1] ?? null;
+                reloadAgents({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
+              }}
+              onNext={() => {
+                if (!nextCursor) return;
+                reloadAgents({ cursor: nextCursor, pageAction: "next", fromCursor: cursor }).catch(() => {});
+              }}
+              loading={loading}
+              label={`Page ${cursorStack.length + 1}`}
+            />
+          </div>
         </div>
       </section>
 

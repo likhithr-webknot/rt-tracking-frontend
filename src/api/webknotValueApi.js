@@ -13,8 +13,6 @@ function toCleanString(value, depth = 0) {
     const t = typeof value;
     if (t === "string") return value.trim();
     if (t === "number" || t === "boolean" || t === "bigint") return String(value);
-
-    // Attempt to unwrap common shapes like { name: "..." } or { title: "..." }.
     if (t === "object") {
         const obj = value;
         const candidates = [
@@ -40,8 +38,6 @@ function pickDeep(obj, keys, depth = 0) {
     if (!obj || typeof obj !== "object") return "";
     if (depth > 3) return "";
     const keyList = Array.isArray(keys) ? keys : [];
-
-    // Direct + case-insensitive match
     const actualKeys = Object.keys(obj);
     const lowerToActual = new Map(actualKeys.map((k) => [k.toLowerCase(), k]));
     for (const k of keyList) {
@@ -55,8 +51,6 @@ function pickDeep(obj, keys, depth = 0) {
             if (s2) return s2;
         }
     }
-
-    // Recurse into nested objects/arrays
     for (const v of Object.values(obj)) {
         if (!v || typeof v !== "object") continue;
         const s = pickDeep(v, keyList, depth + 1);
@@ -140,9 +134,7 @@ async function readError(res) {
         const parsed = JSON.parse(text);
         if (parsed?.message) return String(parsed.message);
         if (parsed?.error) return String(parsed.error);
-    } catch {
-        // ignore
-    }
+    } catch { void 0; }
     return text || `Request failed: ${res.status} ${res.statusText}`;
 }
 

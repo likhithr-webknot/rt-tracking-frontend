@@ -20,12 +20,12 @@ export default function ConfirmDialog({
       : "bg-red-500 text-white hover:bg-red-400";
 
   return (
-    <div className="fixed inset-0 z-[80] bg-slate-950/65 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-md rt-panel rounded-3xl p-6">
+    <div className="fixed inset-0 z-[80] bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+      <div className="w-full max-w-md rt-panel rounded-3xl p-5 sm:p-6 my-3 sm:my-6 max-h-[90dvh] overflow-y-auto">
         <h3 className="font-black uppercase tracking-tight text-[rgb(var(--text))]">{title || "Confirm"}</h3>
         <p className="mt-3 text-sm text-[rgb(var(--muted))] whitespace-pre-wrap">{message || "Are you sure?"}</p>
 
-        <div className="mt-6 flex items-center justify-end gap-3">
+        <div className="mt-6 flex items-center justify-end gap-2 sm:gap-3 flex-wrap">
           {showCancel ? (
             <button
               type="button"

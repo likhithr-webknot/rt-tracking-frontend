@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion as Motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Settings, LogOut, ChevronLeft, ChevronRight,
-  ClipboardCheck, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X, Layers3
+  ClipboardCheck, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X, Layers3,
+  Bell, BellDot, CheckCheck
 } from "lucide-react";
 
 import AdminDashboard from "./AdminDashboard.jsx";
@@ -47,13 +49,20 @@ import {
   formatYearMonth,
   normalizeMonthlySubmission,
 } from "../../api/monthly-submissions.js";
+import {
+  fetchAdminNotifications,
+  markAdminNotificationRead,
+  markAllAdminNotificationsRead,
+  normalizeAdminNotificationPage,
+  subscribeAdminNotificationsStream,
+} from "../../api/notifications.js";
 
 const DIRECTORY_PAGE_SIZE = 10;
 const KPI_PAGE_SIZE_OPTIONS = [10, 20, 50];
 const KPI_FIRST_CURSOR = null;
+const ADMIN_NOTIFICATION_PAGE_SIZE = 25;
+const ADMIN_NOTIFICATION_POLL_MS = 30_000;
 const ADMIN_SIDEBAR_PREF_KEY = "rt_tracking_admin_sidebar_open_v1";
-
-// --- SUB-COMPONENT: SIDEBAR ---
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
   const isAdmin = String(account?.role || "").trim().toLowerCase() === "admin";
   const navItems = [
@@ -185,8 +194,6 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
     </aside>
   );
 };
-
-// --- HELPERS (report + window defaults live here) ---
 function toLocalInputValue(date) {
   const pad = (n) => String(n).padStart(2, '0')
   const yyyy = date.getFullYear()
@@ -274,9 +281,7 @@ function saveEmployeeExtras(next) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(EMPLOYEE_EXTRAS_STORAGE_KEY, JSON.stringify(next));
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
 }
 
 function loadCertificationCatalogFromStorage() {
@@ -299,13 +304,10 @@ function saveCertificationCatalogToStorage(items) {
       CERTIFICATION_CATALOG_STORAGE_KEY,
       JSON.stringify(normalizeCertificationCatalog(items))
     );
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
 }
 
 function hashFNV1a32(text) {
-  // Deterministic, tiny, good enough for local IDs.
   let hash = 0x811c9dc5;
   for (let i = 0; i < text.length; i += 1) {
     hash ^= text.charCodeAt(i);
@@ -426,8 +428,6 @@ function computeSubmissionAbilityScore(submission) {
     (data?.managerEvaluation && typeof data.managerEvaluation === "object" ? data.managerEvaluation : null) ??
     (payload?.managerEvaluation && typeof payload.managerEvaluation === "object" ? payload.managerEvaluation : null) ??
     (source?.managerEvaluation && typeof source.managerEvaluation === "object" ? source.managerEvaluation : null);
-
-  // For employee submissions, final monthly/cycle scores must come only from manager ratings.
   const useManagerScoresOnly = submissionType !== "MANAGER_SELF_REVIEW";
   if (useManagerScoresOnly && !managerEval) return null;
 
@@ -464,7 +464,34 @@ function computeSubmissionAbilityScore(submission) {
   return Math.round(avg * 10) / 10;
 }
 
-// --- MAIN PORTAL ---
+function formatNotificationTimestamp(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "Now";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return "Now";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function mergeNotifications(existing, incoming) {
+  const next = [];
+  const seen = new Set();
+  const pushUnique = (row) => {
+    if (!row || typeof row !== "object") return;
+    const key = String(row.id ?? `${row.type}:${row.createdAt}:${row.message ?? row.title ?? ""}`);
+    if (seen.has(key)) return;
+    seen.add(key);
+    next.push(row);
+  };
+
+  (Array.isArray(incoming) ? incoming : []).forEach(pushUnique);
+  (Array.isArray(existing) ? existing : []).forEach(pushUnique);
+  return next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
 export default function AdminControlCenter({ onLogout, auth }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -472,22 +499,18 @@ export default function AdminControlCenter({ onLogout, auth }) {
       const stored = window.localStorage.getItem(ADMIN_SIDEBAR_PREF_KEY);
       if (stored === "0") return false;
       if (stored === "1") return true;
-    } catch {
-      // ignore
-    }
+    } catch { void 0; }
     return window.innerWidth >= 1024;
   });
   const [activeTab, setActiveTab] = useState("dashboard");
   const isAdmin = String(auth?.role || auth?.claims?.role || "").trim().toLowerCase() === "admin";
-
-  // KPI state
   const [showKPIModal, setShowKPIModal] = useState(false);
   const [kpiModalMode, setKpiModalMode] = useState("add"); // "add" | "edit"
   const [searchQuery, setSearchQuery] = useState("");
   const [kpis, setKpis] = useState([]);
   const [kpisLoading, setKpisLoading] = useState(false);
   const [kpisError, setKpisError] = useState("");
-  const [kpisCursor, setKpisCursor] = useState(KPI_FIRST_CURSOR);
+  const [, setKpisCursor] = useState(KPI_FIRST_CURSOR);
   const [kpisNextCursor, setKpisNextCursor] = useState(null);
   const [kpisCursorStack, setKpisCursorStack] = useState([]);
   const [kpiPageSize, setKpiPageSize] = useState(DIRECTORY_PAGE_SIZE);
@@ -498,13 +521,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [pendingDeleteKpi, setPendingDeleteKpi] = useState(null);
   const [directoryBands, setDirectoryBands] = useState([]);
   const [directoryStreams, setDirectoryStreams] = useState([]);
-
-  // Webknot Values (from API)
   const [valuesSearchQuery, setValuesSearchQuery] = useState("");
   const [values, setValues] = useState([]);
   const [valuesLoading, setValuesLoading] = useState(false);
   const [valuesError, setValuesError] = useState("");
-  const [valuesCursor, setValuesCursor] = useState(null);
+  const [, setValuesCursor] = useState(null);
   const [valuesNextCursor, setValuesNextCursor] = useState(null);
   const [valuesCursorStack, setValuesCursorStack] = useState([]);
   const valuesCursorRef = useRef(null);
@@ -514,18 +535,25 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [valueDraft, setValueDraft] = useState({ title: "", pillar: "", description: "" });
   const [valueSaving, setValueSaving] = useState(false);
   const [pendingDeleteValue, setPendingDeleteValue] = useState(null);
-
-  // Certifications (admin registry)
   const [certificationCatalog, setCertificationCatalog] = useState(() => {
     const { items } = loadCertificationCatalogFromStorage();
     return Array.isArray(items) ? items : [];
   });
   const [certificationsLoading, setCertificationsLoading] = useState(false);
   const [certificationsError, setCertificationsError] = useState("");
-  const [certificationsCursor, setCertificationsCursor] = useState(null);
+  const [, setCertificationsCursor] = useState(null);
   const [certificationsNextCursor, setCertificationsNextCursor] = useState(null);
   const [certificationsCursorStack, setCertificationsCursorStack] = useState([]);
   const certificationsCursorRef = useRef(null);
+
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsError, setNotificationsError] = useState("");
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsNextCursor, setNotificationsNextCursor] = useState(null);
+  const notificationsPanelRef = useRef(null);
+  const notificationsLoadedRef = useRef(false);
+  const notifiedEventKeysRef = useRef(new Set());
 
   const [toast, setToast] = useState(null); // { title: string, message?: string }
   const toastTimerRef = useRef(null);
@@ -536,12 +564,73 @@ export default function AdminControlCenter({ onLogout, auth }) {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }, []);
 
+  const unreadNotificationsCount = useMemo(
+    () => notifications.reduce((count, item) => (item?.read ? count : count + 1), 0),
+    [notifications]
+  );
+
+  const reloadNotifications = useCallback(async ({
+    signal,
+    cursor = null,
+    append = false,
+    silent = false,
+  } = {}) => {
+    if (!silent || !notificationsLoadedRef.current) {
+      setNotificationsLoading(true);
+    }
+    setNotificationsError("");
+    try {
+      const data = await fetchAdminNotifications({
+        limit: ADMIN_NOTIFICATION_PAGE_SIZE,
+        cursor,
+        unreadOnly: false,
+        signal,
+      });
+      const page = normalizeAdminNotificationPage(data);
+      setNotifications((prev) => {
+        const prevById = new Map(prev.map((n) => [String(n.id), n]));
+        const merged = append ? mergeNotifications(prev, page.items) : page.items;
+        return merged.map((item) => {
+          const previous = prevById.get(String(item.id));
+          return previous?.read ? { ...item, read: true } : item;
+        });
+      });
+      setNotificationsNextCursor(page.nextCursor);
+      notificationsLoadedRef.current = true;
+      return page;
+    } catch (err) {
+      if (err?.name === "AbortError") return null;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return null;
+      }
+      setNotificationsError(err?.message || "Failed to load notifications.");
+      return null;
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }, [onLogout, showToast]);
+
+  const pushIncomingNotification = useCallback((incoming) => {
+    if (!incoming) return;
+    const eventKey = String(incoming?.id ?? `${incoming?.type}:${incoming?.createdAt}:${incoming?.message ?? incoming?.title ?? ""}`);
+    setNotifications((prev) => mergeNotifications(prev, [incoming]).slice(0, ADMIN_NOTIFICATION_PAGE_SIZE * 3));
+    if (notifiedEventKeysRef.current.has(eventKey)) return;
+    notifiedEventKeysRef.current.add(eventKey);
+    if (notifiedEventKeysRef.current.size > 500) {
+      notifiedEventKeysRef.current = new Set(Array.from(notifiedEventKeysRef.current).slice(-250));
+    }
+    showToast({
+      title: incoming.title || "Admin notification",
+      message: incoming.message || "",
+    });
+  }, [showToast]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(ADMIN_SIDEBAR_PREF_KEY, isSidebarOpen ? "1" : "0");
-    } catch {
-      // ignore
-    }
+    } catch { void 0; }
   }, [isSidebarOpen]);
 
   useEffect(() => {
@@ -573,6 +662,45 @@ export default function AdminControlCenter({ onLogout, auth }) {
       controller.abort();
     };
   }, [onLogout]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    reloadNotifications({ signal: controller.signal }).catch(() => {});
+
+    const timer = window.setInterval(() => {
+      reloadNotifications({ silent: true }).catch(() => {});
+    }, ADMIN_NOTIFICATION_POLL_MS);
+
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [reloadNotifications]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeAdminNotificationsStream({
+      onNotification: (item) => {
+        pushIncomingNotification(item);
+      },
+      onError: () => {
+        reloadNotifications({ silent: true }).catch(() => {});
+      },
+    });
+    return () => unsubscribe?.();
+  }, [pushIncomingNotification, reloadNotifications]);
+
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    const onPointerDown = (event) => {
+      const target = event?.target;
+      if (!notificationsPanelRef.current || !target) return;
+      if (!notificationsPanelRef.current.contains(target)) {
+        setNotificationsOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [notificationsOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -858,8 +986,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
       const parsed = Number.parseFloat(numericText);
       return Number.isFinite(parsed) ? parsed : 0;
     };
-
-    // Enforce: per band + stream pair, total weightage must not exceed 100%.
     const nextBand = payload.band;
     const nextStream = payload.stream;
     const nextWeight = toPercent(payload.weight);
@@ -896,8 +1022,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
         message: normalized.title,
       });
       setShowKPIModal(false);
-
-      // Prefer server truth if the backend returns a minimal payload.
       await reloadKpis().catch(() => {});
     } catch (err) {
       if (err?.status === 401) {
@@ -993,8 +1117,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
     reloadValues({ signal: controller.signal }).catch(() => {});
     return () => controller.abort();
   }, [reloadValues]);
-
-  // Portal Window state (server)
   const [portalWindow, setPortalWindow] = useState(() => defaultPortalWindow());
   const [portalWindowLoading, setPortalWindowLoading] = useState(false);
   const [portalWindowError, setPortalWindowError] = useState("");
@@ -1006,7 +1128,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
       const data = await fetchSubmissionWindowCurrent({ signal });
       setPortalWindow((prev) => {
         const next = portalWindowFromServer(data);
-        // Keep any in-progress edits only if server returned empty/invalid.
         if (!next.start) return prev;
         return next;
       });
@@ -1029,8 +1150,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
     reloadPortalWindow({ signal: controller.signal }).catch(() => {});
     return () => controller.abort();
   }, [reloadPortalWindow]);
-
-  // Employee state (demo)
   const [employees, setEmployees] = useState([
     { id: "EMP001", name: "Alice Johnson", role: "Admin", band: "B5L", submitted: true },
     { id: "EMP002", name: "Bob Smith", role: "Manager", band: "B6H", submitted: true },
@@ -1039,16 +1158,77 @@ export default function AdminControlCenter({ onLogout, auth }) {
   ])
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [employeesError, setEmployeesError] = useState("");
-  const [employeesCursor, setEmployeesCursor] = useState(null);
+  const [, setEmployeesCursor] = useState(null);
   const [employeesNextCursor, setEmployeesNextCursor] = useState(null);
   const [employeesCursorStack, setEmployeesCursorStack] = useState([]);
+  const [employeesTotalCount, setEmployeesTotalCount] = useState(null);
+  const [employeesDirectoryTotals, setEmployeesDirectoryTotals] = useState({
+    managerCount: null,
+    adminCount: null,
+    employeeCount: null,
+    bandCount: null,
+  });
   const employeesCursorRef = useRef(null);
 
   const [ability6m, setAbility6m] = useState(() =>
     buildLastMonths(6).map((m) => ({ month: m.label, avg: 0 }))
   );
 
-  const reloadEmployees = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
+  const commitEmployeesPage = useCallback((page, { cursor, cursorStack }) => {
+    const base = normalizeEmployees(page.items);
+    const extras = loadEmployeeExtras();
+    setEmployees(applyEmployeeExtras(base, extras));
+    setEmployeesNextCursor(page.nextCursor);
+    const totalRaw = page?.raw?.total;
+    const totalNum =
+      typeof totalRaw === "number"
+        ? totalRaw
+        : typeof totalRaw === "string"
+          ? Number.parseInt(totalRaw, 10)
+          : null;
+    const managerRaw = page?.raw?.managerCount;
+    const adminRaw = page?.raw?.adminCount;
+    const employeeRaw = page?.raw?.employeeCount;
+    const bandRaw = page?.raw?.bandCount;
+    const managerNum =
+      typeof managerRaw === "number"
+        ? managerRaw
+        : typeof managerRaw === "string"
+          ? Number.parseInt(managerRaw, 10)
+          : null;
+    const adminNum =
+      typeof adminRaw === "number"
+        ? adminRaw
+        : typeof adminRaw === "string"
+          ? Number.parseInt(adminRaw, 10)
+          : null;
+    const employeeNum =
+      typeof employeeRaw === "number"
+        ? employeeRaw
+        : typeof employeeRaw === "string"
+          ? Number.parseInt(employeeRaw, 10)
+          : null;
+    const bandNum =
+      typeof bandRaw === "number"
+        ? bandRaw
+        : typeof bandRaw === "string"
+          ? Number.parseInt(bandRaw, 10)
+          : null;
+    setEmployeesTotalCount((prev) => (
+      Number.isFinite(totalNum) ? totalNum : prev
+    ));
+    setEmployeesDirectoryTotals((prev) => ({
+      managerCount: Number.isFinite(managerNum) ? managerNum : prev.managerCount,
+      adminCount: Number.isFinite(adminNum) ? adminNum : prev.adminCount,
+      employeeCount: Number.isFinite(employeeNum) ? employeeNum : prev.employeeCount,
+      bandCount: Number.isFinite(bandNum) ? bandNum : prev.bandCount,
+    }));
+    setEmployeesCursor(cursor ?? null);
+    employeesCursorRef.current = cursor ?? null;
+    if (Array.isArray(cursorStack)) setEmployeesCursorStack(cursorStack);
+  }, []);
+
+  const reloadEmployees = useCallback(async ({ signal, cursor, pageAction = "stay", cursorStackOverride = null } = {}) => {
     const resolvedCursor = cursor === undefined ? (employeesCursorRef.current ?? null) : (cursor ?? null);
     const previousCursor = employeesCursorRef.current ?? null;
     setEmployeesError("");
@@ -1056,18 +1236,17 @@ export default function AdminControlCenter({ onLogout, auth }) {
     try {
       const data = await fetchEmployees({ limit: DIRECTORY_PAGE_SIZE, cursor: resolvedCursor, signal });
       const page = normalizeCursorPage(data);
-      const base = normalizeEmployees(page.items);
-      const extras = loadEmployeeExtras();
-      setEmployees(applyEmployeeExtras(base, extras));
-      setEmployeesNextCursor(page.nextCursor);
-      setEmployeesCursor(resolvedCursor);
-      employeesCursorRef.current = resolvedCursor;
-      setEmployeesCursorStack((prev) => {
-        if (pageAction === "next") return [...prev, previousCursor];
-        if (pageAction === "prev") return prev.slice(0, -1);
-        if (pageAction === "reset") return [];
-        return prev;
-      });
+      const cursorStack =
+        Array.isArray(cursorStackOverride)
+          ? cursorStackOverride
+          : pageAction === "next"
+            ? [...employeesCursorStack, previousCursor]
+            : pageAction === "prev"
+              ? employeesCursorStack.slice(0, -1)
+              : pageAction === "reset"
+                ? []
+                : employeesCursorStack;
+      commitEmployeesPage(page, { cursor: resolvedCursor, cursorStack });
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err?.status === 401) {
@@ -1077,11 +1256,87 @@ export default function AdminControlCenter({ onLogout, auth }) {
       }
       const message = err?.message || "Failed to load employees.";
       setEmployeesError(message);
+      setEmployeesTotalCount(null);
+      setEmployeesDirectoryTotals({
+        managerCount: null,
+        adminCount: null,
+        employeeCount: null,
+        bandCount: null,
+      });
       throw err;
     } finally {
       setEmployeesLoading(false);
     }
-  }, [onLogout, showToast]);
+  }, [commitEmployeesPage, employeesCursorStack, onLogout, showToast]);
+
+  const jumpEmployeesToPage = useCallback(async (rawPage) => {
+    const parsed = Number.parseInt(String(rawPage ?? "").trim(), 10);
+    if (!Number.isFinite(parsed) || parsed < 1) return;
+
+    const currentPage = employeesCursorStack.length + 1;
+    if (parsed === currentPage) return;
+
+    if (parsed < currentPage) {
+      const targetCursor = parsed <= 1 ? null : (employeesCursorStack[parsed - 1] ?? null);
+      const targetStack = parsed <= 1 ? [] : employeesCursorStack.slice(0, parsed - 1);
+      await reloadEmployees({
+        cursor: targetCursor,
+        pageAction: "jump",
+        cursorStackOverride: targetStack,
+      });
+      return;
+    }
+
+    setEmployeesError("");
+    setEmployeesLoading(true);
+    try {
+      let workingStack = [...employeesCursorStack];
+      let previousCursor = employeesCursorRef.current ?? null;
+      let nextCursor = employeesNextCursor;
+      let targetPage = null;
+      let targetCursor = null;
+
+      for (let pageNo = currentPage + 1; pageNo <= parsed; pageNo += 1) {
+        if (!nextCursor) {
+          throw new Error(`Page ${parsed} is not available.`);
+        }
+        const data = await fetchEmployees({ limit: DIRECTORY_PAGE_SIZE, cursor: nextCursor });
+        const page = normalizeCursorPage(data);
+        workingStack = [...workingStack, previousCursor];
+        previousCursor = nextCursor;
+
+        if (pageNo === parsed) {
+          targetPage = page;
+          targetCursor = previousCursor;
+          break;
+        }
+        nextCursor = page.nextCursor;
+      }
+
+      if (!targetPage) throw new Error(`Page ${parsed} is not available.`);
+      commitEmployeesPage(targetPage, { cursor: targetCursor, cursorStack: workingStack });
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      const message = err?.message || `Failed to navigate to page ${parsed}.`;
+      setEmployeesError(message);
+      showToast({ title: "Page navigation failed", message });
+      throw err;
+    } finally {
+      setEmployeesLoading(false);
+    }
+  }, [
+    commitEmployeesPage,
+    employeesCursorStack,
+    employeesNextCursor,
+    onLogout,
+    reloadEmployees,
+    showToast,
+  ]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1142,23 +1397,48 @@ export default function AdminControlCenter({ onLogout, auth }) {
     };
   }, [onLogout, showToast]);
 
-  const employeePager = useMemo(() => ({
-    canPrev: employeesCursorStack.length > 0,
-    canNext: Boolean(employeesNextCursor),
-    onReset: () => {
-      reloadEmployees({ cursor: null, pageAction: "reset" }).catch(() => {});
-    },
-    onPrev: () => {
-      const prevCursor = employeesCursorStack[employeesCursorStack.length - 1] ?? null;
-      reloadEmployees({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
-    },
-    onNext: () => {
-      if (!employeesNextCursor) return;
-      reloadEmployees({ cursor: employeesNextCursor, pageAction: "next" }).catch(() => {});
-    },
-    loading: employeesLoading,
-    label: `Page ${employeesCursorStack.length + 1}`,
-  }), [employeesCursorStack, employeesNextCursor, employeesLoading, reloadEmployees]);
+  const employeePager = useMemo(() => {
+    const page = employeesCursorStack.length + 1;
+    const maxPage =
+      typeof employeesTotalCount === "number" && employeesTotalCount > 0
+        ? Math.max(1, Math.ceil(employeesTotalCount / DIRECTORY_PAGE_SIZE))
+        : null;
+    const shownCount = Array.isArray(employees) ? employees.length : 0;
+    const label = maxPage
+      ? `Page ${page} • ${DIRECTORY_PAGE_SIZE}/page • showing ${shownCount} of ${employeesTotalCount}`
+      : `Page ${page} • ${DIRECTORY_PAGE_SIZE}/page`;
+
+    return {
+      canPrev: employeesCursorStack.length > 0,
+      canNext: Boolean(employeesNextCursor),
+      onReset: () => {
+        reloadEmployees({ cursor: null, pageAction: "reset", cursorStackOverride: [] }).catch(() => {});
+      },
+      onPrev: () => {
+        const prevCursor = employeesCursorStack[employeesCursorStack.length - 1] ?? null;
+        reloadEmployees({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
+      },
+      onNext: () => {
+        if (!employeesNextCursor) return;
+        reloadEmployees({ cursor: employeesNextCursor, pageAction: "next" }).catch(() => {});
+      },
+      onPageChange: (targetPage) => {
+        jumpEmployeesToPage(targetPage).catch(() => {});
+      },
+      page,
+      maxPage,
+      loading: employeesLoading,
+      label,
+    };
+  }, [
+    employees,
+    employeesCursorStack,
+    employeesNextCursor,
+    employeesLoading,
+    employeesTotalCount,
+    jumpEmployeesToPage,
+    reloadEmployees,
+  ]);
 
   const kpiPager = useMemo(() => ({
     canPrev: kpisCursorStack.length > 0,
@@ -1209,6 +1489,38 @@ export default function AdminControlCenter({ onLogout, auth }) {
     certificationsNextCursor,
     reloadCertifications,
   ]);
+
+  const markNotificationRead = useCallback(async (notificationId) => {
+    const id = String(notificationId ?? "").trim();
+    if (!id) return;
+    try {
+      await markAdminNotificationRead(id);
+      setNotifications((prev) => prev.map((item) => (
+        String(item?.id) === id ? { ...item, read: true } : item
+      )));
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      showToast({ title: "Unable to mark read", message: err?.message || "Please try again." });
+    }
+  }, [onLogout, showToast]);
+
+  const markEveryNotificationRead = useCallback(async () => {
+    try {
+      await markAllAdminNotificationsRead();
+      setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      showToast({ title: "Unable to mark all read", message: err?.message || "Please try again." });
+    }
+  }, [onLogout, showToast]);
 
   useEffect(() => {
     saveCertificationCatalogToStorage(certificationCatalog);
@@ -1309,8 +1621,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
     const id = String(employeeId);
     const cert = String(certification || "").trim();
     if (!cert) return;
-
-    // Enforce: only certifications in the admin registry can be added/completed.
     const allowed = certificationCatalog.some(
       (c) =>
         Boolean(c?.listed) &&
@@ -1377,8 +1687,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
           nextForceOpen = employeeScopedIsOpen;
           nextForceClosed = !employeeScopedIsOpen;
         }
-      } catch {
-      }
+      } catch { void 0; }
 
       setEmployees((prev) =>
         prev.map((emp) =>
@@ -1410,9 +1719,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const account = useMemo(() => {
     const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
     const rawEmail = String(auth?.email || auth?.claims?.sub || "").trim();
-
-    // Cookie-based auth may not expose email in JS unless we persist it ourselves.
-    // Best-effort fallback: if there's exactly one employee with this role, use that record.
     let email = rawEmail || null;
     if (!email) {
       const roleKey = role.toLowerCase();
@@ -1514,6 +1820,133 @@ export default function AdminControlCenter({ onLogout, auth }) {
           <div className="absolute -top-28 right-10 h-72 w-72 rounded-full bg-blue-500/10 blur-3xl" />
           <div className="absolute bottom-6 left-1/3 h-64 w-64 rounded-full bg-cyan-400/10 blur-3xl" />
         </div>
+        <div className="fixed right-4 top-4 z-[65] flex flex-col items-end md:right-8 md:top-5" ref={notificationsPanelRef}>
+          <button
+            type="button"
+            onClick={() => {
+              const nextOpen = !notificationsOpen;
+              setNotificationsOpen(nextOpen);
+              if (nextOpen) reloadNotifications({ silent: true }).catch(() => {});
+            }}
+            className={[
+              "relative inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[rgb(var(--border))]",
+              "bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-[0_12px_28px_rgba(8,22,45,0.15)]",
+              "transition-all duration-300 hover:bg-[rgb(var(--surface-2))] hover:shadow-[0_16px_30px_rgba(8,22,45,0.2)]",
+              unreadNotificationsCount > 0 ? "animate-[pulse_2.4s_ease-in-out_infinite]" : "",
+            ].join(" ")}
+            aria-label="Admin notifications"
+            title="Admin notifications"
+          >
+            {unreadNotificationsCount > 0 ? <BellDot size={18} /> : <Bell size={18} />}
+            {unreadNotificationsCount > 0 ? (
+              <span className="absolute -right-1.5 -top-1.5 min-w-[20px] rounded-full bg-red-600 px-1.5 py-0.5 text-center text-[10px] font-black text-white">
+                {unreadNotificationsCount > 99 ? "99+" : unreadNotificationsCount}
+              </span>
+            ) : null}
+          </button>
+
+          <AnimatePresence mode="wait">
+            {notificationsOpen ? (
+              <Motion.div
+                initial={{ opacity: 0, y: -12, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -10, scale: 0.97 }}
+                transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.8 }}
+                className="mt-3 w-[min(92vw,420px)] origin-top-right rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] shadow-[0_24px_52px_rgba(7,18,42,0.24)] backdrop-blur-xl"
+              >
+              <div className="flex items-center justify-between border-b border-[rgb(var(--border))] px-4 py-3">
+                <div>
+                  <div className="text-xs font-black uppercase tracking-[0.18em] text-[rgb(var(--muted))]">
+                    Admin Notifications
+                  </div>
+                  <div className="mt-1 text-sm font-bold text-[rgb(var(--text))]">
+                    {unreadNotificationsCount} unread
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => reloadNotifications().catch(() => {})}
+                    className="rounded-lg border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                  >
+                    Refresh
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => markEveryNotificationRead().catch(() => {})}
+                    className="inline-flex items-center gap-1 rounded-lg border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                  >
+                    <CheckCheck size={13} />
+                    Mark all
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-[400px] overflow-y-auto p-3">
+                {notificationsError ? (
+                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-200">
+                    {notificationsError}
+                  </div>
+                ) : null}
+                {!notificationsError && notificationsLoading && notifications.length === 0 ? (
+                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
+                    Loading notifications...
+                  </div>
+                ) : null}
+                {!notificationsError && !notificationsLoading && notifications.length === 0 ? (
+                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
+                    No admin notifications yet.
+                  </div>
+                ) : null}
+                <div className="space-y-2">
+                  {notifications.map((item, index) => (
+                    <Motion.button
+                      key={String(item.id)}
+                      type="button"
+                      onClick={() => markNotificationRead(item.id)}
+                      initial={{ opacity: 0, x: 10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.2, ease: "easeOut", delay: Math.min(index * 0.03, 0.24) }}
+                      whileHover={{ y: -1 }}
+                      className={[
+                        "w-full rounded-xl border px-3 py-2.5 text-left transition",
+                        item.read
+                          ? "border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] opacity-90"
+                          : "border-blue-500/35 bg-blue-500/10",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[rgb(var(--muted))]">
+                            {item.type === "FORGOT_PASSWORD_REQUESTED" ? "Forgot Password" : "Submission Pair"}
+                          </div>
+                          <div className="mt-1 text-sm font-bold text-[rgb(var(--text))] break-words">{item.title}</div>
+                          {item.message ? (
+                            <div className="mt-1 text-xs text-[rgb(var(--muted))] break-words">{item.message}</div>
+                          ) : null}
+                        </div>
+                        <div className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))]">
+                          {formatNotificationTimestamp(item.createdAt)}
+                        </div>
+                      </div>
+                    </Motion.button>
+                  ))}
+                </div>
+
+                {notificationsNextCursor ? (
+                  <button
+                    type="button"
+                    onClick={() => reloadNotifications({ cursor: notificationsNextCursor, append: true }).catch(() => {})}
+                    className="mt-3 w-full rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2 text-xs font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                  >
+                    Load more
+                  </button>
+                ) : null}
+              </div>
+              </Motion.div>
+            ) : null}
+          </AnimatePresence>
+        </div>
         {activeTab === "dashboard" && (
           <AdminDashboard
             portalWindow={portalWindow}
@@ -1565,6 +1998,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
             reloadEmployees={reloadEmployees}
             employeesLoading={employeesLoading}
             employeesError={employeesError}
+            totalEmployeesCount={employeesTotalCount}
+            directoryTotals={employeesDirectoryTotals}
             currentEmployeeId={currentEmployeeId}
             pager={employeePager}
             onSetEmployeeSubmissionWindow={setEmployeeSubmissionWindowOverride}
@@ -1625,7 +2060,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
         {activeTab === "settings" && <SettingsPanel />}
       </main>
 
-      {/* KPI Modal */}
+      
       {showKPIModal ? (
         <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
@@ -1736,7 +2171,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
         </div>
       ) : null}
 
-      {/* Values Modal */}
+      
       {showValueModal ? (
         <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">

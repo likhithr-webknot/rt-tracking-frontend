@@ -10,9 +10,7 @@ function applyInitialTheme() {
         const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)")?.matches;
         const shouldUseDark = saved ? saved === "dark" : Boolean(prefersDark);
         document.documentElement.classList.toggle("dark", shouldUseDark);
-    } catch {
-        // ignore
-    }
+    } catch { void 0; }
 }
 applyInitialTheme();
 

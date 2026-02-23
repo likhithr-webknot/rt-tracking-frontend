@@ -499,7 +499,7 @@ export default function AdminDashboard({
         </button>
       </header>
 
-	      {/* Submission window */}
+	      
         <section className="rt-panel p-8">
         <div className="flex items-center justify-between gap-4 flex-wrap">
 	          <div className="flex items-center gap-3">
@@ -678,7 +678,7 @@ export default function AdminDashboard({
 		        </div>
 		      </section>
 
-      {/* Stats */}
+      
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard label="Total Employees" value={stats.totalEmployees} icon={<Users className="text-purple-400" />} />
         <StatCard label="Employees Submitted" value={`${stats.employeesSubmitted}/${stats.totalEmployees}`} icon={<Users className="text-emerald-400" />} />
@@ -727,7 +727,7 @@ export default function AdminDashboard({
         </div>
       </section>
 
-      {/* 6-month chart */}
+      
       <section className="rt-panel p-8">
         <div className="mb-6 rt-section-header">
           <h3 className="rt-section-title">Average Ability Trend (6 months)</h3>
@@ -1077,7 +1077,7 @@ export default function AdminDashboard({
         </div>
       </section>
 
-      {/* Employee management (dashboard view) */}
+      
       <section className="rt-panel overflow-hidden">
         <div className="p-8">
           <h3 className="rt-section-title">Employee Management</h3>

@@ -4,9 +4,6 @@ export function getApiBaseUrl() {
   const runtime = getAppSettings()?.apiBaseUrl;
   const runtimeBase = String(runtime ?? "").trim();
   if (runtimeBase) return runtimeBase.endsWith("/") ? runtimeBase.slice(0, -1) : runtimeBase;
-
-  // If set, calls go directly to backend (e.g. http://localhost:8080).
-  // If empty, calls use same-origin paths (Vite dev proxy handles backend routing).
   const raw = (import.meta?.env?.VITE_API_BASE_URL ?? "").toString().trim();
   if (!raw) return "";
   return raw.endsWith("/") ? raw.slice(0, -1) : raw;
@@ -38,17 +35,12 @@ export function getCookieValue(name) {
 
 export function withCsrfHeaders(headers) {
   const base = headers && typeof headers === "object" ? headers : {};
-
-  // Common Spring Security pattern: cookie XSRF-TOKEN + header X-XSRF-TOKEN.
-  // Also support CSRF-TOKEN cookie (some frameworks) + X-CSRF-TOKEN header.
   const token =
     getCookieValue("XSRF-TOKEN") ||
     getCookieValue("CSRF-TOKEN") ||
     getCookieValue("csrfToken") ||
     "";
   if (!token) return base;
-
-  // Do not override if caller already set them.
   const next = { ...base };
   if (!next["X-XSRF-TOKEN"]) next["X-XSRF-TOKEN"] = token;
   if (!next["X-CSRF-TOKEN"]) next["X-CSRF-TOKEN"] = token;
@@ -65,9 +57,6 @@ export function hasCsrfCookie() {
 
 export async function ensureCsrfCookie({ signal, headers, forceRefresh = false } = {}) {
   if (!forceRefresh && hasCsrfCookie()) return true;
-
-  // Try a few safe GET endpoints that should set the CSRF cookie (Spring CookieCsrfTokenRepository).
-  // Ignore all failures; we only care whether a cookie appears after any request.
   const candidates = [
     "/auth/me",
     "/portal/employee",
@@ -84,9 +73,7 @@ export async function ensureCsrfCookie({ signal, headers, forceRefresh = false }
         credentials: "include",
         headers: headers && typeof headers === "object" ? headers : undefined,
       });
-    } catch {
-      // ignore
-    }
+    } catch { void 0; }
     if (hasCsrfCookie()) return true;
   }
 

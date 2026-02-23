@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Edit3, Eye, EyeOff, Layers, Plus, Search, Trash2, X } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
@@ -62,7 +62,7 @@ export default function BandStreamDirectory() {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }
 
-  async function loadDirectory(fetcher) {
+  const loadDirectory = useCallback(async (fetcher) => {
     const rows = [];
     let cursor = null;
     for (let i = 0; i < 30; i += 1) {
@@ -81,9 +81,9 @@ export default function BandStreamDirectory() {
       deduped.push(row);
     }
     return deduped;
-  }
+  }, []);
 
-  async function reload() {
+  const reload = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
@@ -98,12 +98,11 @@ export default function BandStreamDirectory() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [loadDirectory]);
 
   useEffect(() => {
-    reload().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    reload().catch(() => { void 0; });
+  }, [reload]);
 
   const q = String(query || "").trim().toLowerCase();
   const filteredBands = useMemo(() => {

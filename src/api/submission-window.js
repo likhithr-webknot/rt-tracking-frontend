@@ -11,9 +11,7 @@ async function readError(res) {
     if (details) return details;
     if (message) return message;
     if (parsed?.error) return String(parsed.error);
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
   return text || `Request failed: ${res.status} ${res.statusText}`;
 }
 

@@ -43,8 +43,6 @@ export default function WebknotValueDirectoryPage() {
         if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
         toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
     }, []);
-
-    // Load values from API
     const reloadValues = useCallback(async ({ signal } = {}) => {
         setValuesError("");
         setValuesLoading(true);
@@ -67,8 +65,6 @@ export default function WebknotValueDirectoryPage() {
         reloadValues({ signal: controller.signal }).catch(() => {});
         return () => controller.abort();
     }, [reloadValues]);
-
-    // Modal controls
     function openValueModal() {
         setValueModalMode("add");
         setEditingValueId(null);
@@ -97,8 +93,6 @@ export default function WebknotValueDirectoryPage() {
         if (valueSaving) return;
         setShowValueModal(false);
     }
-
-    // Submit value (add or edit)
     async function submitValue(e) {
         e.preventDefault();
         const payload = {
@@ -152,8 +146,6 @@ export default function WebknotValueDirectoryPage() {
             setValueSaving(false);
         }
     }
-
-    // Delete value
     function deleteValue(v) {
         if (!v) return;
         setPendingDeleteValue(v);
@@ -175,14 +167,14 @@ export default function WebknotValueDirectoryPage() {
 
     return (
         <div className="rt-shell min-h-screen bg-[rgb(var(--bg))] text-[rgb(var(--text))]">
-            {/* Header with logout equivalent */}
+            
             <div className="border-b border-[rgb(var(--border))] bg-[rgb(var(--surface))]/90 backdrop-blur">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
                     <h1 className="text-xl font-black uppercase tracking-tighter">Webknot Values Management</h1>
                 </div>
             </div>
 
-            {/* Main content */}
+            
             <div className="py-6 sm:py-8 px-4 sm:px-6">
                 {valuesError ? (
                     <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300">
@@ -206,7 +198,7 @@ export default function WebknotValueDirectoryPage() {
                 />
             </div>
 
-            {/* Value Modal */}
+            
             {showValueModal ? (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
                     <div className="w-full max-w-lg rt-panel rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">

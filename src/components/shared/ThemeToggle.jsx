@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Moon, Sun } from "lucide-react";
 
 const THEME_STORAGE_KEY = "rt_theme";
@@ -11,19 +11,13 @@ function resolveTheme() {
 export default function ThemeToggle({ compact = false, className = "" }) {
   const [theme, setTheme] = useState(() => resolveTheme());
 
-  useEffect(() => {
-    setTheme(resolveTheme());
-  }, []);
-
   function toggleTheme() {
     if (typeof document === "undefined") return;
     const next = resolveTheme() === "dark" ? "light" : "dark";
     document.documentElement.classList.toggle("dark", next === "dark");
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, next);
-    } catch {
-      // ignore
-    }
+    } catch { void 0; }
     setTheme(next);
   }
 

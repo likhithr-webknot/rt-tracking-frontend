@@ -74,6 +74,8 @@ export default function EmployeeDirectory({
   reloadEmployees,
   employeesLoading,
   employeesError,
+  totalEmployeesCount = null,
+  directoryTotals = null,
   currentEmployeeId,
   pager,
   onSetEmployeeSubmissionWindow,
@@ -92,6 +94,8 @@ export default function EmployeeDirectory({
   const [promotingId, setPromotingId] = useState(null);
   const [windowUpdatingId, setWindowUpdatingId] = useState(null);
   const [pendingBulkDeleteCount, setPendingBulkDeleteCount] = useState(0);
+  const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState(null);
+  const [pendingPromoteEmployee, setPendingPromoteEmployee] = useState(null);
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [addDraft, setAddDraft] = useState({
@@ -261,9 +265,43 @@ export default function EmployeeDirectory({
   );
   const addRoleIsAdmin = String(addDraft.empRole || "").trim().toLowerCase() === "admin";
   const managerCount = useMemo(
-    () => employees.filter((emp) => String(emp?.role || "").trim().toLowerCase() === "manager").length,
-    [employees]
+    () => {
+      const value = directoryTotals?.managerCount;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      return employees.filter((emp) => String(emp?.role || "").trim().toLowerCase() === "manager").length;
+    },
+    [directoryTotals?.managerCount, employees]
   );
+  const adminCount = useMemo(
+    () => {
+      const value = directoryTotals?.adminCount;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      return directoryStats.admins;
+    },
+    [directoryStats.admins, directoryTotals?.adminCount]
+  );
+  const employeeCount = useMemo(
+    () => {
+      const value = directoryTotals?.employeeCount;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      return directoryStats.employees;
+    },
+    [directoryStats.employees, directoryTotals?.employeeCount]
+  );
+  const bandCount = useMemo(
+    () => {
+      const value = directoryTotals?.bandCount;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      return directoryStats.totalBands;
+    },
+    [directoryStats.totalBands, directoryTotals?.bandCount]
+  );
+  const totalEmployeesDisplay = useMemo(() => {
+    if (typeof totalEmployeesCount === "number" && Number.isFinite(totalEmployeesCount)) {
+      return totalEmployeesCount;
+    }
+    return directoryStats.totalEmployees;
+  }, [directoryStats.totalEmployees, totalEmployeesCount]);
 
   useEffect(() => {
     let mounted = true;
@@ -319,6 +357,23 @@ export default function EmployeeDirectory({
     }
   }
 
+  function requestPromoteEmployee(emp) {
+    if (!emp?.id) return;
+    setPendingPromoteEmployee({
+      id: String(emp.id),
+      name: String(emp.name || emp.id),
+    });
+  }
+
+  async function confirmPromoteEmployee() {
+    if (!pendingPromoteEmployee?.id) return;
+    try {
+      await promoteEmployee(pendingPromoteEmployee.id);
+    } finally {
+      setPendingPromoteEmployee(null);
+    }
+  }
+
   async function setEmployeeSubmissionWindow(emp, mode) {
     if (!emp?.id || typeof onSetEmployeeSubmissionWindow !== "function") {
       showToast({ title: "Action unavailable", message: "Employee-level window control is not configured." });
@@ -348,11 +403,20 @@ export default function EmployeeDirectory({
     }
   }
 
-  async function removeEmployee(employeeId) {
+  function requestRemoveEmployee(emp) {
+    const employeeId = String(emp?.id || "").trim();
+    if (!employeeId) return;
     if (currentEmployeeId && String(employeeId) === String(currentEmployeeId)) {
       showToast({ title: "Not allowed", message: "You can't delete your own user." });
       return;
     }
+    setPendingDeleteEmployee({
+      id: employeeId,
+      name: String(emp?.name || employeeId),
+    });
+  }
+
+  async function removeEmployee(employeeId, employeeName) {
     try {
       setMutating(true);
       await deleteEmployee(employeeId);
@@ -361,11 +425,20 @@ export default function EmployeeDirectory({
         setSelectedEmployeeIds((prev) => prev.filter((id) => id !== employeeId));
         setEmployees((prev) => prev.filter((e) => e.id !== employeeId));
       }
-      showToast({ title: "Employee removed", message: `Removed ${employeeId}` });
+      showToast({ title: "Employee removed", message: `Removed ${employeeName || employeeId}` });
     } catch (err) {
       showToast({ title: "Delete failed", message: err?.message || "Please try again." });
     } finally {
       setMutating(false);
+    }
+  }
+
+  async function confirmDeleteEmployee() {
+    if (!pendingDeleteEmployee?.id) return;
+    try {
+      await removeEmployee(pendingDeleteEmployee.id, pendingDeleteEmployee.name);
+    } finally {
+      setPendingDeleteEmployee(null);
     }
   }
 
@@ -640,10 +713,10 @@ export default function EmployeeDirectory({
         </div>
       </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-4xl">
+      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
         <div className="rt-panel-subtle rounded-2xl px-4 py-3">
           <div className="rt-kicker">Total Employees</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{employees.length}</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{totalEmployeesDisplay}</div>
         </div>
         <div className="rt-panel-subtle rounded-2xl px-4 py-3">
           <div className="rt-kicker">Managers</div>
@@ -653,28 +726,17 @@ export default function EmployeeDirectory({
           <div className="rt-kicker">Filtered</div>
           <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{visibleEmployees.length}</div>
         </div>
-      </div>
-
-      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
-        <div className="rt-panel-subtle rounded-2xl p-4">
-          <div className="rt-kicker">Total Employees</div>
-          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.totalEmployees}</div>
-        </div>
-        <div className="rt-panel-subtle rounded-2xl p-4">
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
           <div className="rt-kicker">Bands</div>
-          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.totalBands}</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{bandCount}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl p-4">
-          <div className="rt-kicker">Managers</div>
-          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.managers}</div>
-        </div>
-        <div className="rt-panel-subtle rounded-2xl p-4">
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
           <div className="rt-kicker">Admins</div>
-          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.admins}</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{adminCount}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl p-4">
+        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
           <div className="rt-kicker">Employees</div>
-          <div className="mt-2 text-2xl rt-stat-value">{directoryStats.employees}</div>
+          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{employeeCount}</div>
         </div>
       </section>
 
@@ -695,7 +757,7 @@ export default function EmployeeDirectory({
         />
       </div>
 
-      {/* Filters (dropdowns) */}
+      
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-5xl">
         <div>
           <select
@@ -839,7 +901,7 @@ export default function EmployeeDirectory({
                     </button>
 
                     <button
-                      onClick={() => promoteEmployee(emp.id)}
+                      onClick={() => requestPromoteEmployee(emp)}
                       disabled={promotingId === emp.id}
                       className="p-2.5 bg-purple-500/10 text-purple-300 hover:bg-purple-500 hover:text-white rounded-xl transition-all border border-purple-500/20"
                       title="Promote"
@@ -848,7 +910,7 @@ export default function EmployeeDirectory({
                     </button>
 
                     <button
-                      onClick={() => removeEmployee(emp.id)}
+                      onClick={() => requestRemoveEmployee(emp)}
                       disabled={isSelf(emp)}
                       className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
                       title="Remove"
@@ -891,6 +953,9 @@ export default function EmployeeDirectory({
               canNext={Boolean(pager.canNext)}
               onPrev={pager.onPrev}
               onNext={pager.onNext}
+              onPageChange={pager.onPageChange}
+              page={pager.page}
+              maxPage={pager.maxPage}
               loading={Boolean(pager.loading)}
               label={pager.label}
             />
@@ -901,17 +966,50 @@ export default function EmployeeDirectory({
       <ConfirmDialog
         open={pendingBulkDeleteCount > 0}
         title="Remove Employees"
-        message={`Delete ${pendingBulkDeleteCount} employee(s)? This currently removes them from the UI only.`}
+        message={`Delete ${pendingBulkDeleteCount} employee(s)? This action is permanent and also removes linked monthly submissions.`}
         confirmText="Delete"
         cancelText="Cancel"
         confirmVariant="danger"
+        busy={mutating}
         onCancel={() => setPendingBulkDeleteCount(0)}
         onConfirm={confirmDeleteSelected}
       />
 
+      <ConfirmDialog
+        open={Boolean(pendingDeleteEmployee)}
+        title="Remove Employee"
+        message={
+          pendingDeleteEmployee
+            ? `Delete ${pendingDeleteEmployee.name}? This action is permanent and also removes linked monthly submissions.`
+            : "Delete this employee?"
+        }
+        confirmText="Delete"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        busy={mutating}
+        onCancel={() => setPendingDeleteEmployee(null)}
+        onConfirm={confirmDeleteEmployee}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingPromoteEmployee)}
+        title="Promote Employee"
+        message={
+          pendingPromoteEmployee
+            ? `Promote ${pendingPromoteEmployee.name} to the next band?`
+            : "Promote this employee?"
+        }
+        confirmText="Promote"
+        cancelText="Cancel"
+        confirmVariant="primary"
+        busy={Boolean(promotingId)}
+        onCancel={() => setPendingPromoteEmployee(null)}
+        onConfirm={confirmPromoteEmployee}
+      />
+
       <Toast toast={toast} onDismiss={() => setToast(null)} />
 
-      {/* Add Employee Modal */}
+      
       {showAddModal ? (
         <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
@@ -1127,7 +1225,7 @@ export default function EmployeeDirectory({
         </div>
       ) : null}
 
-      {/* Edit Employee Modal */}
+      
       {editingEmployee ? (
         <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">

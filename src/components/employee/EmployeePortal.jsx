@@ -9,6 +9,8 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Target,
+  Clock,
+  ShieldAlert,
   X,
 } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
@@ -66,6 +68,21 @@ function formatReviewTimestamp(value) {
   return dt.toLocaleString();
 }
 
+function formatMonthHeadline(monthKey) {
+  const key = normalizeYearMonth(monthKey);
+  if (!key) return "this month";
+  const [yearText, monthText] = key.split("-");
+  const year = Number.parseInt(yearText, 10);
+  const month = Number.parseInt(monthText, 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return key;
+  const date = new Date(year, month - 1, 1);
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(date);
+  } catch {
+    return key;
+  }
+}
+
 function preventWheelInputChange(e) {
   e.currentTarget.blur();
 }
@@ -119,8 +136,6 @@ function hasReadableValueItems(items) {
 function kpiAppliesToEmployee(kpi, employee) {
   const empBand = normalizeBandKey(employee?.band);
   const empStream = normalizeStreamKey(employee?.stream);
-
-  // If employee metadata is missing, do not filter out KPIs.
   if (!empBand && !empStream) return true;
 
   const kpiBand = normalizeBandKey(kpi?.band);
@@ -802,7 +817,6 @@ function KpisTab({
                               delete next[id];
                               return next;
                             }
-                            // Keep 1 decimal.
                             const rounded = Math.round(parsed * 10) / 10;
                             next[id] = rounded;
                             return next;
@@ -1133,8 +1147,6 @@ function CertificationsTab({
                             setProofError("");
                             return;
                           }
-
-                          // Uncheck removes it + its proof.
                           setSelectedCertifications((prev) => {
                             const list = Array.isArray(prev) ? prev : [];
                             return list.filter((x) => String(x?.name || "").trim().toLowerCase() !== key);
@@ -1427,13 +1439,7 @@ function ReviewTab({
 
     const needsResubmission = Boolean(isResubmissionRequested(submissionMeta));
     return { rows, needsResubmission };
-  }, [
-    submissionMeta,
-    submissionMeta?.adminReview,
-    submissionMeta?.adminSubmittedAt,
-    submissionMeta?.managerReview,
-    submissionMeta?.managerSubmittedAt,
-  ]);
+  }, [submissionMeta]);
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1611,6 +1617,73 @@ function ReviewTab({
   );
 }
 
+function AlreadyRespondedScreen({ month, submittedAt, onLogout }) {
+  const monthLabel = formatMonthHeadline(month);
+  const submittedLabel = submittedAt ? formatReviewTimestamp(submittedAt) : "—";
+  return (
+    <div className="rt-shell font-sans overflow-x-hidden">
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-12 py-8 sm:py-12 lg:py-20">
+        <div className="rt-panel relative overflow-hidden rounded-[2rem]">
+          <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: "radial-gradient(circle at 20% 20%, #3b82f6 0, transparent 55%), radial-gradient(circle at 90% 30%, #22c55e 0, transparent 60%)" }} />
+          <div className="relative p-8 sm:p-12">
+            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-200">
+              <CheckCircle2 size={14} /> Already Responded
+            </div>
+            <h1 className="mt-4 text-4xl sm:text-5xl font-black tracking-tight text-[rgb(var(--text))]">
+              Submission Already Completed
+            </h1>
+            <p className="mt-3 text-[rgb(var(--muted))]">
+              Your self review for <span className="font-bold text-[rgb(var(--text))]">{monthLabel}</span> is already submitted.
+            </p>
+
+            <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="rt-panel-subtle rounded-2xl p-6">
+                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+                  Submission Details
+                </div>
+                <div className="mt-3 text-sm text-[rgb(var(--text))] space-y-2">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-[rgb(var(--muted))]">Status</span>
+                    <span className="font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Submitted</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-[rgb(var(--muted))] inline-flex items-center gap-1.5"><Clock size={14} /> Submitted at</span>
+                    <span className="font-mono">{submittedLabel}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-6">
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-amber-700 dark:text-amber-200">
+                  <ShieldAlert size={14} /> Need Correction?
+                </div>
+                <div className="mt-3 text-sm text-amber-800 dark:text-amber-100">
+                  If you find any mistake in your response, contact HR to request reopening.
+                </div>
+                <div className="mt-2 text-sm font-mono text-amber-800 dark:text-amber-100">
+                  hr@webknot.in
+                </div>
+              </div>
+            </div>
+            {typeof onLogout === "function" ? (
+              <div className="mt-8 flex justify-end">
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-5 py-3 text-[11px] font-black uppercase tracking-widest text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
+                  title="Logout"
+                >
+                  <LogOut size={15} /> Logout
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function EmployeePortal({ onLogout, auth }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -1618,9 +1691,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       const stored = window.localStorage.getItem(EMPLOYEE_SIDEBAR_PREF_KEY);
       if (stored === "0") return false;
       if (stored === "1") return true;
-    } catch {
-      // ignore
-    }
+    } catch { void 0; }
     return window.innerWidth >= 1024;
   });
   const [activeTab, setActiveTab] = useState("profile");
@@ -1648,7 +1719,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [selfReviewText, setSelfReviewText] = useState("");
   const [selectedCertifications, setSelectedCertifications] = useState([]); // { name, proof }[]
   const [kpis, setKpis] = useState([]); // all loaded KPIs (union)
-  const [kpiPage, setKpiPage] = useState({ cursor: null, nextCursor: null, stack: [], items: [] });
+  const [, setKpiPage] = useState({ cursor: null, nextCursor: null, stack: [], items: [] });
   const [kpisFullyLoaded, setKpisFullyLoaded] = useState(false);
   const [kpiPageLoading, setKpiPageLoading] = useState(false);
   const [kpiPrefetching, setKpiPrefetching] = useState(false);
@@ -1693,9 +1764,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   useEffect(() => {
     try {
       window.localStorage.setItem(EMPLOYEE_SIDEBAR_PREF_KEY, isSidebarOpen ? "1" : "0");
-    } catch {
-      // ignore
-    }
+    } catch { void 0; }
   }, [isSidebarOpen]);
 
   useEffect(() => {
@@ -1711,9 +1780,6 @@ export default function EmployeePortal({ onLogout, auth }) {
   }, []);
 
   const kpiPrefetchCursorRef = useRef(null);
-
-  // If the browser duplicates the tab, it may clone in-memory state (including active tab).
-  // This resets the UI to the first tab for the duplicated copy.
   useEffect(() => {
     const key = "rt_tracking_employee_portal_tab_token_v1";
     const randomToken =
@@ -1736,10 +1802,8 @@ export default function EmployeePortal({ onLogout, auth }) {
         window.sessionStorage.setItem(key, randomToken);
         window.localStorage.setItem(key, randomToken);
       }
-    } catch {
-      // ignore storage errors
-    }
-  }, [onLogout]);
+    } catch { void 0; }
+  }, [authEmail, onLogout, role, submissionMonth]);
 
   useEffect(() => {
     let mounted = true;
@@ -1828,9 +1892,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       mounted = false;
       controller.abort();
     };
-    // Intentionally a best-effort call; portal payload shape may vary.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onLogout]);
+  }, [authEmail, onLogout, role, submissionMonth]);
 
   useEffect(() => {
     let mounted = true;
@@ -1864,7 +1926,6 @@ export default function EmployeePortal({ onLogout, auth }) {
   }, [onLogout]);
 
   useEffect(() => {
-    // Load first KPI page on portal init; full list is fetched progressively as the user navigates.
     let mounted = true;
     const controller = new AbortController();
     (async () => {
@@ -1921,7 +1982,6 @@ export default function EmployeePortal({ onLogout, auth }) {
   }, [employee?.band, employee?.id, employee?.stream, onLogout]);
 
   useEffect(() => {
-    // Prefetch all remaining KPI pages while the user is on the KPI tab so we can enforce "rate all KPIs".
     if (activeTab !== "kpis") return;
     if (kpisFullyLoaded) return;
     if (kpiPrefetching) return;
@@ -1984,7 +2044,6 @@ export default function EmployeePortal({ onLogout, auth }) {
   }, [activeTab, employee?.band, employee?.id, employee?.stream, kpiPrefetching, kpisFullyLoaded, onLogout]);
 
   useEffect(() => {
-    // Load all Webknot Values pages on portal init (for values tab + review labels).
     let mounted = true;
     const controller = new AbortController();
     (async () => {
@@ -2611,6 +2670,16 @@ export default function EmployeePortal({ onLogout, auth }) {
     return <Placeholder title="Profile" note="Employee profile." />;
   })();
 
+  if (locked && !needsResubmission) {
+    return (
+      <AlreadyRespondedScreen
+        month={submissionMeta?.month || submissionMonth}
+        submittedAt={submissionMeta?.submittedAt || submissionMeta?.updatedAt || null}
+        onLogout={onLogout}
+      />
+    );
+  }
+
   return (
     <div className="rt-shell flex min-h-screen text-[rgb(var(--text))] font-sans overflow-x-hidden">
       {isSidebarOpen ? (
@@ -2655,11 +2724,6 @@ export default function EmployeePortal({ onLogout, auth }) {
         {portalBootstrapError ? (
           <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
             {portalBootstrapError}
-          </div>
-        ) : null}
-        {locked && !needsResubmission ? (
-          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-200">
-            This month's self review is submitted and locked. No further edits are allowed.
           </div>
         ) : null}
         {!locked && needsResubmission ? (

@@ -1,5 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bell,
+  BellDot,
+  CheckCheck,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
@@ -30,11 +33,22 @@ import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueA
 import { enhanceReviewText, fetchActiveAiAgent } from "../../api/ai-agents.js";
 import { getAppSettings } from "../../utils/appSettings.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
+import {
+  fetchManagerNotifications,
+  markAllManagerNotificationsRead,
+  markManagerNotificationRead,
+  normalizeManagerNotificationPage,
+  subscribeManagerNotificationsStream,
+} from "../../api/notifications.js";
 import Toast from "../shared/Toast.jsx";
+import CursorPagination from "../shared/CursorPagination.jsx";
 import ThemeToggle from "../shared/ThemeToggle.jsx";
 
 const MANAGER_REVIEW_DRAFT_KEY = "rt_tracking_manager_review_draft_v1";
 const MANAGER_SIDEBAR_PREF_KEY = "rt_tracking_manager_sidebar_open_v1";
+const TEAM_PAGE_SIZE = 12;
+const MANAGER_NOTIFICATION_PAGE_SIZE = 25;
+const MANAGER_NOTIFICATION_POLL_MS = 30_000;
 
 function safeJsonParse(raw) {
   try {
@@ -59,9 +73,7 @@ function saveManagerReviewDrafts(next) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(MANAGER_REVIEW_DRAFT_KEY, JSON.stringify(next || {}));
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
 }
 
 function isSubmittedStatus(status) {
@@ -153,6 +165,67 @@ function normalizeTeamSubmissions(data) {
     .filter(Boolean);
 }
 
+function normalizeCursorToken(value) {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === "bigint") {
+    return String(value);
+  }
+  return null;
+}
+
+function normalizeTeamPage(data) {
+  const root =
+    data && typeof data === "object" && !Array.isArray(data) && data?.data && typeof data.data === "object"
+      ? data.data
+      : data && typeof data === "object" && !Array.isArray(data)
+        ? data
+        : {};
+
+  const itemsRaw =
+    Array.isArray(root.items)
+      ? root.items
+      : Array.isArray(root.results)
+        ? root.results
+        : Array.isArray(root.content)
+          ? root.content
+          : Array.isArray(root.data)
+            ? root.data
+            : Array.isArray(data)
+              ? data
+              : [];
+
+  return {
+    items: normalizeTeamSubmissions(itemsRaw),
+    nextCursor: normalizeCursorToken(
+      root?.nextCursor ??
+      root?.next ??
+      root?.nextToken ??
+      root?.page?.nextCursor ??
+      root?.pageInfo?.nextCursor ??
+      null
+    ),
+    total:
+      typeof root?.total === "number" && Number.isFinite(root.total)
+        ? root.total
+        : null,
+    submittedCount:
+      typeof root?.submittedCount === "number" && Number.isFinite(root.submittedCount)
+        ? root.submittedCount
+        : null,
+    pendingManagerReviewCount:
+      typeof root?.pendingManagerReviewCount === "number" && Number.isFinite(root.pendingManagerReviewCount)
+        ? root.pendingManagerReviewCount
+        : null,
+  };
+}
+
 function normalizeReporteesAsPendingSubmissions(data, month) {
   const reportees = normalizeEmployees(data);
   const monthKey = String(month || "").trim();
@@ -180,6 +253,36 @@ function normalizeReporteesAsPendingSubmissions(data, month) {
     },
     raw: emp?.raw || emp || {},
   }));
+}
+
+function toSortEpoch(row) {
+  const submitted = new Date(row?.submittedAt || "");
+  if (!Number.isNaN(submitted.getTime())) return submitted.getTime();
+  const updated = new Date(row?.updatedAt || "");
+  if (!Number.isNaN(updated.getTime())) return updated.getTime();
+  return 0;
+}
+
+function sortTeamRowsByLatest(rows) {
+  return [...(Array.isArray(rows) ? rows : [])].sort((a, b) => toSortEpoch(b) - toSortEpoch(a));
+}
+
+function dedupeTeamRows(rows, fallbackMonth = "") {
+  const list = Array.isArray(rows) ? rows : [];
+  const month = String(fallbackMonth || "").trim();
+  const byKey = new Map();
+  let anonIdx = 0;
+  for (const row of list) {
+    const submissionId = String(row?.submissionId ?? row?.id ?? "").trim();
+    const employeeId = String(row?.employee?.id ?? row?.employeeId ?? "").trim();
+    const monthKey = String(row?.month ?? month).trim();
+    const key = submissionId || (employeeId ? `${employeeId}:${monthKey}` : `anon:${anonIdx++}`);
+    const prev = byKey.get(key);
+    if (!prev || toSortEpoch(row) >= toSortEpoch(prev)) {
+      byKey.set(key, row);
+    }
+  }
+  return Array.from(byKey.values());
 }
 
 function normalizeSelfKpiRatings(input) {
@@ -397,6 +500,34 @@ function preventWheelInputChange(e) {
   e.currentTarget.blur();
 }
 
+function formatNotificationTimestamp(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "Now";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return "Now";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function mergeNotifications(existing, incoming) {
+  const next = [];
+  const seen = new Set();
+  const pushUnique = (row) => {
+    if (!row || typeof row !== "object") return;
+    const key = String(row.id ?? `${row.type}:${row.createdAt}:${row.message ?? row.title ?? ""}`);
+    if (seen.has(key)) return;
+    seen.add(key);
+    next.push(row);
+  };
+  (Array.isArray(incoming) ? incoming : []).forEach(pushUnique);
+  (Array.isArray(existing) ? existing : []).forEach(pushUnique);
+  return next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
   const navItems = [
     { id: "team", icon: <Users size={20} />, label: "Team Submissions" },
@@ -534,9 +665,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       const stored = window.localStorage.getItem(MANAGER_SIDEBAR_PREF_KEY);
       if (stored === "0") return false;
       if (stored === "1") return true;
-    } catch {
-      // ignore
-    }
+    } catch { void 0; }
     return window.innerWidth >= 1024;
   });
   const [month, setMonth] = useState(() => formatYearMonth(new Date()));
@@ -557,6 +686,14 @@ export default function ManagerPortal({ onLogout, auth }) {
 
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsError, setNotificationsError] = useState("");
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsNextCursor, setNotificationsNextCursor] = useState(null);
+  const notificationsPanelRef = useRef(null);
+  const notificationsLoadedRef = useRef(false);
+  const notifiedEventKeysRef = useRef(new Set());
   const lastSavedSelfDraftHashRef = useRef("");
   const [aiAgent, setAiAgent] = useState(null);
   const [aiEnhancingSelfReview, setAiEnhancingSelfReview] = useState(false);
@@ -579,6 +716,17 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [teamSubs, setTeamSubs] = useState([]);
   const [teamLoading, setTeamLoading] = useState(false);
   const [teamError, setTeamError] = useState("");
+  const [teamCursor, setTeamCursor] = useState(null);
+  const [teamNextCursor, setTeamNextCursor] = useState(null);
+  const [teamCursorStack, setTeamCursorStack] = useState([]);
+  const [teamTotals, setTeamTotals] = useState({
+    total: null,
+    submittedCount: null,
+    pendingManagerReviewCount: null,
+  });
+  const [teamInsightsRows, setTeamInsightsRows] = useState([]);
+  const [teamInsightsLoading, setTeamInsightsLoading] = useState(false);
+  const teamCursorRef = useRef(null);
 
   const [reviewModal, setReviewModal] = useState({ open: false, row: null });
   const [reviewDrafts, setReviewDrafts] = useState(() => loadManagerReviewDrafts());
@@ -592,10 +740,12 @@ export default function ManagerPortal({ onLogout, auth }) {
   useEffect(() => {
     try {
       window.localStorage.setItem(MANAGER_SIDEBAR_PREF_KEY, isSidebarOpen ? "1" : "0");
-    } catch {
-      // ignore
-    }
+    } catch { void 0; }
   }, [isSidebarOpen]);
+
+  useEffect(() => {
+    teamCursorRef.current = teamCursor;
+  }, [teamCursor]);
 
   useEffect(() => {
     function onKeyDown(e) {
@@ -609,11 +759,145 @@ export default function ManagerPortal({ onLogout, auth }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  function showToast(next) {
+  const showToast = useCallback((next) => {
     setToast(next);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2400);
-  }
+  }, []);
+
+  const unreadNotificationsCount = useMemo(
+    () => notifications.reduce((count, item) => (item?.read ? count : count + 1), 0),
+    [notifications]
+  );
+
+  const reloadNotifications = useCallback(async ({
+    signal,
+    cursor = null,
+    append = false,
+    silent = false,
+  } = {}) => {
+    if (!silent || !notificationsLoadedRef.current) {
+      setNotificationsLoading(true);
+    }
+    setNotificationsError("");
+    try {
+      const data = await fetchManagerNotifications({
+        limit: MANAGER_NOTIFICATION_PAGE_SIZE,
+        cursor,
+        unreadOnly: false,
+        signal,
+      });
+      const page = normalizeManagerNotificationPage(data);
+      setNotifications((prev) => {
+        const prevById = new Map(prev.map((n) => [String(n.id), n]));
+        const merged = append ? mergeNotifications(prev, page.items) : page.items;
+        return merged.map((item) => {
+          const previous = prevById.get(String(item.id));
+          return previous?.read ? { ...item, read: true } : item;
+        });
+      });
+      setNotificationsNextCursor(page.nextCursor);
+      notificationsLoadedRef.current = true;
+      return page;
+    } catch (err) {
+      if (err?.name === "AbortError") return null;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return null;
+      }
+      setNotificationsError(err?.message || "Failed to load notifications.");
+      return null;
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }, [onLogout, showToast]);
+
+  const pushIncomingNotification = useCallback((incoming) => {
+    if (!incoming) return;
+    const eventKey = String(incoming?.id ?? `${incoming?.type}:${incoming?.createdAt}:${incoming?.message ?? incoming?.title ?? ""}`);
+    setNotifications((prev) => mergeNotifications(prev, [incoming]).slice(0, MANAGER_NOTIFICATION_PAGE_SIZE * 3));
+    if (notifiedEventKeysRef.current.has(eventKey)) return;
+    notifiedEventKeysRef.current.add(eventKey);
+    if (notifiedEventKeysRef.current.size > 500) {
+      notifiedEventKeysRef.current = new Set(Array.from(notifiedEventKeysRef.current).slice(-250));
+    }
+    showToast({
+      title: incoming.title || "New employee submission",
+      message: incoming.message || "",
+    });
+  }, [showToast]);
+
+  const markNotificationRead = useCallback(async (notificationId) => {
+    const id = String(notificationId ?? "").trim();
+    if (!id) return;
+    try {
+      await markManagerNotificationRead(id);
+      setNotifications((prev) => prev.map((item) => (
+        String(item?.id) === id ? { ...item, read: true } : item
+      )));
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      showToast({ title: "Unable to mark read", message: err?.message || "Please try again." });
+    }
+  }, [onLogout, showToast]);
+
+  const markEveryNotificationRead = useCallback(async () => {
+    try {
+      await markAllManagerNotificationsRead();
+      setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+    } catch (err) {
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      showToast({ title: "Unable to mark all read", message: err?.message || "Please try again." });
+    }
+  }, [onLogout, showToast]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    reloadNotifications({ signal: controller.signal }).catch(() => {});
+
+    const timer = window.setInterval(() => {
+      reloadNotifications({ silent: true }).catch(() => {});
+    }, MANAGER_NOTIFICATION_POLL_MS);
+
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [reloadNotifications]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeManagerNotificationsStream({
+      onNotification: (item) => {
+        pushIncomingNotification(item);
+      },
+      onError: () => {
+        reloadNotifications({ silent: true }).catch(() => {});
+      },
+    });
+    return () => unsubscribe?.();
+  }, [pushIncomingNotification, reloadNotifications]);
+
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    const onPointerDown = (event) => {
+      const target = event?.target;
+      if (!notificationsPanelRef.current || !target) return;
+      if (!notificationsPanelRef.current.contains(target)) {
+        setNotificationsOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [notificationsOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -853,9 +1137,7 @@ export default function ManagerPortal({ onLogout, auth }) {
         for (const k of list) map[String(k.id)] = { title: k.title, weight: k.weight };
         setKpiIndex(map);
         setSelfKpis(list);
-      } catch {
-        // KPI index is best-effort; manager can still review with ids.
-      } finally {
+      } catch { void 0; } finally {
         if (mounted) setSelfKpisLoading(false);
       }
     })();
@@ -915,52 +1197,141 @@ export default function ManagerPortal({ onLogout, auth }) {
     };
   }, []);
 
-  async function reloadTeam() {
-    setTeamError("");
-    setTeamLoading(true);
-    try {
-      const data = await fetchManagerTeamSubmissions({ month });
-      const normalized = normalizeTeamSubmissions(data);
+  const reloadTeam = useCallback(
+    async ({ signal, cursor, pageAction = "stay", fromCursor = null } = {}) => {
+      const resolvedCursor = cursor === undefined ? (teamCursorRef.current ?? null) : (cursor ?? null);
+      setTeamError("");
+      setTeamLoading(true);
+      try {
+        const data = await fetchManagerTeamSubmissions({
+          month,
+          limit: TEAM_PAGE_SIZE,
+          cursor: resolvedCursor,
+          signal,
+        });
+        const page = normalizeTeamPage(data);
+        let rows = Array.isArray(page.items) ? page.items : [];
+        let nextCursor = page.nextCursor ?? null;
+        let total = page.total;
+        let submitted = page.submittedCount;
+        let pendingReview = page.pendingManagerReviewCount;
 
-      if (normalized.length > 0) {
-        setTeamSubs(
-          normalized.sort((a, b) =>
-            String(b?.submittedAt || b?.updatedAt || "").localeCompare(String(a?.submittedAt || a?.updatedAt || ""))
-          )
-        );
-        return;
-      }
+        if (rows.length === 0 && !nextCursor) {
+          const managerKey = String(managerId || auth?.employeeId || "").trim();
+          if (managerKey) {
+            const reporteeData = await fetchManagerReportees(managerKey, { signal });
+            const fallbackRows = normalizeReporteesAsPendingSubmissions(reporteeData, month)
+              .sort((a, b) =>
+                String(b?.submittedAt || b?.updatedAt || "").localeCompare(String(a?.submittedAt || a?.updatedAt || ""))
+              );
+            const offset = Number.parseInt(String(resolvedCursor ?? "0"), 10);
+            const safeOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
+            const end = Math.min(safeOffset + TEAM_PAGE_SIZE, fallbackRows.length);
+            rows = fallbackRows.slice(safeOffset, end);
+            nextCursor = end < fallbackRows.length ? String(end) : null;
+            total = fallbackRows.length;
+            submitted = fallbackRows.filter((s) => isSubmittedStatus(s.status)).length;
+            pendingReview = fallbackRows.filter((s) => isSubmittedStatus(s.status) && !s.managerSubmitted).length;
+          }
+        }
 
-      const managerKey = String(managerId || auth?.employeeId || "").trim();
-      if (!managerKey) {
+        const sorted = sortTeamRowsByLatest(dedupeTeamRows(rows, month));
+        setTeamSubs(sorted);
+        setTeamNextCursor(nextCursor);
+        setTeamCursor(resolvedCursor);
+        teamCursorRef.current = resolvedCursor;
+        setTeamTotals({
+          total: Number.isFinite(total) ? total : null,
+          submittedCount: Number.isFinite(submitted) ? submitted : null,
+          pendingManagerReviewCount: Number.isFinite(pendingReview) ? pendingReview : null,
+        });
+        setTeamCursorStack((prev) => {
+          if (pageAction === "next") return [...prev, (fromCursor ?? teamCursorRef.current ?? null)];
+          if (pageAction === "prev") return prev.slice(0, -1);
+          if (pageAction === "reset") return [];
+          return prev;
+        });
+      } catch (err) {
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setTeamError(err?.message || "Failed to load team submissions.");
         setTeamSubs([]);
+        setTeamNextCursor(null);
+        setTeamTotals({
+          total: null,
+          submittedCount: null,
+          pendingManagerReviewCount: null,
+        });
+      } finally {
+        setTeamLoading(false);
+      }
+    },
+    [auth?.employeeId, managerId, month, onLogout]
+  );
+
+  const reloadTeamInsights = useCallback(
+    async ({ signal } = {}) => {
+      if (!String(month || "").trim()) {
+        setTeamInsightsRows([]);
         return;
       }
 
-      const reporteeData = await fetchManagerReportees(managerKey);
-      const fallbackRows = normalizeReporteesAsPendingSubmissions(reporteeData, month);
-      setTeamSubs(
-        fallbackRows.sort((a, b) =>
-          String(b?.submittedAt || b?.updatedAt || "").localeCompare(String(a?.submittedAt || a?.updatedAt || ""))
-        )
-      );
-    } catch (err) {
-      if (err?.status === 401) {
-        onLogout?.();
-        return;
+      setTeamInsightsLoading(true);
+      try {
+        const rows = [];
+        let cursor = null;
+
+        for (let i = 0; i < 200; i += 1) {
+          const data = await fetchManagerTeamSubmissions({
+            month,
+            limit: 100,
+            cursor,
+            signal,
+          });
+          const page = normalizeTeamPage(data);
+          if (Array.isArray(page.items) && page.items.length) {
+            rows.push(...page.items);
+          }
+          if (!page.nextCursor) break;
+          cursor = page.nextCursor;
+        }
+
+        if (rows.length === 0) {
+          const managerKey = String(managerId || auth?.employeeId || "").trim();
+          if (managerKey) {
+            const reporteeData = await fetchManagerReportees(managerKey, { signal });
+            rows.push(...normalizeReporteesAsPendingSubmissions(reporteeData, month));
+          }
+        }
+
+        setTeamInsightsRows(sortTeamRowsByLatest(dedupeTeamRows(rows, month)));
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setTeamInsightsRows([]);
+      } finally {
+        setTeamInsightsLoading(false);
       }
-      setTeamError(err?.message || "Failed to load team submissions.");
-      setTeamSubs([]);
-    } finally {
-      setTeamLoading(false);
-    }
-  }
+    },
+    [auth?.employeeId, managerId, month, onLogout]
+  );
 
   useEffect(() => {
     if (!String(month || "").trim()) return;
-    reloadTeam().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [managerId, month]);
+    reloadTeam({ cursor: null, pageAction: "reset" }).catch(() => {});
+  }, [managerId, month, reloadTeam]);
+
+  useEffect(() => {
+    if (!String(month || "").trim()) return;
+    const controller = new AbortController();
+    reloadTeamInsights({ signal: controller.signal }).catch(() => {});
+    return () => controller.abort();
+  }, [managerId, month, reloadTeamInsights]);
 
   useEffect(() => {
     if (!String(month || "").trim()) return;
@@ -1118,22 +1489,43 @@ export default function ManagerPortal({ onLogout, auth }) {
     selfReviewLocked,
   ]);
 
+  const teamInsightSourceRows = useMemo(
+    () => (teamInsightsRows.length ? teamInsightsRows : teamSubs),
+    [teamInsightsRows, teamSubs]
+  );
+  const hasFullInsights = teamInsightsRows.length > 0;
+
   const reporteeCount = useMemo(() => {
+    if (hasFullInsights) {
+      const ids = new Set(
+        teamInsightsRows
+          .map((s) => String(s?.employee?.id || "").trim())
+          .filter((id) => id && id !== "—")
+      );
+      return ids.size;
+    }
+    if (Number.isFinite(teamTotals.total)) return Number(teamTotals.total);
     const ids = new Set(
-      teamSubs
+      teamInsightSourceRows
         .map((s) => String(s?.employee?.id || "").trim())
         .filter((id) => id && id !== "—")
     );
     return ids.size;
-  }, [teamSubs]);
-  const submittedCount = useMemo(
-    () => teamSubs.filter((s) => isSubmittedStatus(s.status)).length,
-    [teamSubs]
-  );
-  const pendingManagerReviewCount = useMemo(
-    () => teamSubs.filter((s) => isSubmittedStatus(s.status) && !s.managerSubmitted).length,
-    [teamSubs]
-  );
+  }, [hasFullInsights, teamInsightSourceRows, teamInsightsRows, teamTotals.total]);
+  const submittedCount = useMemo(() => {
+    if (hasFullInsights) {
+      return teamInsightsRows.filter((s) => isSubmittedStatus(s.status)).length;
+    }
+    if (Number.isFinite(teamTotals.submittedCount)) return Number(teamTotals.submittedCount);
+    return teamInsightSourceRows.filter((s) => isSubmittedStatus(s.status)).length;
+  }, [hasFullInsights, teamInsightSourceRows, teamInsightsRows, teamTotals.submittedCount]);
+  const pendingManagerReviewCount = useMemo(() => {
+    if (hasFullInsights) {
+      return teamInsightsRows.filter((s) => isSubmittedStatus(s.status) && !s.managerSubmitted).length;
+    }
+    if (Number.isFinite(teamTotals.pendingManagerReviewCount)) return Number(teamTotals.pendingManagerReviewCount);
+    return teamInsightSourceRows.filter((s) => isSubmittedStatus(s.status) && !s.managerSubmitted).length;
+  }, [hasFullInsights, teamInsightSourceRows, teamInsightsRows, teamTotals.pendingManagerReviewCount]);
 
   const filteredTeamSubs = useMemo(() => {
     const mode = String(filter || "").toUpperCase();
@@ -1144,11 +1536,32 @@ export default function ManagerPortal({ onLogout, auth }) {
     return teamSubs.filter((s) => isSubmittedStatus(s.status));
   }, [filter, teamSubs]);
 
+  const teamPager = useMemo(
+    () => ({
+      canPrev: teamCursorStack.length > 0,
+      canNext: Boolean(teamNextCursor),
+      onReset: () => {
+        reloadTeam({ cursor: null, pageAction: "reset" }).catch(() => {});
+      },
+      onPrev: () => {
+        const prevCursor = teamCursorStack[teamCursorStack.length - 1] ?? null;
+        reloadTeam({ cursor: prevCursor, pageAction: "prev" }).catch(() => {});
+      },
+      onNext: () => {
+        if (!teamNextCursor) return;
+        reloadTeam({ cursor: teamNextCursor, pageAction: "next", fromCursor: teamCursor }).catch(() => {});
+      },
+      loading: teamLoading,
+      label: `Page ${teamCursorStack.length + 1}`,
+    }),
+    [reloadTeam, teamCursor, teamCursorStack, teamLoading, teamNextCursor]
+  );
+
   const managerInsights = useMemo(() => {
-    const submittedRows = teamSubs.filter((row) => isSubmittedStatus(row?.status));
+    const submittedRows = teamInsightSourceRows.filter((row) => isSubmittedStatus(row?.status));
     const reviewedRows = submittedRows.filter((row) => row?.managerSubmitted);
     const pendingRows = submittedRows.filter((row) => !row?.managerSubmitted);
-    const rejectedRows = teamSubs.filter((row) => String(row?.status || "").toUpperCase().includes("NEEDS_REVIEW"));
+    const rejectedRows = teamInsightSourceRows.filter((row) => String(row?.status || "").toUpperCase().includes("NEEDS_REVIEW"));
 
     const reviewedCoverage = submittedRows.length
       ? Math.round((reviewedRows.length / submittedRows.length) * 100)
@@ -1194,7 +1607,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       maxFunnel,
       rejectedCount: rejectedRows.length,
     };
-  }, [teamSubs]);
+  }, [teamInsightSourceRows]);
 
   const managerGranularity = useMemo(() => {
     const streamMap = new Map();
@@ -1230,7 +1643,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       return Math.round((values.reduce((sum, x) => sum + x, 0) / values.length) * 10) / 10;
     };
 
-    for (const row of teamSubs) {
+    for (const row of teamInsightSourceRows) {
       const employeeRaw =
         row?.raw?.employee && typeof row.raw.employee === "object"
           ? row.raw.employee
@@ -1291,7 +1704,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       .slice(0, 5);
 
     return { streamRows, bandRows, topEmployees };
-  }, [teamSubs]);
+  }, [teamInsightSourceRows]);
 
   const account = useMemo(() => {
     const name =
@@ -1541,11 +1954,17 @@ export default function ManagerPortal({ onLogout, auth }) {
 
     try {
       setSavingReview(true);
-      if (reviewAction === "SUBMIT") {
+      if (reviewAction === "SUBMIT" || reviewAction === "REJECT") {
         await submitMonthlySubmission(payload);
-        showToast({ title: "Submitted", message: "Manager review submitted." });
+        if (reviewAction === "SUBMIT") {
+          showToast({ title: "Submitted", message: "Manager review submitted." });
+        } else {
+          showToast({ title: "Rejected", message: "Sent back with comments for resubmission." });
+        }
       } else {
         await saveMonthlyDraft(payload);
+      }
+      if (reviewAction === "REJECT") {
         setTeamSubs((prev) =>
           prev.map((s) => {
             const sameEmp = String(s?.employee?.id || "") === empId;
@@ -1566,11 +1985,11 @@ export default function ManagerPortal({ onLogout, auth }) {
             };
           })
         );
-        showToast({ title: "Rejected", message: "Sent back with comments for resubmission." });
       }
 
       closeReviewModal();
       await reloadTeam();
+      await reloadTeamInsights();
     } catch (err) {
       showToast({ title: `${reviewAction === "REJECT" ? "Reject" : "Submit"} failed`, message: err?.message || "Please try again." });
     } finally {
@@ -1611,6 +2030,121 @@ export default function ManagerPortal({ onLogout, auth }) {
         <div className="pointer-events-none absolute inset-0 -z-10">
           <div className="absolute -top-24 right-14 h-72 w-72 rounded-full bg-blue-500/10 blur-3xl" />
           <div className="absolute bottom-8 left-1/3 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
+        </div>
+        <div className="fixed right-4 top-4 z-[65] flex flex-col items-end md:right-8 md:top-5" ref={notificationsPanelRef}>
+          <button
+            type="button"
+            onClick={() => {
+              const nextOpen = !notificationsOpen;
+              setNotificationsOpen(nextOpen);
+              if (nextOpen) reloadNotifications({ silent: true }).catch(() => {});
+            }}
+            className={[
+              "relative inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[rgb(var(--border))]",
+              "bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-[0_12px_28px_rgba(8,22,45,0.15)]",
+              "transition-all duration-300 hover:bg-[rgb(var(--surface-2))] hover:shadow-[0_16px_30px_rgba(8,22,45,0.2)]",
+              unreadNotificationsCount > 0 ? "animate-[pulse_2.4s_ease-in-out_infinite]" : "",
+            ].join(" ")}
+            aria-label="Manager notifications"
+            title="Manager notifications"
+          >
+            {unreadNotificationsCount > 0 ? <BellDot size={18} /> : <Bell size={18} />}
+            {unreadNotificationsCount > 0 ? (
+              <span className="absolute -right-1.5 -top-1.5 min-w-[20px] rounded-full bg-red-600 px-1.5 py-0.5 text-center text-[10px] font-black text-white">
+                {unreadNotificationsCount > 99 ? "99+" : unreadNotificationsCount}
+              </span>
+            ) : null}
+          </button>
+
+          {notificationsOpen ? (
+            <div className="mt-3 w-[min(92vw,420px)] rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] shadow-[0_24px_52px_rgba(7,18,42,0.24)] backdrop-blur-xl">
+              <div className="flex items-center justify-between border-b border-[rgb(var(--border))] px-4 py-3">
+                <div>
+                  <div className="text-xs font-black uppercase tracking-[0.18em] text-[rgb(var(--muted))]">
+                    Manager Alerts
+                  </div>
+                  <div className="mt-1 text-sm font-bold text-[rgb(var(--text))]">
+                    {unreadNotificationsCount} unread
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => reloadNotifications().catch(() => {})}
+                    className="rounded-lg border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                  >
+                    Refresh
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => markEveryNotificationRead().catch(() => {})}
+                    className="inline-flex items-center gap-1 rounded-lg border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                  >
+                    <CheckCheck size={13} />
+                    Mark all
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-[400px] overflow-y-auto p-3">
+                {notificationsError ? (
+                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-200">
+                    {notificationsError}
+                  </div>
+                ) : null}
+                {!notificationsError && notificationsLoading && notifications.length === 0 ? (
+                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
+                    Loading alerts...
+                  </div>
+                ) : null}
+                {!notificationsError && !notificationsLoading && notifications.length === 0 ? (
+                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
+                    No manager alerts yet.
+                  </div>
+                ) : null}
+                <div className="space-y-2">
+                  {notifications.map((item) => (
+                    <button
+                      key={String(item.id)}
+                      type="button"
+                      onClick={() => markNotificationRead(item.id)}
+                      className={[
+                        "w-full rounded-xl border px-3 py-2.5 text-left transition",
+                        item.read
+                          ? "border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] opacity-90"
+                          : "border-blue-500/35 bg-blue-500/10",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[rgb(var(--muted))]">
+                            Employee Submission
+                          </div>
+                          <div className="mt-1 text-sm font-bold text-[rgb(var(--text))] break-words">{item.title}</div>
+                          {item.message ? (
+                            <div className="mt-1 text-xs text-[rgb(var(--muted))] break-words">{item.message}</div>
+                          ) : null}
+                        </div>
+                        <div className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))]">
+                          {formatNotificationTimestamp(item.createdAt)}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                {notificationsNextCursor ? (
+                  <button
+                    type="button"
+                    onClick={() => reloadNotifications({ cursor: notificationsNextCursor, append: true }).catch(() => {})}
+                    className="mt-3 w-full rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2 text-xs font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                  >
+                    Load more
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
         <header className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-end md:justify-between gap-6">
           <div className="rt-page-header">
@@ -1678,22 +2212,25 @@ export default function ManagerPortal({ onLogout, auth }) {
             ) : null}
 
             <button
-              onClick={() => reloadTeam()}
-              disabled={teamLoading}
+              onClick={() => {
+                reloadTeam({ cursor: teamCursor ?? null, pageAction: "stay" }).catch(() => {});
+                reloadTeamInsights().catch(() => {});
+              }}
+              disabled={teamLoading || teamInsightsLoading}
               className={[
                 "rt-btn-ghost inline-flex items-center gap-2 text-xs uppercase tracking-widest transition-all",
-                teamLoading ? "opacity-60 cursor-not-allowed" : "",
+                teamLoading || teamInsightsLoading ? "opacity-60 cursor-not-allowed" : "",
               ].join(" ")}
               title="Refresh"
             >
-              <RefreshCw size={18} /> {teamLoading ? "Loading…" : "Refresh"}
+              <RefreshCw size={18} /> {teamLoading || teamInsightsLoading ? "Loading…" : "Refresh"}
             </button>
           </div>
         </header>
 
       {activeTab === "team" ? (
         <section className="max-w-7xl mx-auto mt-10 grid grid-cols-1 xl:grid-cols-3 gap-8">
-          {teamLoading && teamSubs.length === 0 ? (
+          {(teamLoading && teamSubs.length === 0) || (teamInsightsLoading && teamInsightSourceRows.length === 0) ? (
             <div className="xl:col-span-3 rt-panel-subtle rounded-3xl p-6 text-sm text-[rgb(var(--muted))] animate-pulse">
               Loading team submissions and manager insights…
             </div>
@@ -1928,6 +2465,29 @@ export default function ManagerPortal({ onLogout, auth }) {
                   ) : null}
                 </tbody>
               </table>
+            </div>
+            <div className="px-8 py-5 border-t border-[rgb(var(--border))]">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <button
+                  type="button"
+                  onClick={teamPager.onReset}
+                  disabled={Boolean(teamPager.loading)}
+                  className={[
+                    "rt-btn-ghost text-xs uppercase tracking-widest",
+                    teamPager.loading ? "opacity-50 cursor-not-allowed" : "",
+                  ].join(" ")}
+                >
+                  First Page
+                </button>
+                <CursorPagination
+                  canPrev={Boolean(teamPager.canPrev)}
+                  canNext={Boolean(teamPager.canNext)}
+                  onPrev={teamPager.onPrev}
+                  onNext={teamPager.onNext}
+                  loading={Boolean(teamPager.loading)}
+                  label={teamPager.label}
+                />
+              </div>
             </div>
           </section>
 

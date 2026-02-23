@@ -262,7 +262,7 @@ export default function Certifications({
         </div>
       </section>
 
-      {/* Add to Catalog Modal */}
+      
       {showCatalogModal ? (
         <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
@@ -344,7 +344,7 @@ export default function Certifications({
         </div>
       ) : null}
 
-      {/* Edit Modal */}
+      
       {editModal.open ? (
         <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">

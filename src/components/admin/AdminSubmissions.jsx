@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, RefreshCw, Trash2, X, XCircle } from "lucide-react";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 
@@ -10,6 +10,39 @@ import {
   submitAdminReviewDecision,
 } from "../../api/monthly-submissions.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, normalizeYearMonth } from "../../utils/reviewCycles.js";
+
+function formatMonthLabel(monthKey) {
+  const m = normalizeYearMonth(monthKey);
+  if (!m) return "—";
+  const [yearStr, monthStr] = m.split("-");
+  const year = Number.parseInt(yearStr, 10);
+  const month = Number.parseInt(monthStr, 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return m;
+  const d = new Date(year, month - 1, 1);
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric" }).format(d);
+  } catch {
+    return m;
+  }
+}
+
+function formatDateTimeLabel(raw) {
+  const value = String(raw || "").trim();
+  if (!value || value === "—") return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(d);
+  } catch {
+    return value;
+  }
+}
 
 function normalizeAdminSubmissions(data) {
   const arr = Array.isArray(data)
@@ -81,7 +114,9 @@ function normalizeAdminSubmissions(data) {
           name: employeeName ? String(employeeName) : (email ? String(email) : "Unknown"),
           email: email ? String(email) : "",
         },
+        monthLabel: formatMonthLabel(month),
         when: updatedAt || submittedAt || "—",
+        whenLabel: formatDateTimeLabel(updatedAt || submittedAt || "—"),
         managerReady,
         entryType,
         submissionType,
@@ -192,7 +227,7 @@ export default function AdminSubmissions({ onLogout }) {
     [items, onlyManagerSubmitted]
   );
 
-  async function reload() {
+  const reload = useCallback(async () => {
     setError("");
     setLoading(true);
     try {
@@ -211,12 +246,11 @@ export default function AdminSubmissions({ onLogout }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [onLogout, query.month, query.status]);
 
   useEffect(() => {
-    reload().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.month, query.status]);
+    reload().catch(() => { void 0; });
+  }, [reload]);
 
   function openReview(item) {
     const existing = String(item?.submission?.adminReview?.comments || "").trim();
@@ -336,10 +370,10 @@ export default function AdminSubmissions({ onLogout }) {
             <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-6 font-black">Employee</th>
-                <th className="p-6 font-black">Month</th>
+                <th className="p-6 font-black whitespace-nowrap">Month</th>
                 <th className="p-6 font-black">Type</th>
                 <th className="p-6 font-black">Workflow</th>
-                <th className="p-6 font-black">Updated</th>
+                <th className="p-6 font-black whitespace-nowrap">Updated</th>
                 <th className="p-6 text-right font-black px-8">Actions</th>
               </tr>
             </thead>
@@ -348,20 +382,23 @@ export default function AdminSubmissions({ onLogout }) {
                 <tr key={it.id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                   <td className="p-6">
                     <div className="font-bold text-[rgb(var(--text))] tracking-tight">{it.employee.name}</div>
-                    <div className="text-xs text-slate-500 font-mono mt-1">
-                      {it.employee.id}{it.employee.email ? ` • ${it.employee.email}` : ""}
+                    <div className="text-xs text-slate-500 font-mono mt-1 break-all">
+                      {it.employee.id}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1 break-all">
+                      {it.employee.email || "—"}
                     </div>
                     <div className="text-[10px] font-mono text-slate-400 mt-1">
                       {it.id}
                     </div>
                   </td>
-                  <td className="p-6 font-mono text-[rgb(var(--text))]">{it.month}</td>
+                  <td className="p-6 font-mono text-[rgb(var(--text))] whitespace-nowrap">{it.monthLabel}</td>
                   <td className="p-6">
                     <span className="text-[10px] font-black uppercase px-3 py-1 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] text-[rgb(var(--text))]">
                       {it.entryType}
                     </span>
                   </td>
-                  <td className="p-6">
+                  <td className="p-6 whitespace-nowrap">
                     <span
                       className={[
                         "text-[10px] font-black uppercase px-3 py-1 rounded-lg border",
@@ -388,7 +425,7 @@ export default function AdminSubmissions({ onLogout }) {
                       </div>
                     )}
                   </td>
-                  <td className="p-6 text-xs text-slate-500 font-mono">{it.when}</td>
+                  <td className="p-6 text-xs text-slate-500 font-mono whitespace-nowrap">{it.whenLabel}</td>
                   <td className="p-6 text-right px-8">
                     <div className="inline-flex items-center gap-2">
                       <button

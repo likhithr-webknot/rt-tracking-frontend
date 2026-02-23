@@ -53,9 +53,7 @@ async function readError(res) {
     const parsed = JSON.parse(text);
     if (parsed?.message) return String(parsed.message);
     if (parsed?.error) return String(parsed.error);
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
   return text || `Request failed: ${res.status} ${res.statusText}`;
 }
 

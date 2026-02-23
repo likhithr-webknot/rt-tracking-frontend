@@ -1,7 +1,4 @@
 import { buildApiUrl, withCsrfHeaders } from "./http.js";
-
-// Keep auth only in memory (no localStorage key).
-// With HttpOnly cookie auth, the access token is not available to JS; we store only non-sensitive session info.
 const LEGACY_AUTH_STORAGE_KEY = "rt_tracking_auth_v1";
 const SESSION_STORAGE_KEY = "rt_tracking_session_v1";
 const MANUAL_LOGOUT_STORAGE_KEY = "rt_tracking_manual_logout_v1";
@@ -10,7 +7,6 @@ let memoryAuth = null;
 function shouldPersistAccessToken() {
   const flag = String(import.meta?.env?.VITE_PERSIST_ACCESS_TOKEN ?? "").trim().toLowerCase();
   if (flag === "1" || flag === "true" || flag === "yes") return true;
-  // Dev default: persist in sessionStorage so refresh doesn't break token-based auth.
   if (import.meta?.env?.DEV) return true;
   return false;
 }
@@ -33,9 +29,7 @@ function cleanupLegacyAuthStorage() {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.removeItem(LEGACY_AUTH_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
 }
 
 cleanupLegacyAuthStorage();
@@ -44,9 +38,7 @@ function cleanupSessionStorage() {
   if (typeof window === "undefined") return;
   try {
     window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
 }
 
 function loadSessionFromStorage() {
@@ -134,7 +126,6 @@ export function setAuth(auth) {
   cleanupLegacyAuthStorage();
   const prev = memoryAuth || loadSessionFromStorage() || {};
   const root = auth && typeof auth === "object" ? auth : {};
-  // Some backends wrap the payload as { data: ... }.
   const obj =
     root?.data && typeof root.data === "object" && !Array.isArray(root.data)
       ? root.data
@@ -202,8 +193,6 @@ export function setAuth(auth) {
     managerId,
     claims,
   };
-
-  // Persist only non-sensitive session info to survive refresh in the same tab.
   if (typeof window !== "undefined") {
     try {
       window.sessionStorage.setItem(
@@ -224,9 +213,7 @@ export function setAuth(auth) {
           managerId: memoryAuth.managerId,
         })
       );
-    } catch {
-      // ignore storage errors
-    }
+    } catch { void 0; }
   }
 }
 
@@ -240,18 +227,14 @@ export function markManualLogout() {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(MANUAL_LOGOUT_STORAGE_KEY, "1");
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
 }
 
 export function clearManualLogoutMark() {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.removeItem(MANUAL_LOGOUT_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
+  } catch { void 0; }
 }
 
 export function hasManualLogoutMark() {
@@ -269,9 +252,6 @@ export function getAuthHeader() {
   const type = auth.tokenType || "Bearer";
   return `${type} ${auth.accessToken}`;
 }
-
-// Default assumption: POST /auth/login { email, password } sets HttpOnly cookie and returns { tokenType, role, portal }.
-// If your backend also returns accessToken, we accept it, but we do not persist it.
 export async function login({ email, password }) {
   const res = await fetch(buildApiUrl("/auth/login"), {
     method: "POST",
@@ -284,8 +264,6 @@ export async function login({ email, password }) {
   if (!data || typeof data !== "object") throw new Error("Login failed.");
   return data;
 }
-
-// GET /auth/me -> current employee profile (cookie or Authorization header)
 export async function fetchMe({ signal } = {}) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/auth/me"), {
@@ -297,8 +275,6 @@ export async function fetchMe({ signal } = {}) {
   if (!res.ok) throw new Error(await readError(res));
   return res.json().catch(() => ({}));
 }
-
-// POST /auth/forgot-password { email } -> { message, resetToken, expiresAt }
 export async function forgotPassword({ email }) {
   const res = await fetch(buildApiUrl("/auth/forgot-password"), {
     method: "POST",
@@ -310,13 +286,30 @@ export async function forgotPassword({ email }) {
   return res.json().catch(() => ({}));
 }
 
-// POST /auth/reset-password { token, newPassword } -> "Password reset successful"
 export async function resetPassword({ token, newPassword }) {
   const res = await fetch(buildApiUrl("/auth/reset-password"), {
     method: "POST",
     credentials: "include",
     headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ token, newPassword }),
+  });
+  if (!res.ok) throw await toHttpError(res);
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) return res.json();
+  return res.text().catch(() => "");
+}
+
+export async function adminResetPassword({ requestId, adminCode, newPassword }, { signal } = {}) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl("/auth/admin/reset-password"), {
+    method: "POST",
+    signal,
+    credentials: "include",
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
+    body: JSON.stringify({ requestId, adminCode, newPassword }),
   });
   if (!res.ok) throw await toHttpError(res);
   const contentType = res.headers.get("content-type") || "";
