@@ -33,6 +33,7 @@ import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueA
 import { enhanceReviewText, fetchActiveAiAgent } from "../../api/ai-agents.js";
 import { getAppSettings } from "../../utils/appSettings.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
+import { playNotificationSound } from "../../utils/notificationSound.js";
 import {
   fetchManagerNotifications,
   markAllManagerNotificationsRead,
@@ -846,6 +847,7 @@ export default function ManagerPortal({ onLogout, auth }) {
     if (notifiedEventKeysRef.current.size > 500) {
       notifiedEventKeysRef.current = new Set(Array.from(notifiedEventKeysRef.current).slice(-250));
     }
+    playNotificationSound().catch(() => {});
     showToast({
       title: incoming.title || "New employee submission",
       message: incoming.message || "",
