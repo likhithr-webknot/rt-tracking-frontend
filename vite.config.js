@@ -45,6 +45,16 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      '/notifications': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/admin': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        secure: false,
+      },
       '/employee-portal': {
         target: 'http://localhost:8080',
         changeOrigin: true,
