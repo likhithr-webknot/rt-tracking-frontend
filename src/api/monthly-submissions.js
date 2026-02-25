@@ -190,6 +190,8 @@ function toRequestPayload(payload) {
     source.webknotValues
   );
   const valuePairs = Object.entries(normalizedValues);
+  next.webknotValues = valuePairs.map(([valueId]) => String(valueId || "").trim());
+  next.webknotValueRatings = Object.fromEntries(valuePairs);
   next.webknotValueResponses = valuePairs.map(([valueId, rating]) => ({
     valueId: String(valueId || "").trim(),
     webknotValueId: String(valueId || "").trim(),
@@ -336,6 +338,16 @@ export function normalizeMonthlySubmission(data) {
       obj?.type ??
       ""
     ).trim() || null;
+  const targetRole =
+    String(
+      payload?.targetRole ??
+      obj?.targetRole ??
+      obj?.targetEmployeeRole ??
+      payload?.targetEmployeeRole ??
+      payload?.targetEmpRole ??
+      obj?.targetEmpRole ??
+      ""
+    ).trim() || null;
   const subjectEmployeeId =
     String(payload?.subjectEmployeeId ?? obj?.subjectEmployeeId ?? payload?.employeeId ?? obj?.employeeId ?? "").trim() || null;
   const managerAction = String(managerReview?.action ?? "").trim().toUpperCase();
@@ -359,6 +371,7 @@ export function normalizeMonthlySubmission(data) {
     month: month ? String(month) : null,
     status: status ? String(status) : null,
     submissionType,
+    targetRole,
     subjectEmployeeId,
     cycleKey: String(payload?.cycleKey ?? obj?.cycleKey ?? cycleMeta.cycleKey ?? "").trim() || null,
     cycleLabel: String(payload?.cycleLabel ?? obj?.cycleLabel ?? cycleMeta.cycleLabel ?? "").trim() || null,

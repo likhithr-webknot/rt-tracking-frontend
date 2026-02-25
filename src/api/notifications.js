@@ -76,6 +76,21 @@ function buildAdminTitle(type) {
 function buildAdminMessage(type, payload) {
   if (!isPlainObject(payload)) return "";
 
+  if (type === ADMIN_NOTIFICATION_TYPES.FORGOT_PASSWORD_REQUESTED || type === "FORGOT_PASSWORD") {
+    const email = toTrimmedString(payload.email) || "An employee";
+    const requestId = toTrimmedString(payload.requestId) || toTrimmedString(payload.resetRequestId);
+    const code =
+      toTrimmedString(payload.verificationCode) ||
+      toTrimmedString(payload.otp) ||
+      toTrimmedString(payload.adminCode) ||
+      toTrimmedString(payload.code);
+
+    const parts = [];
+    parts.push(requestId ? `${email} requested password reset (${requestId}).` : `${email} requested password reset.`);
+    if (code) parts.push(`Code: ${code}`);
+    return parts.join(" ");
+  }
+
   if (type === ADMIN_NOTIFICATION_TYPES.MANAGER_EMPLOYEE_PAIR_SUBMITTED) {
     const employeeName =
       toTrimmedString(payload.employeeName) || toTrimmedString(payload.employeeId) || "Employee";
@@ -85,14 +100,6 @@ function buildAdminMessage(type, payload) {
     return month
       ? `${employeeName} and ${managerName} completed submissions for ${month}.`
       : `${employeeName} and ${managerName} completed submissions.`;
-  }
-
-  if (type === ADMIN_NOTIFICATION_TYPES.FORGOT_PASSWORD_REQUESTED) {
-    const email = toTrimmedString(payload.email) || "An employee";
-    const requestId = toTrimmedString(payload.requestId);
-    return requestId
-      ? `${email} requested password reset (${requestId}).`
-      : `${email} requested password reset.`;
   }
 
   return "";
@@ -225,7 +232,7 @@ async function toHttpError(res) {
 async function fetchNotifications(path, types, { limit = 25, cursor = null, unreadOnly = false, signal } = {}) {
   const auth = getAuthHeader();
   const qs = new URLSearchParams();
-  qs.set("types", types.join(","));
+  if (Array.isArray(types) && types.length) qs.set("types", types.join(","));
   if (limit != null) qs.set("limit", String(limit));
   if (cursor) qs.set("cursor", String(cursor));
   if (unreadOnly) qs.set("unreadOnly", "true");
@@ -294,8 +301,10 @@ function subscribeNotificationsStream({
     return () => {};
   }
 
-  const qs = new URLSearchParams({ types: types.join(",") });
-  const source = new window.EventSource(buildApiUrl(`${path}?${qs.toString()}`), {
+  const qs = new URLSearchParams();
+  if (Array.isArray(types) && types.length) qs.set("types", types.join(","));
+  const suffix = qs.toString();
+  const source = new window.EventSource(buildApiUrl(suffix ? `${path}?${suffix}` : path), {
     withCredentials: true,
   });
 
@@ -343,7 +352,18 @@ export function isSupportedManagerNotificationType(value) {
 }
 
 export function normalizeAdminNotification(raw) {
-  return normalizeNotification(raw, ADMIN_ALLOWED_NOTIFICATION_TYPES, buildAdminTitle, buildAdminMessage);
+  const first = normalizeNotification(raw, ADMIN_ALLOWED_NOTIFICATION_TYPES, buildAdminTitle, buildAdminMessage);
+  if (first) return first;
+
+  const obj = isPlainObject(raw) ? raw : {};
+  const type = toTrimmedString(obj.type ?? obj.eventType ?? obj.notificationType ?? obj.kind) || "ADMIN_GENERIC";
+  const fallback = normalizeNotification(
+    { ...obj, type },
+    new Set([type, ...ADMIN_ALLOWED_NOTIFICATION_TYPES]),
+    buildAdminTitle,
+    buildAdminMessage
+  );
+  return fallback;
 }
 
 export function normalizeManagerNotification(raw) {
@@ -358,8 +378,9 @@ export function normalizeManagerNotificationPage(data) {
   return normalizePage(data, normalizeManagerNotification);
 }
 
-export async function fetchAdminNotifications(opts = {}) {
-  return fetchNotifications("/admin/notifications", Object.values(ADMIN_NOTIFICATION_TYPES), opts);
+export async function fetchAdminNotifications({ types = null, ...opts } = {}) {
+  // Allow all types by default to ensure password reset codes or new server events are not filtered out
+  return fetchNotifications("/admin/notifications", types, opts);
 }
 
 export async function fetchManagerNotifications(opts = {}) {
@@ -389,7 +410,7 @@ export async function markAllManagerNotificationsRead({ signal } = {}) {
 export function subscribeAdminNotificationsStream({ onNotification, onError } = {}) {
   return subscribeNotificationsStream({
     path: "/admin/notifications/stream",
-    types: Object.values(ADMIN_NOTIFICATION_TYPES),
+    types: null,
     normalizer: normalizeAdminNotification,
     customEventNames: ["admin-notification"],
     onNotification,

@@ -42,13 +42,21 @@ import {
 } from "../../api/certifications.js";
 import { fetchPortalAdmin } from "../../api/portal.js";
 import { normalizeCursorPage } from "../../api/employee-portal.js";
-import { fetchValues, addValue, updateValue, deleteValue as deleteValueApi, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
+import {
+  fetchValues,
+  addValue,
+  updateValue,
+  deleteValue as deleteValueApi,
+  normalizeWebknotValuesList,
+} from "../../api/webknotValueApi.js";
+import { fetchEmployeePortalWebknotValues, normalizeWebknotValues } from "../../api/employee-portal.js";
 import { fetchBands, fetchStreams, normalizeDirectoryPage } from "../../api/band-stream-directory.js";
 import {
   fetchAdminAllSubmissions,
   formatYearMonth,
   normalizeMonthlySubmission,
 } from "../../api/monthly-submissions.js";
+import { normalizeYearMonth } from "../../utils/reviewCycles.js";
 import {
   fetchAdminNotifications,
   markAdminNotificationRead,
@@ -60,6 +68,7 @@ import {
 const DIRECTORY_PAGE_SIZE = 10;
 const KPI_PAGE_SIZE_OPTIONS = [10, 20, 50];
 const KPI_FIRST_CURSOR = null;
+const KPI_BULK_PAGE_SIZE = 250;
 const ADMIN_NOTIFICATION_PAGE_SIZE = 25;
 const ADMIN_NOTIFICATION_POLL_MS = 30_000;
 const ADMIN_SIDEBAR_PREF_KEY = "rt_tracking_admin_sidebar_open_v1";
@@ -508,6 +517,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [kpiModalMode, setKpiModalMode] = useState("add"); // "add" | "edit"
   const [searchQuery, setSearchQuery] = useState("");
   const [kpis, setKpis] = useState([]);
+  const [allKpis, setAllKpis] = useState([]);
+  const [allKpisLoading, setAllKpisLoading] = useState(false);
+  const [allKpisError, setAllKpisError] = useState("");
   const [kpisLoading, setKpisLoading] = useState(false);
   const [kpisError, setKpisError] = useState("");
   const [, setKpisCursor] = useState(KPI_FIRST_CURSOR);
@@ -532,7 +544,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [showValueModal, setShowValueModal] = useState(false);
   const [valueModalMode, setValueModalMode] = useState("add"); // "add" | "edit"
   const [editingValueId, setEditingValueId] = useState(null);
-  const [valueDraft, setValueDraft] = useState({ title: "", pillar: "", description: "" });
+  const [valueDraft, setValueDraft] = useState({ title: "", pillar: "" });
   const [valueSaving, setValueSaving] = useState(false);
   const [pendingDeleteValue, setPendingDeleteValue] = useState(null);
   const [certificationCatalog, setCertificationCatalog] = useState(() => {
@@ -574,6 +586,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     cursor = null,
     append = false,
     silent = false,
+    types = null,
   } = {}) => {
     if (!silent || !notificationsLoadedRef.current) {
       setNotificationsLoading(true);
@@ -585,6 +598,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
         cursor,
         unreadOnly: false,
         signal,
+        types,
       });
       const page = normalizeAdminNotificationPage(data);
       setNotifications((prev) => {
@@ -745,7 +759,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     setCertificationsLoading(true);
     try {
       const data = await fetchCertifications({
-        activeOnly: null,
+        activeOnly: false,
         limit: DIRECTORY_PAGE_SIZE,
         cursor: resolvedCursor,
         signal,
@@ -816,7 +830,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
   function openValueModal() {
     setValueModalMode("add");
     setEditingValueId(null);
-    setValueDraft({ title: "", pillar: "", description: "" });
+    setValueDraft({ title: "", pillar: "" });
     setShowValueModal(true);
   }
 
@@ -832,7 +846,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
     setValueDraft({
       title: String(v.title ?? ""),
       pillar: String(v.pillar ?? ""),
-      description: String(v.description ?? ""),
     });
     setShowValueModal(true);
   }
@@ -847,11 +860,10 @@ export default function AdminControlCenter({ onLogout, auth }) {
     const payload = {
       title: valueDraft.title.trim(),
       pillar: valueDraft.pillar.trim(),
-      description: valueDraft.description.trim(),
     };
 
-    if (!payload.title || !payload.pillar || !payload.description) {
-      showToast({ title: "Missing fields", message: "Fill value, evaluation criteria, and description." });
+    if (!payload.title || !payload.pillar) {
+      showToast({ title: "Missing fields", message: "Fill value and evaluation criteria." });
       return;
     }
 
@@ -866,16 +878,19 @@ export default function AdminControlCenter({ onLogout, auth }) {
       } else {
         res = await addValue(payload);
       }
-      
+
       const normalized = res && typeof res === "object" ? res : payload;
-      const id = String(normalized?.id ?? normalized?.valueId ?? Date.now());
-      const next = { 
-        id, 
-        title: normalized?.title ?? payload.title, 
+      const rawId =
+        valueModalMode === "edit"
+          ? (editingValueId ?? normalized?.id ?? normalized?.valueId)
+          : (normalized?.id ?? normalized?.valueId);
+      const id = String(rawId ?? editingValueId ?? payload.title ?? Date.now()).trim();
+      const next = {
+        id,
+        title: normalized?.title ?? payload.title,
         pillar: normalized?.pillar ?? payload.pillar,
-        description: normalized?.description ?? payload.description 
       };
-      
+
       setValues((prev) => {
         const idx = prev.findIndex((x) => String(x.id) === String(id));
         if (idx === -1) return [next, ...prev];
@@ -902,24 +917,26 @@ export default function AdminControlCenter({ onLogout, auth }) {
   }
 
   const kpiBandOptions = useMemo(() => {
+    const kpiUniverse = allKpis.length ? allKpis : kpis;
     const fromDirectory = directoryBands
       .filter((row) => Boolean(row?.active))
       .map((row) => String(row?.code || "").trim())
       .filter(Boolean);
-    const fromKpis = kpis.map((k) => String(k?.band || "").trim()).filter(Boolean);
+    const fromKpis = kpiUniverse.map((k) => String(k?.band || "").trim()).filter(Boolean);
     const fallback = ["B1", "B2", "B3", "B4", "B5", "B5H", "B5L", "B6H", "B6L", "B7H", "B7L", "B8"];
     return Array.from(new Set([...fromDirectory, ...fromKpis, ...fallback]));
-  }, [directoryBands, kpis]);
+  }, [allKpis, directoryBands, kpis]);
 
   const kpiStreamOptions = useMemo(() => {
+    const kpiUniverse = allKpis.length ? allKpis : kpis;
     const fromDirectory = directoryStreams
       .filter((row) => Boolean(row?.active))
       .map((row) => String(row?.code || "").trim())
       .filter(Boolean);
-    const fromKpis = kpis.map((k) => String(k?.stream || "").trim()).filter(Boolean);
+    const fromKpis = kpiUniverse.map((k) => String(k?.stream || "").trim()).filter(Boolean);
     const fallback = ["Development", "QA", "Devops", "DATA", "UI_UX"];
     return Array.from(new Set([...fromDirectory, ...fromKpis, ...fallback]));
-  }, [directoryStreams, kpis]);
+  }, [allKpis, directoryStreams, kpis]);
 
   function deleteValue(v) {
     if (!v) return;
@@ -952,8 +969,10 @@ export default function AdminControlCenter({ onLogout, auth }) {
     try {
       await deleteKpiDefinition(String(kpi.id));
       setKpis((prev) => prev.filter((x) => String(x.id) !== String(kpi.id)));
+      setAllKpis((prev) => prev.filter((x) => String(x.id) !== String(kpi.id)));
       showToast({ title: "KPI deleted", message: kpi.title });
       await reloadKpis().catch(() => {});
+      await reloadAllKpis().catch(() => {});
     } catch (err) {
       if (err?.status === 401) {
         showToast({ title: "Session expired", message: "Please login again." });
@@ -989,7 +1008,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
     const nextBand = payload.band;
     const nextStream = payload.stream;
     const nextWeight = toPercent(payload.weight);
-    const existingSum = kpis
+    const kpiUniverse = allKpis.length ? allKpis : kpis;
+    const existingSum = kpiUniverse
       .filter((k) => String(k?.band ?? "").trim() === nextBand)
       .filter((k) => String(k?.stream ?? "").trim() === nextStream)
       .filter((k) => String(k?.id) !== String(payload.id))
@@ -1017,12 +1037,19 @@ export default function AdminControlCenter({ onLogout, auth }) {
         return prev.map((k) => (String(k.id) === String(normalized.id) ? normalized : k));
       });
 
+      setAllKpis((prev) => {
+        const idx = prev.findIndex((k) => String(k.id) === String(normalized.id));
+        if (idx === -1) return [normalized, ...prev];
+        return prev.map((k) => (String(k.id) === String(normalized.id) ? normalized : k));
+      });
+
       showToast({
         title: kpiModalMode === "edit" ? "KPI updated" : "KPI added",
         message: normalized.title,
       });
       setShowKPIModal(false);
       await reloadKpis().catch(() => {});
+      await reloadAllKpis().catch(() => {});
     } catch (err) {
       if (err?.status === 401) {
         showToast({ title: "Session expired", message: "Please login again." });
@@ -1037,6 +1064,43 @@ export default function AdminControlCenter({ onLogout, auth }) {
       setKpiSaving(false);
     }
   }
+
+  const reloadAllKpis = useCallback(async ({ signal } = {}) => {
+    setAllKpisError("");
+    setAllKpisLoading(true);
+    try {
+      const collected = [];
+      const seen = new Set();
+      let cursor = KPI_FIRST_CURSOR;
+
+      while (true) {
+        const data = await fetchKpiDefinitions({ limit: KPI_BULK_PAGE_SIZE, cursor, signal });
+        const page = normalizeCursorPage(data);
+        const normalized = normalizeKpiDefinitions(page.items);
+        for (const item of normalized) {
+          const key = String(item?.id ?? `${item?.title ?? ""}:${item?.band ?? ""}:${item?.stream ?? ""}`);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          collected.push(item);
+        }
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+
+      setAllKpis(collected);
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return;
+      }
+      const message = err?.message || "Failed to load all KPIs.";
+      setAllKpisError(message);
+    } finally {
+      setAllKpisLoading(false);
+    }
+  }, [onLogout, showToast]);
 
   const reloadKpis = useCallback(async ({ signal, cursor, pageAction = "stay" } = {}) => {
     const resolvedCursorRaw = cursor === undefined ? kpisCursorRef.current : cursor;
@@ -1078,11 +1142,28 @@ export default function AdminControlCenter({ onLogout, auth }) {
     setValuesError("");
     setValuesLoading(true);
     try {
-      const data = await fetchValues(false, { limit: DIRECTORY_PAGE_SIZE, cursor: resolvedCursor, signal });
-      const page = normalizeCursorPage(data);
-      const normalized = normalizeWebknotValuesList(page.items);
-      setValues(normalized.sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true })));
-      setValuesNextCursor(page.nextCursor);
+      const primary = await fetchValues(false, { limit: DIRECTORY_PAGE_SIZE, cursor: resolvedCursor, signal });
+      const primaryPage = normalizeCursorPage(primary);
+      let normalized = normalizeWebknotValuesList(primaryPage.items);
+      let nextCursor = primaryPage.nextCursor;
+
+      if (!normalized.length) {
+        const fallback = [];
+        let portalCursor = null;
+        for (let i = 0; i < 50; i += 1) {
+          const portalRaw = await fetchEmployeePortalWebknotValues({ limit: DIRECTORY_PAGE_SIZE, cursor: portalCursor, signal });
+          const portalPage = normalizeCursorPage(portalRaw);
+          fallback.push(...normalizeWebknotValues(portalPage.items));
+          if (!portalPage.nextCursor) break;
+          portalCursor = portalPage.nextCursor;
+        }
+        normalized = fallback;
+        nextCursor = null;
+      }
+
+      const sorted = normalized.sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true }));
+      setValues(sorted);
+      setValuesNextCursor(nextCursor);
       setValuesCursor(resolvedCursor);
       valuesCursorRef.current = resolvedCursor;
       setValuesCursorStack((prev) => {
@@ -1114,9 +1195,20 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
   useEffect(() => {
     const controller = new AbortController();
+    reloadAllKpis({ signal: controller.signal }).catch(() => {});
+    return () => controller.abort();
+  }, [reloadAllKpis]);
+
+  useEffect(() => {
+    const controller = new AbortController();
     reloadValues({ signal: controller.signal }).catch(() => {});
     return () => controller.abort();
   }, [reloadValues]);
+
+  const handleReloadKpis = useCallback(() => {
+    reloadKpis({ pageAction: "stay" }).catch(() => {});
+    reloadAllKpis().catch(() => {});
+  }, [reloadAllKpis, reloadKpis]);
   const [portalWindow, setPortalWindow] = useState(() => defaultPortalWindow());
   const [portalWindowLoading, setPortalWindowLoading] = useState(false);
   const [portalWindowError, setPortalWindowError] = useState("");
@@ -1169,15 +1261,54 @@ export default function AdminControlCenter({ onLogout, auth }) {
     bandCount: null,
   });
   const employeesCursorRef = useRef(null);
+  const [submissionExtrasByEmployee, setSubmissionExtrasByEmployee] = useState({});
 
   const [ability6m, setAbility6m] = useState(() =>
     buildLastMonths(6).map((m) => ({ month: m.label, avg: 0 }))
   );
+  const [submissionSummary, setSubmissionSummary] = useState(() => ({
+    monthKey: formatYearMonth(new Date()),
+    submittedByRole: { employee: 0, manager: 0, admin: 0 },
+    submittedIds: [],
+    total: 0,
+  }));
+  const [submissionCycleMap, setSubmissionCycleMap] = useState({});
+
+  useEffect(() => {
+    const currentMonthKey = formatYearMonth(new Date());
+    if (submissionSummary?.monthKey !== currentMonthKey) return;
+    if (!Array.isArray(submissionSummary?.submittedIds)) return;
+
+    const submittedIds = new Set(submissionSummary.submittedIds.map(String));
+    if (!submittedIds.size) return;
+
+    setEmployees((prev) => {
+      let changed = false;
+      const next = prev.map((emp) => {
+        if (!submittedIds.has(String(emp.id)) || emp.submitted) return emp;
+        changed = true;
+        return { ...emp, submitted: true };
+      });
+      return changed ? next : prev;
+    });
+  }, [submissionSummary]);
 
   const commitEmployeesPage = useCallback((page, { cursor, cursorStack }) => {
     const base = normalizeEmployees(page.items);
     const extras = loadEmployeeExtras();
-    setEmployees(applyEmployeeExtras(base, extras));
+
+    const currentMonthKey = formatYearMonth(new Date());
+    const summaryMatches = submissionSummary?.monthKey === currentMonthKey;
+    const submittedIds = summaryMatches && Array.isArray(submissionSummary?.submittedIds)
+      ? new Set(submissionSummary.submittedIds.map(String))
+      : null;
+
+    const applied = applyEmployeeExtras(base, extras).map((emp) => {
+      if (!submittedIds) return emp;
+      return submittedIds.has(String(emp.id)) ? { ...emp, submitted: true } : emp;
+    });
+
+    setEmployees(applied);
     setEmployeesNextCursor(page.nextCursor);
     const totalRaw = page?.raw?.total;
     const totalNum =
@@ -1226,7 +1357,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     setEmployeesCursor(cursor ?? null);
     employeesCursorRef.current = cursor ?? null;
     if (Array.isArray(cursorStack)) setEmployeesCursorStack(cursorStack);
-  }, []);
+  }, [submissionSummary]);
 
   const reloadEmployees = useCallback(async ({ signal, cursor, pageAction = "stay", cursorStackOverride = null } = {}) => {
     const resolvedCursor = cursor === undefined ? (employeesCursorRef.current ?? null) : (cursor ?? null);
@@ -1359,17 +1490,94 @@ export default function AdminControlCenter({ onLogout, auth }) {
             ? data.data
             : [];
 
+        const currentMonthKey = formatYearMonth(new Date());
+        const submittedIds = new Set();
+        const submittedByRole = { employee: 0, manager: 0, admin: 0 };
+        const submissionExtras = {};
+        const cycleSummaries = new Map();
         const buckets = new Map();
         for (const raw of rows) {
           const normalized = normalizeMonthlySubmission(raw);
-          const monthKey = String(normalized?.month ?? raw?.month ?? "").trim();
+          const monthKey = normalizeYearMonth(
+            normalized?.month ??
+            raw?.month ??
+            normalized?.cycleKey ??
+            raw?.cycleKey ??
+            normalized?.cycleMonth ??
+            raw?.cycleMonth
+          ) || String(
+            normalized?.month ??
+            raw?.month ??
+            normalized?.cycleKey ??
+            raw?.cycleKey ??
+            normalized?.cycleMonth ??
+            raw?.cycleMonth ??
+            ""
+          ).trim();
           if (!monthKey) continue;
           const score = computeSubmissionAbilityScore(normalized);
-          if (!Number.isFinite(score)) continue;
-          const prev = buckets.get(monthKey) || { sum: 0, count: 0 };
-          prev.sum += score;
-          prev.count += 1;
-          buckets.set(monthKey, prev);
+          if (Number.isFinite(score)) {
+            const prev = buckets.get(monthKey) || { sum: 0, count: 0 };
+            prev.sum += score;
+            prev.count += 1;
+            buckets.set(monthKey, prev);
+          }
+
+          const roleHint = String(
+            normalized?.targetRole ??
+            normalized?.raw?.targetRole ??
+            raw?.targetRole ??
+            raw?.payload?.targetRole ??
+            raw?.employee?.role ??
+            raw?.employee?.empRole ??
+            normalized?.raw?.employee?.role ??
+            normalized?.raw?.employee?.empRole ??
+            ""
+          ).trim().toLowerCase();
+
+          let roleKey = "employee";
+          if (roleHint.includes("admin")) roleKey = "admin";
+          else if (roleHint.includes("manager")) roleKey = "manager";
+          else if (normalized?.submissionType === "MANAGER_SELF_REVIEW") roleKey = "manager";
+
+          const subjectId =
+            normalized?.subjectEmployeeId ||
+            normalized?.raw?.subjectEmployeeId ||
+            normalized?.raw?.employeeId ||
+            raw?.subjectEmployeeId ||
+            raw?.employeeId ||
+            raw?.employee?.employeeId;
+          if (subjectId) {
+            const id = String(subjectId);
+
+            const cycle = cycleSummaries.get(monthKey) || { submittedIds: new Set(), submittedByRole: { employee: 0, manager: 0, admin: 0 } };
+            cycle.submittedIds.add(id);
+            cycle.submittedByRole[roleKey] = (cycle.submittedByRole[roleKey] || 0) + 1;
+            cycleSummaries.set(monthKey, cycle);
+
+            if (monthKey === currentMonthKey) {
+              submittedIds.add(id);
+
+              const recRaw = normalized?.recognitionsCount ?? normalized?.raw?.recognitionsCount ?? raw?.recognitionsCount;
+              const recognitions = Number(recRaw || 0) || 0;
+              const certsList = Array.isArray(normalized?.certifications)
+                ? normalized.certifications
+                : Array.isArray(normalized?.raw?.certifications)
+                  ? normalized.raw.certifications
+                  : Array.isArray(raw?.certifications)
+                    ? raw.certifications
+                    : [];
+              const createdAt = normalized?.createdAt || normalized?.raw?.createdAt || raw?.createdAt || 0;
+              const prevExtra = submissionExtras[id];
+              if (!prevExtra || Number(prevExtra.createdAt || 0) <= Number(createdAt || 0)) {
+                submissionExtras[id] = { recognitions, certifications: certsList, createdAt, abilityScore: Number.isFinite(score) ? score : null };
+              }
+            }
+          }
+
+          if (monthKey === currentMonthKey) {
+            submittedByRole[roleKey] = (submittedByRole[roleKey] || 0) + 1;
+          }
         }
 
         const months = buildLastMonths(6);
@@ -1379,6 +1587,21 @@ export default function AdminControlCenter({ onLogout, auth }) {
           return { month: label, avg };
         });
         setAbility6m(points);
+        const cycleMapObj = {};
+        for (const [key, entry] of cycleSummaries.entries()) {
+          cycleMapObj[key] = {
+            submittedIds: Array.from(entry.submittedIds),
+            submittedByRole: entry.submittedByRole,
+          };
+        }
+        setSubmissionCycleMap(cycleMapObj);
+        setSubmissionExtrasByEmployee(submissionExtras);
+        setSubmissionSummary({
+          monthKey: currentMonthKey,
+          submittedByRole,
+          submittedIds: Array.from(submittedIds),
+          total: submittedIds.size,
+        });
       } catch (err) {
         if (!mounted) return;
         if (err?.name === "AbortError") return;
@@ -1663,58 +1886,28 @@ export default function AdminControlCenter({ onLogout, auth }) {
     const action = String(mode ?? "").trim().toLowerCase();
     if (action !== "open" && action !== "close") return;
 
-    return (async () => {
-      if (action === "open") {
-        await openSubmissionWindowForEmployeeNow(id);
-      } else {
-        await closeSubmissionWindowForEmployeeNow(id);
-      }
+    const nextForceOpen = action === "open";
+    const nextForceClosed = action === "close";
 
-      let nextForceOpen = action === "open";
-      let nextForceClosed = action === "close";
+    setEmployees((prev) =>
+      prev.map((e) =>
+        String(e.id) === id
+          ? { ...e, submissionWindowForceOpen: nextForceOpen, submissionWindowForceClosed: nextForceClosed }
+          : e
+      )
+    );
 
-      try {
-        const status = await fetchEmployeeSubmissionWindowStatus(id);
-        const root = status && typeof status === "object" ? status : {};
-        const employeeScopedIsOpen =
-          root?.employeeWindowOpen ??
-          root?.windowOpenForEmployee ??
-          root?.isOpenForEmployee ??
-          root?.employee?.isOpen ??
-          root?.status?.employeeWindowOpen;
-
-        if (typeof employeeScopedIsOpen === "boolean") {
-          nextForceOpen = employeeScopedIsOpen;
-          nextForceClosed = !employeeScopedIsOpen;
-        }
-      } catch { void 0; }
-
-      setEmployees((prev) =>
-        prev.map((emp) =>
-          String(emp?.id) === id
-            ? {
-                ...emp,
-                submissionWindowForceOpen: nextForceOpen,
-                submissionWindowForceClosed: nextForceClosed,
-              }
-            : emp
-        )
-      );
-
-      const extras = loadEmployeeExtras();
-      const current = extras[id] && typeof extras[id] === "object" ? extras[id] : {};
-      saveEmployeeExtras({
-        ...extras,
-        [id]: {
-          ...current,
-          recognitions: Number(current.recognitions) || 0,
-          certifications: Array.isArray(current.certifications) ? current.certifications : [],
-          submissionWindowForceOpen: nextForceOpen,
-          submissionWindowForceClosed: nextForceClosed,
-        },
-      });
-    })();
-  }, []);
+    const extras = loadEmployeeExtras();
+    const current = extras[id] && typeof extras[id] === "object" ? extras[id] : {};
+    saveEmployeeExtras({
+      ...extras,
+      [id]: {
+        ...current,
+        submissionWindowForceOpen: nextForceOpen,
+        submissionWindowForceClosed: nextForceClosed,
+      },
+    });
+  }, [setEmployees]);
 
   const account = useMemo(() => {
     const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
@@ -1873,6 +2066,14 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   </button>
                   <button
                     type="button"
+                    onClick={() => reloadNotifications({ types: ["FORGOT_PASSWORD_REQUESTED"] }).catch(() => {})}
+                    className="rounded-lg border border-indigo-400/60 bg-indigo-500/10 px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-indigo-700 hover:text-indigo-800 dark:border-indigo-500/60 dark:text-indigo-200"
+                    title="Force-load password reset notifications to surface admin codes"
+                  >
+                    Password resets
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => markEveryNotificationRead().catch(() => {})}
                     className="inline-flex items-center gap-1 rounded-lg border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
                   >
@@ -1915,20 +2116,65 @@ export default function AdminControlCenter({ onLogout, auth }) {
                           : "border-blue-500/35 bg-blue-500/10",
                       ].join(" ")}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[rgb(var(--muted))]">
-                            {item.type === "FORGOT_PASSWORD_REQUESTED" ? "Forgot Password" : "Submission Pair"}
+                      {(() => {
+                        const payload = item?.payload && typeof item.payload === "object" ? item.payload : {};
+                        const adminCode =
+                          payload.adminCode ||
+                          payload.verificationCode ||
+                          payload.otp ||
+                          payload.code ||
+                          "";
+                        const requestId = payload.requestId || payload.resetRequestId || payload.resetId || "";
+                        const expiresAt = payload.expiresAt || payload.expiry || payload.expiresOn || "";
+                        const email = payload.email || payload.employeeEmail || payload.employeeId || item?.message || "";
+                        const expiryLabel = expiresAt ? formatNotificationTimestamp(expiresAt) : null;
+                        const typeUpper = String(item.type || "").toUpperCase();
+                        const showResetMeta = typeUpper.includes("FORGOT") || Boolean(adminCode);
+                        return (
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[rgb(var(--muted))]">
+                                {showResetMeta ? "Forgot Password" : "Submission Pair"}
+                              </div>
+                              <div className="mt-1 text-sm font-bold text-[rgb(var(--text))] break-words">{item.title}</div>
+                              {item.message ? (
+                                <div className="mt-1 text-xs text-[rgb(var(--muted))] break-words">{item.message}</div>
+                              ) : null}
+                              {showResetMeta ? (
+                                <div className="mt-2 grid grid-cols-1 gap-1 text-[11px] text-[rgb(var(--text))]">
+                                  {adminCode ? (
+                                    <div className="inline-flex items-center gap-2 rounded-lg bg-blue-500/10 px-2 py-1 font-semibold text-blue-700 dark:text-blue-200">
+                                      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-blue-600 dark:text-blue-200">Admin Code</span>
+                                      <span className="font-mono text-sm">{adminCode}</span>
+                                    </div>
+                                  ) : null}
+                                  {requestId ? (
+                                    <div className="inline-flex items-center gap-2 rounded-lg bg-[rgb(var(--surface-2))] px-2 py-1 text-[rgb(var(--muted))]">
+                                      <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[rgb(var(--muted))]">Request</span>
+                                      <span className="font-mono text-[11px] text-[rgb(var(--text))] break-all">{requestId}</span>
+                                    </div>
+                                  ) : null}
+                                  {email ? (
+                                    <div className="inline-flex items-center gap-2 rounded-lg bg-[rgb(var(--surface-2))] px-2 py-1 text-[rgb(var(--muted))]">
+                                      <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[rgb(var(--muted))]">Employee</span>
+                                      <span className="font-mono text-[11px] text-[rgb(var(--text))] break-all">{email}</span>
+                                    </div>
+                                  ) : null}
+                                  {expiryLabel ? (
+                                    <div className="inline-flex items-center gap-2 rounded-lg bg-amber-500/10 px-2 py-1 text-amber-700 dark:text-amber-200">
+                                      <span className="text-[10px] font-black uppercase tracking-[0.14em]">Expires</span>
+                                      <span className="font-mono text-[11px]">{expiryLabel}</span>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))]">
+                              {formatNotificationTimestamp(item.createdAt)}
+                            </div>
                           </div>
-                          <div className="mt-1 text-sm font-bold text-[rgb(var(--text))] break-words">{item.title}</div>
-                          {item.message ? (
-                            <div className="mt-1 text-xs text-[rgb(var(--muted))] break-words">{item.message}</div>
-                          ) : null}
-                        </div>
-                        <div className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))]">
-                          {formatNotificationTimestamp(item.createdAt)}
-                        </div>
-                      </div>
+                        );
+                      })()}
                     </Motion.button>
                   ))}
                 </div>
@@ -1959,7 +2205,12 @@ export default function AdminControlCenter({ onLogout, auth }) {
             reloadEmployees={reloadEmployees}
             employeesLoading={employeesLoading}
             employeesError={employeesError}
+            totalEmployeesCount={employeesTotalCount}
+            directoryTotals={employeesDirectoryTotals}
             ability6m={ability6m}
+            submissionSummary={submissionSummary}
+            submissionCycleMap={submissionCycleMap}
+            submissionExtrasByEmployee={submissionExtrasByEmployee}
             onGenerateReport={generateReport}
           />
         )}
@@ -2010,6 +2261,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
         {activeTab === "kpi" && (
           <KPIRegistry
             kpis={kpis}
+            allKpis={allKpis}
+            allKpisLoading={allKpisLoading}
+            allKpisError={allKpisError}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             onAddKpi={openKpiModal}
@@ -2017,7 +2271,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
             onDeleteKpi={requestDeleteKpi}
             loading={kpisLoading}
             error={kpisError}
-            onReload={() => reloadKpis({ pageAction: "stay" }).catch(() => {})}
+            onReload={handleReloadKpis}
             pager={kpiPager}
             pageSize={kpiPageSize}
             pageSizeOptions={KPI_PAGE_SIZE_OPTIONS}
@@ -2222,19 +2476,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   onChange={(e) => setValueDraft((d) => ({ ...d, pillar: e.target.value }))}
                   className="mt-2 rt-input text-sm"
                   placeholder="e.g., Ownership"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-                  Description *
-                </label>
-                <textarea
-                  value={valueDraft.description}
-                  onChange={(e) => setValueDraft((d) => ({ ...d, description: e.target.value }))}
-                  rows={4}
-                  className="mt-2 rt-input text-sm resize-none"
-                  placeholder="Write a short definition of the value..."
                 />
               </div>
 

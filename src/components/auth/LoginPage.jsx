@@ -10,9 +10,10 @@ import {
   ShieldCheck,
   Workflow,
   TimerReset,
-  UserCircle2,
   ClipboardCheck,
   BadgeCheck,
+  TrendingUp,
+  UserCircle2,
 } from "lucide-react";
 import { fetchMe, getAuth, login, setAuth, forgotPassword } from "../../api/auth.js";
 import { fetchPortalAdmin, fetchPortalEmployee, fetchPortalManager } from "../../api/portal.js";
@@ -23,8 +24,6 @@ export default function LoginPage({ onLoginSuccess }) {
   const [showPassword, setShowPassword] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
-  const [cockpitMode, setCockpitMode] = useState("execution");
-  const [workflowPreviewStep, setWorkflowPreviewStep] = useState("employee");
   const [copied, setCopied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -96,7 +95,7 @@ export default function LoginPage({ onLoginSuccess }) {
       icon: <TimerReset size={16} className="text-cyan-200" />,
     },
   ];
-  const activeCockpit = cockpitModes.find((item) => item.id === cockpitMode) || cockpitModes[0];
+  const activeCockpit = cockpitModes[0];
   const workflowPreview = [
     {
       id: "employee",
@@ -135,8 +134,22 @@ export default function LoginPage({ onLoginSuccess }) {
       ],
     },
   ];
-  const activeWorkflowPreview =
-    workflowPreview.find((item) => item.id === workflowPreviewStep) || workflowPreview[0];
+  const activeWorkflowPreview = workflowPreview[0];
+
+  const growthSeries = [82, 85, 86, 88, 90, 93, 95];
+  const growthMin = Math.min(...growthSeries) - 2;
+  const growthMax = Math.max(...growthSeries) + 2;
+  const growthRange = Math.max(growthMax - growthMin, 1);
+  const graphWidth = 280;
+  const graphHeight = 140;
+  const growthPoints = growthSeries.map((value, idx) => {
+    const x = (idx / (growthSeries.length - 1 || 1)) * graphWidth;
+    const y = graphHeight - ((value - growthMin) / growthRange) * graphHeight;
+    return { x, y };
+  });
+  const growthPath = growthPoints
+    .map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+    .join(" ");
 
   const handleCopy = () => {
     navigator.clipboard.writeText(hrEmail);
@@ -148,7 +161,12 @@ export default function LoginPage({ onLoginSuccess }) {
   const canRequestReset = resetEmail.trim().toLowerCase().endsWith("@webknot.in");
 
   return (
-    <div className="rt-login-shell w-full grid grid-cols-1 xl:grid-cols-[minmax(360px,500px)_1fr] text-[rgb(var(--text))] bg-[rgb(var(--bg))]">
+    <div className="rt-login-shell relative w-full grid grid-cols-1 xl:grid-cols-[minmax(360px,500px)_1fr] text-[rgb(var(--text))] bg-[rgb(var(--bg))]">
+      <div className="pointer-events-none absolute inset-0 opacity-70" aria-hidden>
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(88,170,255,0.18),transparent_34%),radial-gradient(circle_at_82%_18%,rgba(12,160,210,0.16),transparent_38%),linear-gradient(180deg,rgba(255,255,255,0.8),rgba(236,243,252,0.6))]" />
+        <div className="absolute inset-0 blur-3xl bg-[linear-gradient(140deg,rgba(255,255,255,0.0),rgba(88,170,255,0.14),rgba(16,102,202,0.08))]" />
+        <div className="rt-noise" />
+      </div>
       <section className="rt-login-panel relative z-20 grid grid-rows-[auto_1fr_auto] border-r border-[rgb(var(--border))] bg-[rgb(var(--surface))]/92 px-4 py-4 sm:px-8 sm:py-6 lg:px-10 lg:py-8 backdrop-blur-xl shadow-[0_24px_64px_rgba(8,26,56,0.14)]">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-44 bg-gradient-to-b from-[rgb(var(--primary-soft))/0.85] to-transparent" />
         <header className="relative flex items-center justify-between gap-3">
@@ -199,9 +217,20 @@ export default function LoginPage({ onLoginSuccess }) {
             </div>
           </div>
 
-          <form
-            className="rt-login-form mt-4 sm:mt-5 rt-panel rounded-[1.35rem] sm:rounded-[1.65rem] p-4 sm:p-5 space-y-4 sm:space-y-5"
-            onSubmit={async (e) => {
+          <div className="relative mt-4 sm:mt-5">
+            <Motion.div
+              aria-hidden
+              initial={{ opacity: 0.42, scale: 0.98 }}
+              animate={{ opacity: [0.42, 0.72, 0.42], scale: [0.98, 1.02, 0.98] }}
+              transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
+              className="pointer-events-none absolute -inset-4 sm:-inset-5 rounded-[1.8rem] bg-[radial-gradient(circle_at_20%_30%,rgba(88,170,255,0.22),transparent_38%),radial-gradient(circle_at_80%_60%,rgba(15,122,177,0.18),transparent_40%),linear-gradient(135deg,rgba(255,255,255,0.7),rgba(236,243,252,0.55))] blur-3xl"
+            />
+            <Motion.form
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.32, ease: "easeOut" }}
+              className="rt-login-form relative rt-panel rounded-[1.35rem] sm:rounded-[1.65rem] p-4 sm:p-5 space-y-4 sm:space-y-5 shadow-[0_24px_64px_rgba(8,26,56,0.16)]"
+              onSubmit={async (e) => {
               e.preventDefault();
               if (!canSubmit || submitting) return;
               setSubmitError("");
@@ -284,8 +313,8 @@ export default function LoginPage({ onLoginSuccess }) {
               } finally {
                 setSubmitting(false);
               }
-            }}
-          >
+              }}
+            >
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))]">Corporate Email</label>
               <input
@@ -353,7 +382,8 @@ export default function LoginPage({ onLoginSuccess }) {
                 {submitSuccess}
               </div>
             ) : null}
-          </form>
+            </Motion.form>
+          </div>
         </div>
 
         <footer className="rt-login-footer relative mt-4 sm:mt-6 flex items-center justify-between gap-2 text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))] border-t border-[rgb(var(--border))] pt-3 sm:pt-4">
@@ -368,132 +398,154 @@ export default function LoginPage({ onLoginSuccess }) {
         <div className="absolute -top-24 -right-20 h-[26rem] w-[26rem] rounded-full bg-cyan-300/25 blur-[120px]" />
         <div className="absolute -bottom-28 -left-20 h-[28rem] w-[28rem] rounded-full bg-blue-500/25 blur-[140px]" />
 
+        <Motion.div
+          aria-hidden
+          className="absolute right-10 top-16 h-20 w-20 rounded-full bg-white/10 border border-white/20 rt-float-slow"
+          animate={{ y: [0, -8, 0], scale: [1, 1.04, 1] }}
+          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+        />
+        <Motion.div
+          aria-hidden
+          className="absolute left-16 bottom-10 h-16 w-16 rounded-2xl bg-white/8 border border-white/16 rt-float-slow"
+          animate={{ y: [0, 10, 0], rotate: [0, -4, 0] }}
+          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
+        />
+
         <div className="relative z-10 h-full min-h-0 px-8 py-7 2xl:px-12 2xl:py-8 flex flex-col overflow-y-auto">
-          <Motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="max-w-3xl">
+          <Motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: "easeOut" }} className="max-w-3xl">
             <div className="inline-flex items-center gap-2 rounded-full bg-white/10 border border-white/30 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white/90">
-              <Activity size={12} className="text-emerald-300" /> Workflow Engine
+              <Activity size={12} className="text-emerald-300" /> Performance OS
             </div>
-            <h2 className="mt-4 text-[clamp(2.6rem,5.1vw,4.8rem)] leading-[0.95] tracking-[-0.03em] font-black text-white">
-              Performance Review
-              <span className="block text-white/55">Control Studio</span>
+            <h2 className="mt-4 text-[clamp(2.5rem,4.6vw,4.4rem)] leading-[0.96] tracking-[-0.03em] font-black text-white">
+              Calm, Precise Reviews
+              <span className="block text-white/60">Less clutter. More signal.</span>
             </h2>
-            <p className="mt-3 max-w-2xl text-sm text-white/80">
-              Interactive review orchestration across employee, manager, and admin workflows.
+            <p className="mt-3 max-w-2xl text-sm text-white/82">
+              A focused command view for monthly submissions, manager scoring, and admin closure.
             </p>
           </Motion.div>
 
-          <div className="mt-4 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-[0.14em] text-white/85">
-            <span className="rounded-full border border-white/25 bg-white/10 px-3 py-1.5">May-Oct Cycle</span>
-            <span className="rounded-full border border-white/25 bg-white/10 px-3 py-1.5">Nov-Apr Cycle</span>
-            <span className="rounded-full border border-white/25 bg-white/10 px-3 py-1.5">Monthly Checkpoints</span>
-          </div>
-
-          <div className="mt-5 flex-1 min-h-0">
-            <div className="h-full rounded-[2rem] border border-white/25 bg-white/8 backdrop-blur-md p-5 flex flex-col gap-4">
+          <div className="relative mt-6 grid grid-cols-12 gap-4 flex-1 min-h-0">
+            <Motion.div
+              className="col-span-7 rounded-[1.5rem] border border-white/20 bg-white/10 backdrop-blur-xl p-5 flex flex-col gap-4 shadow-[0_24px_64px_rgba(4,12,30,0.35)]"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, ease: "easeOut" }}
+            >
               <div className="flex items-center justify-between gap-3">
-                <div className="text-[11px] font-black uppercase tracking-[0.2em] text-white/75">Interactive Workspace</div>
-                <div className="inline-flex items-center gap-1 rounded-full border border-white/25 bg-white/10 p-1">
-                  {cockpitModes.map((mode) => (
-                    <button
-                      key={mode.id}
-                      type="button"
-                      onClick={() => setCockpitMode(mode.id)}
-                      className={[
-                        "rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.15em] transition",
-                        cockpitMode === mode.id
-                          ? "bg-white/90 text-slate-900"
-                          : "text-white/75 hover:bg-white/12 hover:text-white",
-                      ].join(" ")}
-                    >
-                      {mode.label}
-                    </button>
-                  ))}
-                </div>
+                <span className="inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-white/80">
+                  <TrendingUp size={15} className="text-emerald-300" /> Growth Graph
+                </span>
+                <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] font-black text-white/85">
+                  <ShieldCheck size={14} className="text-emerald-300" /> Steady Gain
+                </span>
               </div>
 
-              <div className="grid grid-cols-12 gap-4 flex-1 min-h-0">
-                <AnimatePresence mode="wait">
+              <div className="relative overflow-hidden rounded-[1.25rem] border border-white/14 bg-white/8 p-4 shadow-[0_14px_44px_rgba(4,12,30,0.32)]">
+                <div className="absolute inset-0 bg-gradient-to-b from-white/6 via-transparent to-transparent" aria-hidden />
+                <div className="flex items-center justify-between text-white/85 text-xs font-semibold">
+                  <span>Cycle Readiness</span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-1 text-[11px] font-black">
+                    {activeCockpit.cycle}
+                  </span>
+                </div>
+                <div className="mt-3 h-[180px] relative">
+                  <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} className="h-full w-full" preserveAspectRatio="xMidYMid meet">
+                    <defs>
+                      <linearGradient id="rtGrowthStroke" x1="0" x2="1" y1="0" y2="0">
+                        <stop offset="0%" stopColor="rgba(125, 249, 255, 0.9)" />
+                        <stop offset="55%" stopColor="rgba(102, 181, 255, 0.95)" />
+                        <stop offset="100%" stopColor="rgba(86, 231, 186, 0.95)" />
+                      </linearGradient>
+                      <linearGradient id="rtGrowthFill" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stopColor="rgba(125, 249, 255, 0.24)" />
+                        <stop offset="100%" stopColor="rgba(125, 249, 255, 0)" />
+                      </linearGradient>
+                    </defs>
+                    <Motion.path
+                      d={`${growthPath}`}
+                      fill="none"
+                      stroke="url(#rtGrowthStroke)"
+                      strokeWidth={3}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      initial={{ pathLength: 0, opacity: 0 }}
+                      animate={{ pathLength: 1, opacity: 1 }}
+                      transition={{ duration: 1.6, ease: "easeInOut" }}
+                    />
+                    <Motion.path
+                      d={`${growthPath} L ${graphWidth} ${graphHeight} L 0 ${graphHeight} Z`}
+                      fill="url(#rtGrowthFill)"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 1, ease: "easeOut", delay: 0.2 }}
+                    />
+                    {growthPoints.map((p, idx) => (
+                      <circle
+                        key={`pt-${idx}`}
+                        cx={p.x}
+                        cy={p.y}
+                        r={idx === growthPoints.length - 1 ? 4.2 : 2.6}
+                        fill={idx === growthPoints.length - 1 ? "#7df9ff" : "#ffffff"}
+                        opacity={idx === growthPoints.length - 1 ? 1 : 0.72}
+                      />
+                    ))}
+                  </svg>
                   <Motion.div
-                    key={`cockpit:${activeCockpit.id}`}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: 8 }}
-                    transition={{ duration: 0.22, ease: "easeOut" }}
-                    className="col-span-6 rounded-2xl border border-white/22 bg-white/10 p-4 flex flex-col"
+                    className="absolute right-3 bottom-3 rounded-xl bg-white/12 px-3 py-2 text-white/88 text-xs font-semibold border border-white/14"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, ease: "easeOut", delay: 0.25 }}
                   >
-                    <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.16em] text-white/70">
-                      {activeCockpit.icon} Mode Overview
-                    </div>
-                    <Motion.div
-                      animate={{ rotate: [0, 0.8, -0.8, 0] }}
-                      transition={{ duration: 6.5, ease: "easeInOut", repeat: Infinity }}
-                      className="relative mx-auto mt-3 h-36 w-36 rounded-full p-[9px]"
-                      style={{
-                        background: `conic-gradient(rgba(138,241,255,0.96) 0deg ${Math.round(activeCockpit.readiness * 3.6)}deg, rgba(255,255,255,0.2) ${Math.round(activeCockpit.readiness * 3.6)}deg 360deg)`,
-                      }}
-                    >
-                      <div className="grid h-full w-full place-items-center rounded-full border border-white/20 bg-slate-950/35 text-center">
-                        <div className="text-[9px] font-black uppercase tracking-[0.15em] text-white/70">{activeCockpit.cycle}</div>
-                        <div className="mt-1 text-3xl font-black text-white">{activeCockpit.readiness}%</div>
-                      </div>
-                    </Motion.div>
-                    <div className="mt-3 text-sm font-bold text-white">{activeCockpit.headline}</div>
-                    <div className="mt-1 text-xs text-white/75 leading-snug">{activeCockpit.summary}</div>
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      {activeCockpit.stats.map((stat) => (
-                        <div key={`${activeCockpit.id}:${stat.label}`} className="rounded-xl border border-white/18 bg-white/8 px-2.5 py-2">
-                          <div className="text-[10px] font-black uppercase tracking-[0.13em] text-white/70">{stat.label}</div>
-                          <div className="mt-1 text-lg font-black text-white">{stat.value}</div>
-                        </div>
-                      ))}
+                    <div className="uppercase tracking-[0.14em] text-[10px] font-black text-white/70">Now</div>
+                    <div className="flex items-center gap-2 text-base font-black">
+                      {growthSeries[growthSeries.length - 1]}%
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-200">
+                        <TrendingUp size={13} /> +3.5%
+                      </span>
                     </div>
                   </Motion.div>
-                </AnimatePresence>
-
-                <div className="col-span-6 rounded-2xl border border-white/22 bg-white/10 p-4 flex flex-col">
-                  <div className="text-[10px] font-black uppercase tracking-[0.16em] text-white/70">Process Preview</div>
-                  <div className="mt-2 inline-flex items-center gap-1 rounded-full border border-white/20 bg-white/10 p-1">
-                    {workflowPreview.map((stage) => (
-                      <button
-                        key={stage.id}
-                        type="button"
-                        onClick={() => setWorkflowPreviewStep(stage.id)}
-                        className={[
-                          "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] transition",
-                          workflowPreviewStep === stage.id
-                            ? "bg-white text-slate-900"
-                            : "text-white/80 hover:bg-white/12 hover:text-white",
-                        ].join(" ")}
-                      >
-                        {stage.icon} {stage.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <AnimatePresence mode="wait">
-                    <Motion.div
-                      key={`workflow:${activeWorkflowPreview.id}`}
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -6 }}
-                      transition={{ duration: 0.22, ease: "easeOut" }}
-                      className="mt-3 rounded-xl border border-white/18 bg-white/8 p-3 flex-1"
-                    >
-                      <div className="text-sm font-bold text-white">{activeWorkflowPreview.title}</div>
-                      <div className="mt-1 text-xs text-white/75 leading-snug">{activeWorkflowPreview.detail}</div>
-                      <div className="mt-3 space-y-2">
-                        {activeWorkflowPreview.checkpoints.map((point) => (
-                          <div key={`${activeWorkflowPreview.id}:${point}`} className="flex items-start gap-2 text-xs">
-                            <span className="mt-[3px] h-1.5 w-1.5 rounded-full bg-cyan-200" />
-                            <span className="text-white/88 leading-snug">{point}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </Motion.div>
-                  </AnimatePresence>
                 </div>
               </div>
-            </div>
+            </Motion.div>
+
+            <Motion.div
+              className="col-span-5 rounded-[1.5rem] border border-white/18 bg-white/10 backdrop-blur-xl p-5 flex flex-col gap-3 shadow-[0_20px_54px_rgba(4,12,30,0.32)]"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, ease: "easeOut", delay: 0.06 }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-white/78">
+                  <ClipboardCheck size={15} className="text-cyan-200" /> Monthly Flow
+                </span>
+                <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-black text-white/80">
+                  {activeWorkflowPreview.label}
+                </span>
+              </div>
+
+              <div className="mt-1 text-sm font-semibold text-white">{activeWorkflowPreview.title}</div>
+              <div className="text-xs leading-snug text-white/78">{activeWorkflowPreview.detail}</div>
+
+              <div className="mt-2 space-y-2.5">
+                {activeWorkflowPreview.checkpoints.map((point, idx) => (
+                  <Motion.div
+                    key={`${activeWorkflowPreview.id}:${point}`}
+                    className="flex items-start gap-2 text-xs text-white/85"
+                    initial={{ opacity: 0, x: -6 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.25, ease: "easeOut", delay: 0.05 * idx }}
+                  >
+                    <span className="mt-[5px] h-1.5 w-1.5 rounded-full bg-cyan-200" />
+                    <span className="leading-snug">{point}</span>
+                  </Motion.div>
+                ))}
+              </div>
+
+              <div className="mt-auto flex items-center gap-2 text-[11px] text-white/72">
+                <BadgeCheck size={16} className="text-emerald-300" /> Guardrails stay on during submissions and approvals.
+              </div>
+            </Motion.div>
           </div>
         </div>
       </section>

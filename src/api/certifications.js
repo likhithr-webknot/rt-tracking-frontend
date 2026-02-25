@@ -23,8 +23,10 @@ function toNullableBoolean(value) {
   if (typeof value === "boolean") return value;
   const s = String(value).trim().toLowerCase();
   if (!s) return null;
-  if (s === "1" || s === "true" || s === "yes") return true;
-  if (s === "0" || s === "false" || s === "no") return false;
+  if (["1", "true", "yes", "on", "enabled", "active", "listed"].includes(s)) return true;
+  if (["0", "false", "no", "off", "disabled", "inactive", "unlisted"].includes(s)) return false;
+  if (s.includes("inactive") || s.includes("disabled")) return false;
+  if (s.includes("active") || s.includes("enabled") || s.includes("listed")) return true;
   return null;
 }
 
@@ -32,6 +34,7 @@ function withQueryParams({ activeOnly = null, limit = null, cursor = null } = {}
   const qs = new URLSearchParams();
   const active = toNullableBoolean(activeOnly);
   if (active != null) qs.set("activeOnly", String(active));
+  else if (activeOnly === false) qs.set("activeOnly", "false");
   if (limit != null) qs.set("limit", String(limit));
   if (cursor != null && String(cursor).trim()) qs.set("cursor", String(cursor).trim());
   return qs.toString();
@@ -94,11 +97,19 @@ export function normalizeCertifications(data) {
         obj.isListed ??
         obj.enabled ??
         obj.status ??
+        obj.state ??
         obj.certification?.active ??
         obj.certification?.isActive ??
+        obj.certification?.status ??
         true;
+      const statusText = String(listedRaw || "").trim().toLowerCase();
       const listedParsed = toNullableBoolean(listedRaw);
-      const listed = listedParsed == null ? true : listedParsed;
+      const statusParsed = statusText.includes("inactive") || statusText.includes("disabled") || statusText.includes("unlisted")
+        ? false
+        : statusText.includes("active") || statusText.includes("listed") || statusText.includes("enabled")
+          ? true
+          : null;
+      const listed = listedParsed != null ? listedParsed : (statusParsed != null ? statusParsed : true);
       return { id: String(id), name, listed };
     })
     .filter(Boolean);
@@ -144,39 +155,57 @@ export async function updateCertification(id, { name, listed = true }, { signal 
   const safeId = encodeURIComponent(String(id));
   const auth = getAuthHeader();
   const active = toNullableBoolean(listed);
-  const body = JSON.stringify({
+  const payload = {
     name: String(name || "").trim(),
-    ...(active != null ? { active } : {}),
-  });
+    ...(active != null
+      ? {
+          active,
+          listed: active,
+          isActive: active,
+          isListed: active,
+          enabled: active,
+          status: active ? "ACTIVE" : "INACTIVE",
+        }
+      : {}),
+  };
+  const body = JSON.stringify(payload);
   const headers = withCsrfHeaders({
     "Content-Type": "application/json",
     ...(auth ? { Authorization: auth } : {}),
   });
 
-  const methods = ["PUT", "PATCH"];
+  const methods = ["PUT", "PATCH", "POST"];
+  const endpoints = [
+    `/certifications/update/${safeId}`,
+    `/certifications/${safeId}`,
+    `/certifications/edit/${safeId}`,
+    `/certifications/set-active/${safeId}`,
+    `/certifications/set-listed/${safeId}`,
+    `/certifications/${safeId}/active`,
+  ];
   let lastErr = null;
-  for (const method of methods) {
-    const res = await fetch(buildApiUrl(`/certifications/update/${safeId}`), {
-      method,
-      signal,
-      credentials: "include",
-      headers,
-      body,
-    });
-    if (res.ok) {
-      const contentType = res.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) return res.json().catch(() => ({}));
-      return res.text().catch(() => "");
+  for (const endpoint of endpoints) {
+    for (const method of methods) {
+      const res = await fetch(buildApiUrl(endpoint), {
+        method,
+        signal,
+        credentials: "include",
+        headers,
+        body,
+      });
+      if (res.ok) {
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) return res.json().catch(() => ({}));
+        return res.text().catch(() => "");
+      }
+      const err = await toHttpError(res);
+      if (res.status === 404 || res.status === 405) {
+        lastErr = err;
+        continue;
+      }
+      throw err;
     }
-    const err = await toHttpError(res);
-    if (res.status === 404 || res.status === 405) {
-      lastErr = err;
-      continue;
-    }
-    throw err;
   }
-
-  throw lastErr || new Error("Certification update endpoint not found.");
 }
 
 export async function deleteCertification(id, { signal } = {}) {

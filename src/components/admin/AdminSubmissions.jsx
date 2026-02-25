@@ -7,9 +7,10 @@ import {
   fetchAdminAllSubmissions,
   formatYearMonth,
   normalizeMonthlySubmission,
-  submitAdminReviewDecision,
 } from "../../api/monthly-submissions.js";
-import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, normalizeYearMonth } from "../../utils/reviewCycles.js";
+import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions.js";
+import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
+import { buildCycleMonthOptions, getCycleForMonth, normalizeYearMonth } from "../../utils/reviewCycles.js";
 
 function formatMonthLabel(monthKey) {
   const m = normalizeYearMonth(monthKey);
@@ -128,72 +129,9 @@ function normalizeAdminSubmissions(data) {
     .filter((x) => x && x.id && x.status === "SUBMITTED");
 }
 
-function buildAdminReviewPayload(item, { action, notes }) {
-  const submission = item?.submission || normalizeMonthlySubmission(item?.raw) || {};
-  const month = normalizeYearMonth(item?.month || submission?.month) || null;
-  const cycleMeta = buildCycleMeta(month);
-
-  const kpiRatingsObj = submission?.kpiRatings && typeof submission.kpiRatings === "object" ? submission.kpiRatings : {};
-  const kpiRatings = Object.entries(kpiRatingsObj).map(([kpiId, rating]) => ({
-    kpiId: String(kpiId || "").trim(),
-    rating,
-  }));
-
-  const valueRatingsObj =
-    submission?.webknotValueRatings && typeof submission.webknotValueRatings === "object"
-      ? submission.webknotValueRatings
-      : {};
-  const valueEntries = Object.entries(valueRatingsObj);
-
-  const reviewedAt = new Date().toISOString();
-  const normalizedAction = String(action || "").trim().toUpperCase();
-
-  return {
-    month,
-    monthKey: month,
-    cycleKey: submission?.cycleKey || cycleMeta.cycleKey,
-    cycleLabel: submission?.cycleLabel || cycleMeta.cycleLabel,
-    cycleShortLabel: submission?.cycleShortLabel || cycleMeta.cycleShortLabel,
-    cycleStartMonth: submission?.cycleStartMonth || cycleMeta.cycleStartMonth,
-    cycleEndMonth: submission?.cycleEndMonth || cycleMeta.cycleEndMonth,
-    cycleMonth: cycleMeta.month,
-    profileVerified: true,
-    employeeId: String(item?.employee?.id || submission?.subjectEmployeeId || "").trim() || null,
-    subjectEmployeeId: String(submission?.subjectEmployeeId || item?.employee?.id || "").trim() || null,
-    submissionType: submission?.submissionType || item?.submissionType || "EMPLOYEE_MONTHLY_SUBMISSION",
-    actorRole: "ADMIN",
-    workflowStage: "ADMIN_REVIEW",
-    targetRole: submission?.submissionType === "MANAGER_SELF_REVIEW" ? "MANAGER" : "EMPLOYEE",
-    selfReviewText: String(submission?.selfReviewText || ""),
-    certifications: Array.isArray(submission?.certifications) ? submission.certifications : [],
-    kpiRatings,
-    webknotValues: valueEntries.map(([valueId]) => String(valueId || "").trim()),
-    webknotValueRatings: Object.fromEntries(valueEntries),
-    webknotValueResponses: valueEntries.map(([valueId, rating]) => ({
-      valueId: String(valueId || "").trim(),
-      rating,
-    })),
-    recognitionsCount: Number(submission?.recognitionsCount || 0) || 0,
-    managerEvaluation: submission?.managerEvaluation || null,
-    managerReview: submission?.managerReview || null,
-    managerSubmittedAt: submission?.managerSubmittedAt || null,
-    adminReview: {
-      action: normalizedAction,
-      comments: String(notes || "").trim(),
-      reviewedAt,
-      reviewedBy: null,
-    },
-    adminSubmittedAt: normalizedAction === "APPROVE" ? reviewedAt : null,
-    adminComments: String(notes || "").trim(),
-    adminNotes: String(notes || "").trim(),
-    reviewStatus: normalizedAction === "REJECT" ? "NEEDS_REVIEW" : "ADMIN_APPROVED",
-    reopenedForResubmission: normalizedAction === "REJECT",
-  };
-}
-
 export default function AdminSubmissions({ onLogout }) {
   const [month, setMonth] = useState(() => formatYearMonth(new Date()));
-  const status = "SUBMITTED";
+  const status = null;
   const [onlyManagerSubmitted, setOnlyManagerSubmitted] = useState(false);
 
   const [items, setItems] = useState([]);
@@ -201,11 +139,9 @@ export default function AdminSubmissions({ onLogout }) {
   const [error, setError] = useState("");
   const [pendingDeleteSubmissionId, setPendingDeleteSubmissionId] = useState(null);
   const [deleteErrorMessage, setDeleteErrorMessage] = useState("");
-
   const [reviewModal, setReviewModal] = useState({ open: false, item: null });
-  const [reviewNotes, setReviewNotes] = useState("");
-  const [reviewActionError, setReviewActionError] = useState("");
-  const [reviewSaving, setReviewSaving] = useState(false);
+  const [kpiIndex, setKpiIndex] = useState({});
+  const [valueIndex, setValueIndex] = useState({});
 
   const cycleInfo = useMemo(() => getCycleForMonth(month || new Date()), [month]);
   const cycleMonthOptions = useMemo(() => buildCycleMonthOptions(month || new Date()), [month]);
@@ -252,47 +188,66 @@ export default function AdminSubmissions({ onLogout }) {
     reload().catch(() => { void 0; });
   }, [reload]);
 
+  useEffect(() => {
+    let active = true;
+
+    async function loadLookups() {
+      try {
+        const [kpiRes, valueRes] = await Promise.all([fetchKpiDefinitions(), fetchValues(true)]);
+        if (!active) return;
+
+        const kpiMap = {};
+        (normalizeKpiDefinitions(kpiRes) || []).forEach((k) => {
+          const key = String(k?.id ?? "").trim();
+          if (!key) return;
+          kpiMap[key] = k?.title || key;
+        });
+
+        const valueMap = {};
+        (normalizeWebknotValuesList(valueRes) || []).forEach((v) => {
+          const key = String(v?.id ?? "").trim();
+          if (!key) return;
+          valueMap[key] = v?.title || key;
+        });
+
+        setKpiIndex(kpiMap);
+        setValueIndex(valueMap);
+      } catch (err) {
+        console.error("Failed to load KPI/value labels", err);
+      }
+    }
+
+    loadLookups();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const kpiLabel = useCallback(
+    (id) => {
+      const key = String(id ?? "").trim();
+      if (!key) return "—";
+      return kpiIndex[key] || key;
+    },
+    [kpiIndex]
+  );
+
+  const valueLabel = useCallback(
+    (id) => {
+      const key = String(id ?? "").trim();
+      if (!key) return "—";
+      return valueIndex[key] || key;
+    },
+    [valueIndex]
+  );
+
   function openReview(item) {
-    const existing = String(item?.submission?.adminReview?.comments || "").trim();
-    setReviewNotes(existing);
-    setReviewActionError("");
     setReviewModal({ open: true, item });
   }
 
   function closeReview() {
     setReviewModal({ open: false, item: null });
-    setReviewNotes("");
-    setReviewActionError("");
-    setReviewSaving(false);
-  }
-
-  async function submitReview(action) {
-    const item = reviewModal.item;
-    if (!item) return;
-
-    const normalizedAction = String(action || "").trim().toUpperCase();
-    const notes = String(reviewNotes || "").trim();
-    if (normalizedAction === "REJECT" && notes.length < 10) {
-      setReviewActionError("Rejection comments must be at least 10 characters.");
-      return;
-    }
-
-    const payload = buildAdminReviewPayload(item, { action: normalizedAction, notes });
-
-    try {
-      setReviewSaving(true);
-      await submitAdminReviewDecision(payload);
-      closeReview();
-      await reload();
-    } catch (err) {
-      if (err?.status === 401) {
-        onLogout?.();
-        return;
-      }
-      setReviewActionError(err?.message || "Review submission failed.");
-    } finally {
-      setReviewSaving(false);
-    }
   }
 
   return (
@@ -337,7 +292,6 @@ export default function AdminSubmissions({ onLogout }) {
               type="checkbox"
               checked={onlyManagerSubmitted}
               onChange={(e) => setOnlyManagerSubmitted(e.target.checked)}
-              className="h-4 w-4 accent-purple-600"
             />
             <span className="text-xs font-black uppercase tracking-widest text-[rgb(var(--text))]">
               Only manager-submitted
@@ -379,17 +333,25 @@ export default function AdminSubmissions({ onLogout }) {
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
               {visibleItems.map((it) => (
-                <tr key={it.id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
+                <tr
+                  key={it.id}
+                  className="hover:bg-[rgb(var(--surface-2))] transition-colors cursor-pointer"
+                  onClick={() => openReview(it)}
+                  onKeyDown={(e) => {
+                    const key = String(e.key || "").toLowerCase();
+                    if (key === "enter" || key === " ") {
+                      e.preventDefault();
+                      openReview(it);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Review submission for ${it.employee.name}`}
+                >
                   <td className="p-6">
                     <div className="font-bold text-[rgb(var(--text))] tracking-tight">{it.employee.name}</div>
-                    <div className="text-xs text-slate-500 font-mono mt-1 break-all">
-                      {it.employee.id}
-                    </div>
                     <div className="text-xs text-slate-500 mt-1 break-all">
                       {it.employee.email || "—"}
-                    </div>
-                    <div className="text-[10px] font-mono text-slate-400 mt-1">
-                      {it.id}
                     </div>
                   </td>
                   <td className="p-6 font-mono text-[rgb(var(--text))] whitespace-nowrap">{it.monthLabel}</td>
@@ -429,14 +391,20 @@ export default function AdminSubmissions({ onLogout }) {
                   <td className="p-6 text-right px-8">
                     <div className="inline-flex items-center gap-2">
                       <button
-                        onClick={() => openReview(it)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openReview(it);
+                        }}
                         className="p-2.5 bg-blue-500/10 text-blue-700 dark:text-blue-300 hover:bg-blue-500 hover:text-white rounded-xl transition-all border border-blue-500/20"
                         title="Review"
                       >
                         <CheckCircle2 size={18} />
                       </button>
                       <button
-                        onClick={() => setPendingDeleteSubmissionId(it.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPendingDeleteSubmissionId(it.id);
+                        }}
                         className="p-2.5 bg-red-500/10 text-red-700 dark:text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
                         title="Delete"
                       >
@@ -468,8 +436,8 @@ export default function AdminSubmissions({ onLogout }) {
                 <div className="mt-2 text-2xl font-black tracking-tight text-[rgb(var(--text))]">
                   {reviewModal.item.employee.name}
                 </div>
-                <div className="mt-1 text-xs text-gray-500 font-mono">
-                  {reviewModal.item.employee.id} • {reviewModal.item.month} • {reviewModal.item.entryType}
+                <div className="mt-1 text-xs text-gray-500">
+                  {reviewModal.item.month} • {reviewModal.item.entryType}
                 </div>
               </div>
               <button
@@ -491,32 +459,72 @@ export default function AdminSubmissions({ onLogout }) {
                     <div className="text-xs font-black uppercase tracking-widest text-gray-500">Self Review</div>
                     <div className="mt-2 whitespace-pre-wrap">{String(reviewModal.item.submission?.selfReviewText || "—")}</div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="rt-panel-subtle rounded-xl p-3">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-gray-500 font-black">KPI Ratings</div>
-                      <div className="mt-1 font-mono">{Object.keys(reviewModal.item.submission?.kpiRatings || {}).length}</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="rt-panel-subtle rounded-xl p-3 space-y-2">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-gray-500 font-black">Employee KPI Ratings</div>
+                      {Object.entries(reviewModal.item.submission?.kpiRatings || {}).length ? (
+                        Object.entries(reviewModal.item.submission.kpiRatings).map(([kpiId, rating]) => (
+                          <div key={kpiId} className="flex items-center justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm truncate">{kpiLabel(kpiId)}</div>
+                              {kpiLabel(kpiId) !== String(kpiId) ? (
+                                <div className="text-[10px] text-[rgb(var(--muted))] font-mono truncate">{String(kpiId)}</div>
+                              ) : null}
+                            </div>
+                            <span className="font-mono text-sm">{String(rating)}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex items-center justify-between gap-2 text-sm text-[rgb(var(--text))]">
+                          <span className="truncate">Defaulted (no self rating)</span>
+                          <span className="font-mono">2</span>
+                        </div>
+                      )}
                     </div>
-                    <div className="rt-panel-subtle rounded-xl p-3">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-gray-500 font-black">Values Rated</div>
-                      <div className="mt-1 font-mono">{Object.keys(reviewModal.item.submission?.webknotValueRatings || {}).length}</div>
-                    </div>
-                    <div className="rt-panel-subtle rounded-xl p-3">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-gray-500 font-black">Certifications</div>
-                      <div className="mt-1 font-mono">{Array.isArray(reviewModal.item.submission?.certifications) ? reviewModal.item.submission.certifications.length : 0}</div>
-                    </div>
-                    <div className="rt-panel-subtle rounded-xl p-3">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-gray-500 font-black">Recognitions</div>
-                      <div className="mt-1 font-mono">{Number(reviewModal.item.submission?.recognitionsCount || 0)}</div>
+                    <div className="rt-panel-subtle rounded-xl p-3 space-y-2">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-gray-500 font-black">Employee Values Ratings</div>
+                      {Object.entries(reviewModal.item.submission?.webknotValueRatings || {}).length ? (
+                        Object.entries(reviewModal.item.submission.webknotValueRatings).map(([valueId, rating]) => (
+                          <div key={valueId} className="flex items-center justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm truncate">{valueLabel(valueId)}</div>
+                              {valueLabel(valueId) !== String(valueId) ? (
+                                <div className="text-[10px] text-[rgb(var(--muted))] font-mono truncate">{String(valueId)}</div>
+                              ) : null}
+                            </div>
+                            <span className="font-mono text-sm">{String(rating)}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex items-center justify-between gap-2 text-sm text-[rgb(var(--text))]">
+                          <span className="truncate">Defaulted (no self rating)</span>
+                          <span className="font-mono">2</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {String(reviewModal.item.submission?.managerReview?.comments || "").trim() ? (
-                    <div>
-                      <div className="text-xs font-black uppercase tracking-widest text-gray-500">Manager Comments</div>
-                      <div className="mt-2 whitespace-pre-wrap">{String(reviewModal.item.submission?.managerReview?.comments || "")}</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="rt-panel-subtle rounded-xl p-3 space-y-2">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-gray-500 font-black">Certifications</div>
+                      {Array.isArray(reviewModal.item.submission?.certifications) && reviewModal.item.submission.certifications.length ? (
+                        reviewModal.item.submission.certifications.map((cert, idx) => (
+                          <div key={`${cert?.name || cert?.title || idx}:${idx}`} className="rounded-lg border border-[rgb(var(--border))] px-3 py-2">
+                            <div className="font-semibold text-sm truncate">{cert?.name || cert?.title || "Certification"}</div>
+                            {cert?.proof || cert?.url || cert?.link ? (
+                              <div className="text-[11px] text-[rgb(var(--muted))] break-all">{cert?.proof || cert?.url || cert?.link}</div>
+                            ) : null}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-xs text-[rgb(var(--muted))]">No certifications provided.</div>
+                      )}
                     </div>
-                  ) : null}
-
+                    <div className="rt-panel-subtle rounded-xl p-3 space-y-2">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-gray-500 font-black">Recognitions</div>
+                      <div className="text-lg font-black">{Number(reviewModal.item.submission?.recognitionsCount || 0)}</div>
+                    </div>
+                  </div>
                   {String(reviewModal.item.submission?.adminReview?.comments || "").trim() ? (
                     <div>
                       <div className="text-xs font-black uppercase tracking-widest text-gray-500">Latest Admin Comments</div>
@@ -527,55 +535,58 @@ export default function AdminSubmissions({ onLogout }) {
               </div>
 
               <div className="rt-panel-subtle rounded-[2rem] p-6">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Admin Decision</div>
-
-                {reviewActionError ? (
-                  <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-                    {reviewActionError}
+                <div className="space-y-5">
+                  <div className="rt-panel-subtle rounded-2xl p-4">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Manager Ratings & Comments</div>
+                    <div className="mt-3 space-y-3 text-sm text-[rgb(var(--text))]">
+                      <div>
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Manager KPI Ratings</div>
+                        <div className="mt-2 space-y-1">
+                          {Object.entries(reviewModal.item.submission?.managerEvaluation?.kpiRatings || {}).length ? (
+                            Object.entries(reviewModal.item.submission.managerEvaluation.kpiRatings).map(([kpiId, rating]) => (
+                              <div key={kpiId} className="flex items-center justify-between gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <div className="truncate">{kpiLabel(kpiId)}</div>
+                                  {kpiLabel(kpiId) !== String(kpiId) ? (
+                                    <div className="text-[10px] text-[rgb(var(--muted))] font-mono truncate">{String(kpiId)}</div>
+                                  ) : null}
+                                </div>
+                                <span className="font-mono">{String(rating)}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-xs text-[rgb(var(--muted))]">No manager KPI ratings.</div>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Manager Value Ratings</div>
+                        <div className="mt-2 space-y-1">
+                          {Object.entries(reviewModal.item.submission?.managerEvaluation?.webknotValueRatings || {}).length ? (
+                            Object.entries(reviewModal.item.submission.managerEvaluation.webknotValueRatings).map(([valueId, rating]) => (
+                              <div key={valueId} className="flex items-center justify-between gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <div className="truncate">{valueLabel(valueId)}</div>
+                                  {valueLabel(valueId) !== String(valueId) ? (
+                                    <div className="text-[10px] text-[rgb(var(--muted))] font-mono truncate">{String(valueId)}</div>
+                                  ) : null}
+                                </div>
+                                <span className="font-mono">{String(rating)}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-xs text-[rgb(var(--muted))]">No manager value ratings.</div>
+                          )}
+                        </div>
+                      </div>
+                      {String(reviewModal.item.submission?.managerReview?.comments || "").trim() ? (
+                        <div>
+                          <div className="text-[10px] uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Manager Comments</div>
+                          <div className="mt-2 whitespace-pre-wrap">{String(reviewModal.item.submission?.managerReview?.comments || "")}</div>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                ) : null}
-
-                <div className="mt-4">
-                  <div className="text-xs font-black uppercase tracking-widest text-gray-500">Comments</div>
-                  <textarea
-                    value={reviewNotes}
-                    onChange={(e) => {
-                      setReviewNotes(e.target.value);
-                      setReviewActionError("");
-                    }}
-                    rows={8}
-                    className="mt-2 rt-input p-4 text-sm resize-none"
-                    placeholder="Write feedback for manager/employee. For reject, minimum 10 characters."
-                  />
-                </div>
-
-                <div className="mt-6 flex justify-end gap-3 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={() => submitReview("REJECT")}
-                    disabled={reviewSaving}
-                    className={[
-                      "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
-                      reviewSaving
-                        ? "opacity-60 cursor-not-allowed border border-red-500/20 text-red-700 dark:text-red-300"
-                        : "bg-amber-500/10 text-amber-800 dark:text-amber-200 border border-amber-500/30 hover:bg-amber-500 hover:text-white",
-                    ].join(" ")}
-                  >
-                    <XCircle size={16} className="inline mr-1" /> Reject
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => submitReview("APPROVE")}
-                    disabled={reviewSaving}
-                    className={[
-                      "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
-                      reviewSaving
-                        ? "opacity-60 cursor-not-allowed border border-emerald-500/20 text-emerald-700 dark:text-emerald-300"
-                        : "bg-emerald-500/20 text-emerald-700 dark:text-emerald-200 border border-emerald-500/30 hover:bg-emerald-500 hover:text-white",
-                    ].join(" ")}
-                  >
-                    <CheckCircle2 size={16} className="inline mr-1" /> Approve
-                  </button>
                 </div>
               </div>
             </div>

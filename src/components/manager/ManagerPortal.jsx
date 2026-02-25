@@ -672,7 +672,8 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [managerId, setManagerId] = useState(() => String(auth?.employeeId || "").trim() || "");
   const [managerBand, setManagerBand] = useState(() => String(auth?.band || "").trim());
   const [managerStream, setManagerStream] = useState(() => String(auth?.stream || "").trim());
-  const [filter, setFilter] = useState("ALL"); // SUBMITTED | ALL | PENDING_MANAGER_REVIEW
+  const [filter, setFilter] = useState("PENDING_MANAGER_REVIEW"); // SUBMITTED | ALL | PENDING_MANAGER_REVIEW
+  const [teamSearch, setTeamSearch] = useState("");
   const [activeTab, setActiveTab] = useState("team"); // team | self-review
   const [managerSelfReviewText, setManagerSelfReviewText] = useState("");
   const [managerSelfKpiRatings, setManagerSelfKpiRatings] = useState({});
@@ -699,11 +700,36 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [aiEnhancingSelfReview, setAiEnhancingSelfReview] = useState(false);
   const [aiEnhancingManagerNotes, setAiEnhancingManagerNotes] = useState(false);
 
+  const [reviewModal, setReviewModal] = useState({ open: false, row: null });
+
   const [kpiIndex, setKpiIndex] = useState({}); // { [id]: { title, weight } }
   const [selfKpis, setSelfKpis] = useState([]);
   const [selfKpisLoading, setSelfKpisLoading] = useState(false);
   const [selfValues, setSelfValues] = useState([]);
   const [selfValuesLoading, setSelfValuesLoading] = useState(false);
+  const valueLabelIndex = useMemo(() => {
+    const map = {};
+    for (const v of selfValues) {
+      const key = String(v?.id || "").trim();
+      if (!key) continue;
+      map[key] = String(v?.title || v?.name || key);
+    }
+    // Include any values present in the selected submission payload so labels render even if manager catalog differs
+    const payloadValues = Array.isArray(reviewModal?.row?.payload?.webknotValues)
+      ? reviewModal.row.payload.webknotValues
+      : [];
+    const payloadValueRatings = reviewModal?.row?.payload?.webknotValueRatings;
+    const payloadKeys = [
+      ...payloadValues.map((v) => String(v || "").trim()),
+      ...(payloadValueRatings && typeof payloadValueRatings === "object"
+        ? Object.keys(payloadValueRatings).map((k) => String(k || "").trim())
+        : []),
+    ].filter(Boolean);
+    for (const key of payloadKeys) {
+      if (!map[key]) map[key] = key;
+    }
+    return map;
+  }, [reviewModal?.row?.payload?.webknotValueRatings, reviewModal?.row?.payload?.webknotValues, selfValues]);
   const filteredSelfKpis = useMemo(
     () => selfKpis.filter((k) => kpiAppliesToManager(k, { band: managerBand, stream: managerStream })),
     [managerBand, managerStream, selfKpis]
@@ -727,8 +753,6 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [teamInsightsRows, setTeamInsightsRows] = useState([]);
   const [teamInsightsLoading, setTeamInsightsLoading] = useState(false);
   const teamCursorRef = useRef(null);
-
-  const [reviewModal, setReviewModal] = useState({ open: false, row: null });
   const [reviewDrafts, setReviewDrafts] = useState(() => loadManagerReviewDrafts());
   const [managerRatings, setManagerRatings] = useState({});
   const [managerValueRatings, setManagerValueRatings] = useState({});
@@ -1529,12 +1553,24 @@ export default function ManagerPortal({ onLogout, auth }) {
 
   const filteredTeamSubs = useMemo(() => {
     const mode = String(filter || "").toUpperCase();
-    if (mode === "ALL") return teamSubs;
-    if (mode === "PENDING_MANAGER_REVIEW") {
-      return teamSubs.filter((s) => isSubmittedStatus(s.status) && !s.managerSubmitted);
-    }
-    return teamSubs.filter((s) => isSubmittedStatus(s.status));
-  }, [filter, teamSubs]);
+    const pending = teamSubs.filter((s) => !s.managerSubmitted);
+    const submittedByManager = teamSubs.filter((s) => s.managerSubmitted);
+
+    const matchesSearch = (row) => {
+      const q = String(teamSearch || "").trim().toLowerCase();
+      if (!q) return true;
+      const name = String(row?.employee?.name || "").toLowerCase();
+      const email = String(row?.employee?.email || "").toLowerCase();
+      const id = String(row?.employee?.id || "").toLowerCase();
+      return name.includes(q) || email.includes(q) || id.includes(q);
+    };
+
+    let base = pending;
+    if (mode === "SUBMITTED") base = submittedByManager;
+    if (mode === "ALL") base = teamSubs;
+
+    return base.filter(matchesSearch);
+  }, [filter, teamSearch, teamSubs]);
 
   const teamPager = useMemo(
     () => ({
@@ -1958,6 +1994,14 @@ export default function ManagerPortal({ onLogout, auth }) {
         await submitMonthlySubmission(payload);
         if (reviewAction === "SUBMIT") {
           showToast({ title: "Submitted", message: "Manager review submitted." });
+          // Remove from local list so manager can no longer access it
+          setTeamSubs((prev) =>
+            prev.filter((s) => {
+              const sameEmp = String(s?.employee?.id || "") === empId;
+              const sameMonth = String(s?.month || "") === m;
+              return !(sameEmp && sameMonth);
+            })
+          );
         } else {
           showToast({ title: "Rejected", message: "Sent back with comments for resubmission." });
         }
@@ -2196,18 +2240,30 @@ export default function ManagerPortal({ onLogout, auth }) {
             </div>
 
             {activeTab === "team" ? (
-              <div className="space-y-1">
-                <div className="rt-kicker">Filter</div>
-                <select
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  className="rt-input text-sm"
-                  title="Filter"
-                >
-                  <option value="PENDING_MANAGER_REVIEW">Pending manager review</option>
-                  <option value="SUBMITTED">Submitted</option>
-                  <option value="ALL">All</option>
-                </select>
+              <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                <div className="space-y-1">
+                  <div className="rt-kicker">Filter</div>
+                  <select
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                    className="rt-input text-sm"
+                    title="Filter"
+                  >
+                    <option value="PENDING_MANAGER_REVIEW">Pending manager review</option>
+                    <option value="SUBMITTED">Submitted</option>
+                    <option value="ALL">All</option>
+                  </select>
+                </div>
+                <div className="space-y-1 w-full md:w-56">
+                  <div className="rt-kicker">Search</div>
+                  <input
+                    value={teamSearch}
+                    onChange={(e) => setTeamSearch(e.target.value)}
+                    className="rt-input text-sm"
+                    placeholder="Search name, email, or ID"
+                    aria-label="Search team submissions"
+                  />
+                </div>
               </div>
             ) : null}
 
@@ -2355,7 +2411,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                           <span className="font-mono text-[rgb(var(--text))]">{row.score.toFixed(1)}</span>
                         </div>
                         <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">
-                          {row.stream} • {row.band} • {row.id}
+                          {row.stream} • {row.band}
                         </div>
                       </div>
                     ))
@@ -2399,7 +2455,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                     const isSubmitted = isSubmittedStatus(status);
                     const submittedWhen = s.submittedAt || s.updatedAt || "—";
                     return (
-                      <tr key={`${s.employee.id}:${s.submissionId || submittedWhen}`} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
+                      <tr key={`${s.employee.email || s.employee.name}:${s.submissionId || submittedWhen}`} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                         <td className="p-6">
                           <button
                             type="button"
@@ -2409,8 +2465,8 @@ export default function ManagerPortal({ onLogout, auth }) {
                           >
                             {s.employee.name}
                           </button>
-                          <div className="text-xs text-gray-500 font-mono mt-1">
-                            {s.employee.id}{s.employee.email ? ` • ${s.employee.email}` : ""}
+                          <div className="text-xs text-gray-500 mt-1 break-all">
+                            {s.employee.email || "—"}
                           </div>
                         </td>
                         <td className="p-6">
@@ -2710,8 +2766,8 @@ export default function ManagerPortal({ onLogout, auth }) {
                 <div className="mt-2 text-2xl font-black tracking-tight text-[rgb(var(--text))]">
                   {selectedRow.employee.name}
                 </div>
-                <div className="mt-1 text-xs text-gray-500 font-mono">
-                  {selectedRow.employee.id} • {String(selectedRow.month || month)}
+                <div className="mt-1 text-xs text-gray-500">
+                  {String(selectedRow.month || month)}
                 </div>
               </div>
               <button
@@ -2731,6 +2787,21 @@ export default function ManagerPortal({ onLogout, auth }) {
                   Employee Submitted
                 </div>
                 <div className="mt-4 space-y-5">
+                  <div className="grid grid-cols-2 gap-3 text-xs text-[rgb(var(--muted))] font-mono">
+                    <div>
+                      <div className="uppercase tracking-[0.18em] text-[rgb(var(--muted))]">Employee</div>
+                      <div className="mt-1 text-[rgb(var(--text))] font-semibold">{selectedRow.employee.name}</div>
+                      <div className="mt-0.5">{selectedRow.employee.email || "—"}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="uppercase tracking-[0.18em] text-[rgb(var(--muted))]">Month</div>
+                      <div className="mt-1 text-[rgb(var(--text))] font-semibold">{String(selectedRow.month || month)}</div>
+                      {selectedRow.cycleLabel ? (
+                        <div className="mt-0.5">{String(selectedRow.cycleLabel)}</div>
+                      ) : null}
+                    </div>
+                  </div>
+
                   <div>
                     <div className="text-xs font-black uppercase tracking-widest text-gray-500">Self Review</div>
                     <div className="mt-2 text-sm text-[rgb(var(--text))] whitespace-pre-wrap">
@@ -2739,44 +2810,84 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">KPI Ratings</div>
+                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">KPI Ratings (Employee)</div>
                     <div className="mt-2 space-y-2">
                       {Object.keys(selectedRow.payload?.kpiRatings || {}).length ? (
                         Object.entries(selectedRow.payload.kpiRatings).map(([id, v]) => (
                           <div key={id} className="flex items-center justify-between gap-3">
-                            <div className="text-sm text-[rgb(var(--text))]">
-                              {kpiIndex?.[id]?.title || id}
+                            <div className="min-w-0">
+                              <div className="text-sm text-[rgb(var(--text))] truncate">{kpiIndex?.[id]?.title || id}</div>
+                              {kpiIndex?.[id]?.weight ? (
+                                <div className="text-[10px] text-[rgb(var(--muted))] font-mono">Weight: {kpiIndex[id].weight}</div>
+                              ) : null}
                             </div>
                             <div className="text-sm font-mono text-purple-200">{String(v)}</div>
                           </div>
                         ))
                       ) : (
-                        <div className="text-sm text-gray-500">No KPI ratings.</div>
+                        <div className="flex items-center justify-between gap-3 text-sm text-[rgb(var(--text))]">
+                          <span className="truncate">Defaulted (no self rating)</span>
+                          <span className="font-mono text-purple-200">2</span>
+                        </div>
                       )}
                     </div>
                   </div>
 
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Webknot Values</div>
+                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Webknot Values (Employee)</div>
                     <div className="mt-2 space-y-2">
                       {selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object" && Object.keys(selectedRow.payload.webknotValueRatings).length ? (
                         Object.entries(selectedRow.payload.webknotValueRatings)
                           .sort(([a], [b]) => String(a).localeCompare(String(b), undefined, { numeric: true }))
                           .map(([id, rating]) => (
                             <div key={String(id || "")} className="flex items-center justify-between gap-4">
-                              <div className="text-sm text-[rgb(var(--text))]">{String(id || "")}</div>
+                              <div className="text-sm text-[rgb(var(--text))] truncate">{valueLabelIndex[String(id)] || String(id || "")}</div>
                               <div className="text-sm font-mono text-purple-200">{String(rating ?? "—")}</div>
                             </div>
                           ))
                       ) : Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
                         selectedRow.payload.webknotValues.map((v) => (
                           <div key={String(v || "")} className="text-sm text-[rgb(var(--text))]">
-                            {String(v || "")}
+                            {valueLabelIndex[String(v)] || String(v || "")}
                           </div>
                         ))
                       ) : (
-                        <div className="text-sm text-gray-500">None.</div>
+                        <div className="flex items-center justify-between gap-3 text-sm text-[rgb(var(--text))]">
+                          <span className="truncate">Defaulted (no self rating)</span>
+                          <span className="font-mono text-purple-200">2</span>
+                        </div>
                       )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Certifications</div>
+                    <div className="mt-2 space-y-2">
+                      {normalizeCertificationsForState(selectedRow.payload?.certifications).length ? (
+                        normalizeCertificationsForState(selectedRow.payload?.certifications).map((cert, idx) => (
+                          <div key={`${cert.name}:${idx}`} className="rt-panel-subtle rounded-xl px-3 py-2 text-sm">
+                            <div className="font-semibold text-[rgb(var(--text))]">{cert.name}</div>
+                            <div className="text-[11px] text-[rgb(var(--muted))] break-words">{cert.proof || "No proof provided"}</div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-sm text-gray-500">No certifications added.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rt-panel-subtle rounded-xl px-3 py-3">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Recognitions</div>
+                      <div className="mt-1 text-lg font-black text-[rgb(var(--text))]">
+                        {Number(selectedRow.payload?.recognitionsCount || 0)}
+                      </div>
+                    </div>
+                    <div className="rt-panel-subtle rounded-xl px-3 py-3">
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Status</div>
+                      <div className="mt-1 text-sm font-bold text-[rgb(var(--text))]">
+                        {String(selectedRow.status || selectedRow.reviewStatus || "SUBMITTED")}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2787,6 +2898,31 @@ export default function ManagerPortal({ onLogout, auth }) {
                   Manager Evaluation
                 </div>
                 <div className="mt-4 space-y-5">
+                  <div>
+                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Webknot Values (Employee Reference)</div>
+                    <div className="mt-2 space-y-2">
+                      {selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object" && Object.keys(selectedRow.payload.webknotValueRatings).length ? (
+                        Object.entries(selectedRow.payload.webknotValueRatings)
+                          .sort(([a], [b]) => String(a).localeCompare(String(b), undefined, { numeric: true }))
+                          .map(([id, rating]) => (
+                            <div key={`emp-ref-${String(id || "")}`} className="flex items-center justify-between gap-4 text-[13px]">
+                              <div className="text-[rgb(var(--muted))] truncate">{valueLabelIndex[String(id)] || String(id || "")}</div>
+                              <div className="font-mono text-[rgb(var(--text))]">{String(rating ?? "—")}</div>
+                            </div>
+                          ))
+                      ) : Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
+                        selectedRow.payload.webknotValues.map((v) => (
+                          <div key={`emp-ref-${String(v || "")}`} className="flex items-center justify-between gap-4 text-[13px]">
+                            <div className="text-[rgb(var(--muted))] truncate">{valueLabelIndex[String(v)] || String(v || "")}</div>
+                            <div className="font-mono text-[rgb(var(--text))]">—</div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-sm text-gray-500">No values provided by employee.</div>
+                      )}
+                    </div>
+                  </div>
+
                   <div>
                     <div className="text-xs font-black uppercase tracking-widest text-gray-500">KPI Ratings (Manager)</div>
                     <div className="mt-2 space-y-3">
@@ -2863,8 +2999,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                             const current = managerValueRatings?.[id];
                             const display =
                               typeof current === "number" && Number.isFinite(current) ? current : (current ?? "");
-                            const valueLabel =
-                              selfValues.find((v) => String(v?.id || "").trim() === String(id).trim())?.title || id;
+                            const valueLabel = valueLabelIndex[String(id)] || id;
                             return (
                               <div key={id} className="flex items-center justify-between gap-3">
                                 <div className="text-sm text-[rgb(var(--text))]">{String(valueLabel)}</div>
@@ -2976,6 +3111,9 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
                   <div className="text-[10px] text-gray-500">
                     Validation: submit requires KPI/value ratings (1-5). Reject requires at least 10 characters of comments.
+                  </div>
+                  <div className="text-[11px] text-[rgb(var(--muted))]">
+                    Manager ratings and comments are the scores forwarded to admins. Rejection comments will be visible to the employee for resubmission.
                   </div>
                 </div>
               </div>

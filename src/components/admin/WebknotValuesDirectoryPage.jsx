@@ -32,7 +32,7 @@ export default function WebknotValueDirectoryPage() {
     const [showValueModal, setShowValueModal] = useState(false);
     const [valueModalMode, setValueModalMode] = useState("add"); // "add" | "edit"
     const [editingValueId, setEditingValueId] = useState(null);
-    const [valueDraft, setValueDraft] = useState({ title: "", pillar: "", description: "" });
+    const [valueDraft, setValueDraft] = useState({ title: "", pillar: "" });
     const [valueSaving, setValueSaving] = useState(false);
     const [pendingDeleteValue, setPendingDeleteValue] = useState(null);
     const [toast, setToast] = useState(null);
@@ -68,7 +68,7 @@ export default function WebknotValueDirectoryPage() {
     function openValueModal() {
         setValueModalMode("add");
         setEditingValueId(null);
-        setValueDraft({ title: "", pillar: "", description: "" });
+        setValueDraft({ title: "", pillar: "" });
         setShowValueModal(true);
     }
 
@@ -84,7 +84,6 @@ export default function WebknotValueDirectoryPage() {
         setValueDraft({
             title: String(v.title ?? ""),
             pillar: String(v.pillar ?? ""),
-            description: String(v.description ?? ""),
         });
         setShowValueModal(true);
     }
@@ -98,11 +97,10 @@ export default function WebknotValueDirectoryPage() {
         const payload = {
             title: valueDraft.title.trim(),
             pillar: valueDraft.pillar.trim(),
-            description: valueDraft.description.trim(),
         };
 
-        if (!payload.title || !payload.pillar || !payload.description) {
-            showToast({ title: "Missing fields", message: "Fill value, evaluation criteria, and description." });
+        if (!payload.title || !payload.pillar) {
+            showToast({ title: "Missing fields", message: "Fill value and evaluation criteria." });
             return;
         }
 
@@ -124,7 +122,6 @@ export default function WebknotValueDirectoryPage() {
                 id, 
                 title: normalized?.title ?? payload.title, 
                 pillar: normalized?.pillar ?? payload.pillar,
-                description: normalized?.description ?? payload.description 
             };
             
             setValues((prev) => {
@@ -249,19 +246,6 @@ export default function WebknotValueDirectoryPage() {
                                     onChange={(e) => setValueDraft((d) => ({ ...d, pillar: e.target.value }))}
                                     className="mt-2 rt-input py-3 px-4 text-sm"
                                     placeholder="e.g., Ownership"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-                                    Description *
-                                </label>
-                                <textarea
-                                    value={valueDraft.description}
-                                    onChange={(e) => setValueDraft((d) => ({ ...d, description: e.target.value }))}
-                                    rows={4}
-                                    className="mt-2 rt-input py-3 px-4 text-sm resize-none"
-                                    placeholder="Write a short definition of the value..."
                                 />
                             </div>
 

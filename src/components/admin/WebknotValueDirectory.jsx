@@ -17,8 +17,7 @@ export default function WebknotValueDirectory({
     return values.filter((v) => {
       const title = String(v.title || "").toLowerCase();
       const pillar = String(v.pillar || "").toLowerCase();
-      const description = String(v.description || "").toLowerCase();
-      return title.includes(q) || pillar.includes(q) || description.includes(q);
+      return title.includes(q) || pillar.includes(q);
     });
   }, [values, searchQuery]);
   const pillarCount = useMemo(
@@ -71,7 +70,7 @@ export default function WebknotValueDirectory({
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search by value, evaluation criteria, or description..."
+          placeholder="Search by value or evaluation criteria..."
           className="w-full rt-input py-4 pl-12 pr-4 text-sm"
         />
       </div>
@@ -82,7 +81,6 @@ export default function WebknotValueDirectory({
             <tr>
               <th className="p-6 font-black">Value</th>
               <th className="p-6 font-black">Evaluation Criteria</th>
-              <th className="p-6 font-black">Description</th>
               <th className="p-6 text-right font-black px-8">Actions</th>
             </tr>
           </thead>
@@ -100,7 +98,6 @@ export default function WebknotValueDirectory({
                     {v.pillar}
                   </span>
                 </td>
-                <td className="p-6 text-[rgb(var(--text))]">{v.description}</td>
                 <td className="p-6 text-right px-8">
                   <div className="flex justify-end gap-2">
                     <button
@@ -123,14 +120,14 @@ export default function WebknotValueDirectory({
             ))}
             {filtered.length === 0 && values.length > 0 ? (
               <tr>
-                <td className="p-10 text-center text-slate-500" colSpan={4}>
+                <td className="p-10 text-center text-slate-500" colSpan={3}>
                   No values match your search.
                 </td>
               </tr>
             ) : null}
             {values.length === 0 ? (
               <tr>
-                <td className="p-10 text-center text-slate-500" colSpan={4}>
+                <td className="p-10 text-center text-slate-500" colSpan={3}>
                   No values yet. Click "Add New Value" to create one.
                 </td>
               </tr>
