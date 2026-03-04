@@ -19,22 +19,65 @@ export function normalizeEmployees(data) {
     (Array.isArray(nested?.content) && nested.content) ||
     [];
 
-  return arr.map((e, i) => ({
-    id: String(e.employeeId ?? e.id ?? e.empId ?? `EMP_${i}`),
-    name: String(e.employeeName ?? e.name ?? e.fullName ?? "Unknown"),
-    email: String(e.email ?? e.employeeEmail ?? e.mail ?? ""),
-    role: String(e.empRole ?? e.role ?? e.userRole ?? "Employee"),
-    designation: String(e.designation ?? e.title ?? e.jobTitle ?? e.empRole ?? ""),
-    band: String(e.band ?? e.level ?? "B4"),
-    stream: String(e.stream ?? e.context ?? ""),
-    project: String(e.project ?? e.projectName ?? e.account ?? e.client ?? ""),
-    managerId: String(e.managerId ?? e.reportingManagerId ?? e.managerEmpId ?? ""),
-    createdAt: e.createdAt ? String(e.createdAt) : null,
-    updatedAt: e.updatedAt ? String(e.updatedAt) : null,
-    submitted: Boolean(e.submitted ?? e.hasSubmitted ?? false),
-    recognitions: Number(e.recognitions ?? e.recognitionCount ?? 0) || 0,
-    certifications: Array.isArray(e.certifications) ? e.certifications : [],
-  }));
+  /** Derive a display name from an email address (e.g. "alice.johnson@x.com" → "Alice Johnson") */
+  function nameFromEmail(email) {
+    const raw = String(email ?? "").trim();
+    if (!raw || !raw.includes("@")) return "";
+    const local = raw.split("@")[0];
+    return local
+      .replace(/[._+\-]+/g, " ")
+      .replace(/\d+/g, "")
+      .trim()
+      .split(/\s+/)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(" ");
+  }
+
+  return arr.map((e, i) => {
+    const toNumber = (v) => {
+      const n = typeof v === "number" ? v : Number.parseFloat(String(v ?? ""));
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const submissionAbility = toNumber(
+      e.submissionAbility ??
+      e.abilityScore ??
+      e.avgScore ??
+      e.averageScore ??
+      e.performanceScore ??
+      e.ability ??
+      e.score
+    );
+    const abilityFromRatings = toNumber(
+      e.abilityScoreFromRatings ?? e.abilityFromRatings ?? e.managerAbility ?? e.managerScore
+    );
+
+    const rawName = String(
+      e.employeeName ?? e.employee_name ?? e.name ?? e.fullName ?? e.full_name ?? e.displayName ?? e.display_name ?? ""
+    ).trim();
+
+    return {
+      id: String(e.employeeId ?? e.id ?? e.empId ?? `EMP_${i}`),
+      name: rawName || nameFromEmail(e.email ?? e.employeeEmail ?? e.mail) || "Unknown",
+      email: String(e.email ?? e.employeeEmail ?? e.mail ?? ""),
+      role: String(e.empRole ?? e.role ?? e.userRole ?? "Employee"),
+      designation: String(e.designation ?? e.title ?? e.jobTitle ?? e.empRole ?? ""),
+      band: String(e.band ?? e.level ?? "B4"),
+      stream: String(e.stream ?? e.context ?? ""),
+      project: String(e.project ?? e.projectName ?? e.account ?? e.client ?? ""),
+      managerId: String(e.managerId ?? e.reportingManagerId ?? e.managerEmpId ?? ""),
+      createdAt: e.createdAt ? String(e.createdAt) : null,
+      updatedAt: e.updatedAt ? String(e.updatedAt) : null,
+      submitted: Boolean(e.submitted ?? e.hasSubmitted ?? false),
+      recognitions: Number(e.recognitions ?? e.recognitionCount ?? 0) || 0,
+      certifications: Array.isArray(e.certifications) ? e.certifications : [],
+      submissionAbility,
+      abilityScore: submissionAbility ?? abilityFromRatings,
+      avgScore: submissionAbility ?? abilityFromRatings,
+      abilityScoreFromRatings: abilityFromRatings,
+      abilityFromRatings,
+    };
+  });
 }
 
 async function readError(res) {
@@ -164,14 +207,19 @@ export function normalizeManagers(data) {
     : Array.isArray(data?.data)
       ? data.data
       : [];
-  return arr.map((m, i) => ({
-    id: String(m.employeeId ?? m.id ?? m.empId ?? `MGR_${i}`),
-    name: String(m.employeeName ?? m.name ?? m.fullName ?? "Unknown"),
-    email: String(m.email ?? m.employeeEmail ?? m.mail ?? ""),
-    role: String(m.empRole ?? m.role ?? "Manager"),
-    designation: String(m.designation ?? m.title ?? m.jobTitle ?? ""),
-    band: String(m.band ?? m.level ?? ""),
-  }));
+  return arr.map((m, i) => {
+    const rawMgrName = String(
+      m.employeeName ?? m.employee_name ?? m.name ?? m.fullName ?? m.full_name ?? m.displayName ?? m.display_name ?? ""
+    ).trim();
+    return {
+      id: String(m.employeeId ?? m.id ?? m.empId ?? `MGR_${i}`),
+      name: rawMgrName || "Unknown",
+      email: String(m.email ?? m.employeeEmail ?? m.mail ?? ""),
+      role: String(m.empRole ?? m.role ?? "Manager"),
+      designation: String(m.designation ?? m.title ?? m.jobTitle ?? ""),
+      band: String(m.band ?? m.level ?? ""),
+    };
+  });
 }
 export async function fetchManagers({ signal } = {}) {
   const auth = getAuthHeader();

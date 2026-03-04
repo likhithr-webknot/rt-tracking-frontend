@@ -174,3 +174,39 @@ export function normalizeDirectoryPage(data) {
   };
 }
 
+function normalizeDesignation(raw) {
+  const obj = raw && typeof raw === "object" ? raw : {};
+  return {
+    stream: obj.stream ? String(obj.stream) : null,
+    band: obj.band ? String(obj.band) : null,
+    designation: obj.designation ? String(obj.designation) : null,
+    designationTitles: obj.designationTitles ? String(obj.designationTitles) : null,
+    timePeriod: obj.timePeriod ? String(obj.timePeriod) : null,
+    responsibilities: obj.responsibilities ? String(obj.responsibilities) : null,
+  };
+}
+
+async function fetchDesignation(path, { band, stream, signal } = {}) {
+  const qs = new URLSearchParams();
+  if (band) qs.set("band", String(band));
+  if (stream) qs.set("stream", String(stream));
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl(`${path}/designation?${qs.toString()}`), {
+    method: "GET",
+    signal,
+    credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+  if (!res.ok) throw await toHttpError(res);
+  const data = await res.json().catch(() => ({}));
+  return normalizeDesignation(data);
+}
+
+export async function fetchBandDesignation({ band, stream, signal } = {}) {
+  return fetchDesignation("/bands", { band, stream, signal });
+}
+
+export async function fetchStreamDesignation({ stream, band, signal } = {}) {
+  return fetchDesignation("/streams", { band, stream, signal });
+}
+

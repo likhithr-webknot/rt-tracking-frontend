@@ -1,0 +1,12 @@
+band,stream,kpiName,weightage
+B3,Engineering,Code Quality,30%
+B3,Engineering,Sprint Velocity,25%
+B3,Engineering,Knowledge Sharing,20%
+B3,Engineering,Bug Resolution Time,25%
+B4,Engineering,System Design,30%
+B4,Engineering,Sprint Velocity,20%
+B4,Engineering,Mentorship,25%
+B4,Engineering,Innovation,25%
+B3,Design,Design Delivery,35%
+B3,Design,User Testing,30%
+B3,Design,Cross-Team Collaboration,35%

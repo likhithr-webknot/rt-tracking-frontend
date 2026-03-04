@@ -1,5 +1,5 @@
 import React from "react";
-import { clearAuth } from "../../api/auth.js";
+import ErrorPage from "./ErrorPage.jsx";
 
 export default class AppErrorBoundary extends React.Component {
   constructor(props) {
@@ -21,46 +21,13 @@ export default class AppErrorBoundary extends React.Component {
 
     if (!error) return children;
 
-    const message = String(error?.message || "The app crashed while rendering.");
-
     return (
-      <div className="rt-shell font-sans grid place-items-start sm:place-items-center px-4 sm:px-6 py-4 sm:py-6 overflow-y-auto">
-        <div className="rt-panel w-full max-w-2xl rounded-[2rem] p-5 sm:p-8 max-h-[90dvh] overflow-y-auto">
-          <div className="rt-kicker">
-            Error
-          </div>
-          <div className="mt-2 rt-title">
-            Something Broke
-          </div>
-          <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200 whitespace-pre-wrap break-words font-mono">
-            {message}
-          </div>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="rt-btn-primary text-[11px] uppercase tracking-widest"
-            >
-              Reload
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                clearAuth();
-                window.location.reload();
-              }}
-              className="rt-btn-ghost text-[11px] uppercase tracking-widest"
-            >
-              Clear Session
-            </button>
-          </div>
-
-          <div className="mt-6 text-xs text-slate-500">
-            Open DevTools Console for the full stack trace.
-          </div>
-        </div>
-      </div>
+      <ErrorPage
+        code="!"
+        title="Something Broke"
+        message="The app crashed while rendering. You can reload or clear your session to try again."
+        error={error}
+      />
     );
   }
 }

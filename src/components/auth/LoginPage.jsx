@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import {
   Eye,
@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { fetchMe, getAuth, login, setAuth, forgotPassword } from "../../api/auth.js";
 import { fetchPortalAdmin, fetchPortalEmployee, fetchPortalManager } from "../../api/portal.js";
+import Toast from "../shared/Toast.jsx";
 
 export default function LoginPage({ onLoginSuccess }) {
   const [email, setEmail] = useState("");
@@ -34,6 +35,20 @@ export default function LoginPage({ onLoginSuccess }) {
   const [resetLoading, setResetLoading] = useState(false);
   const [resetError, setResetError] = useState("");
   const [resetSuccess, setResetSuccess] = useState("");
+
+  const [toast, setToast] = useState(null);
+  const toastTimerRef = useRef(null);
+  const showToast = useCallback((next) => {
+    setToast(next);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  useEffect(() => { if (submitError) showToast({ title: "Login Failed", message: submitError, tone: "error" }); }, [submitError, showToast]);
+  useEffect(() => { if (resetError) showToast({ title: "Reset Failed", message: resetError, tone: "error" }); }, [resetError, showToast]);
+  useEffect(() => { if (submitSuccess) showToast({ title: "Success", message: submitSuccess, tone: "success" }); }, [submitSuccess, showToast]);
+  useEffect(() => { if (resetSuccess) showToast({ title: "Reset Sent", message: resetSuccess, tone: "success" }); }, [resetSuccess, showToast]);
+
 
   const hrEmail = "hr@webknot.in";
   const cockpitModes = [
@@ -161,75 +176,62 @@ export default function LoginPage({ onLoginSuccess }) {
   const canRequestReset = resetEmail.trim().toLowerCase().endsWith("@webknot.in");
 
   return (
-    <div className="rt-login-shell relative w-full grid grid-cols-1 xl:grid-cols-[minmax(360px,500px)_1fr] text-[rgb(var(--text))] bg-[rgb(var(--bg))]">
-      <div className="pointer-events-none absolute inset-0 opacity-70" aria-hidden>
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(88,170,255,0.18),transparent_34%),radial-gradient(circle_at_82%_18%,rgba(12,160,210,0.16),transparent_38%),linear-gradient(180deg,rgba(255,255,255,0.8),rgba(236,243,252,0.6))]" />
-        <div className="absolute inset-0 blur-3xl bg-[linear-gradient(140deg,rgba(255,255,255,0.0),rgba(88,170,255,0.14),rgba(16,102,202,0.08))]" />
-        <div className="rt-noise" />
-      </div>
-      <section className="rt-login-panel relative z-20 grid grid-rows-[auto_1fr_auto] border-r border-[rgb(var(--border))] bg-[rgb(var(--surface))]/92 px-4 py-4 sm:px-8 sm:py-6 lg:px-10 lg:py-8 backdrop-blur-xl shadow-[0_24px_64px_rgba(8,26,56,0.14)]">
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-44 bg-gradient-to-b from-[rgb(var(--primary-soft))/0.85] to-transparent" />
+    <div className="rt-login-shell relative w-full grid grid-cols-1 xl:grid-cols-[minmax(360px,480px)_1fr] text-[rgb(var(--text))] bg-[rgb(var(--bg))]">
+      <section className="rt-login-panel relative z-20 grid grid-rows-[auto_1fr_auto] border-r border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-4 py-4 sm:px-8 sm:py-6 lg:px-10 lg:py-8">
         <header className="relative flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <img
               src="/unnamed.webp"
               alt="Webknot Technologies logo"
-              className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl sm:rounded-2xl object-cover border border-[rgb(var(--border))] bg-white shadow-sm"
+              className="h-9 w-9 sm:h-10 sm:w-10 rounded-lg object-cover border border-[rgb(var(--border))] bg-white"
             />
             <div className="min-w-0">
-              <div className="text-base sm:text-lg font-black uppercase tracking-tight leading-tight">Webknot</div>
-              <div className="text-[10px] font-black uppercase tracking-[0.24em] text-blue-600">Performance OS</div>
+              <div className="text-base sm:text-lg font-bold tracking-tight leading-tight">Webknot</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[rgb(var(--muted))]">Performance OS</div>
             </div>
           </div>
           <button
             type="button"
             onClick={() => setShowAdminModal(true)}
-            className="inline-flex items-center gap-2 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2.5 py-2 text-[10px] sm:text-[11px] font-black uppercase tracking-widest text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-3))] transition-colors"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2.5 py-1.5 text-xs font-medium text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-3))] transition-colors"
           >
             <Headset size={14} /> Support
           </button>
         </header>
 
-        <div className="rt-login-main relative mt-3 sm:mt-4 flex flex-col max-w-md min-h-0">
-          <div className="rt-login-kicker inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-blue-700 dark:text-blue-300 w-fit">
+        <div className="rt-login-main relative mt-6 sm:mt-8 flex flex-col max-w-md min-h-0">
+          <div className="rt-login-kicker inline-flex items-center gap-2 rounded-md border border-[rgb(var(--primary)/0.2)] bg-[rgb(var(--primary-soft))] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-[rgb(var(--primary))] w-fit">
             <Activity size={12} /> Secure Access
           </div>
-          <h1 className="rt-login-hero mt-3 sm:mt-4 leading-[1.04] tracking-tight font-black">
-            Sign In To Your
-            <span className="block text-[rgb(var(--muted))]">Performance Workspace</span>
+          <h1 className="rt-login-hero mt-4 sm:mt-5 leading-[1.15] tracking-tight font-bold">
+            Sign in to your
+            <span className="block text-[rgb(var(--muted))]">performance workspace</span>
           </h1>
-          <p className="rt-login-subcopy mt-2 sm:mt-3 text-sm text-[rgb(var(--muted))]">
+          <p className="rt-login-subcopy mt-2 sm:mt-3 text-sm text-[rgb(var(--muted))] leading-relaxed">
             Structured access for employee submissions, manager evaluations, and admin review workflows.
           </p>
 
-          <div className="rt-login-micro mt-4 sm:mt-5 grid grid-cols-3 gap-2">
-            <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2 text-center">
-              <div className="text-[9px] font-black uppercase tracking-[0.16em] text-[rgb(var(--muted))]">Cycles</div>
-              <div className="mt-1 text-sm font-black">2 / Year</div>
+          <div className="rt-login-micro mt-5 sm:mt-6 grid grid-cols-3 gap-3">
+            <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5 text-center">
+              <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-[rgb(var(--muted))]">Cycles</div>
+              <div className="mt-1 text-sm font-semibold">2 / Year</div>
             </div>
-            <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2 text-center">
-              <div className="text-[9px] font-black uppercase tracking-[0.16em] text-[rgb(var(--muted))]">Reviews</div>
-              <div className="mt-1 text-sm font-black">Monthly</div>
+            <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5 text-center">
+              <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-[rgb(var(--muted))]">Reviews</div>
+              <div className="mt-1 text-sm font-semibold">Monthly</div>
             </div>
-            <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2 text-center">
-              <div className="text-[9px] font-black uppercase tracking-[0.16em] text-[rgb(var(--muted))]">Security</div>
-              <div className="mt-1 text-sm font-black">SSO Ready</div>
+            <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5 text-center">
+              <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-[rgb(var(--muted))]">Security</div>
+              <div className="mt-1 text-sm font-semibold">SSO Ready</div>
             </div>
           </div>
 
-          <div className="relative mt-4 sm:mt-5">
-            <Motion.div
-              aria-hidden
-              initial={{ opacity: 0.42, scale: 0.98 }}
-              animate={{ opacity: [0.42, 0.72, 0.42], scale: [0.98, 1.02, 0.98] }}
-              transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
-              className="pointer-events-none absolute -inset-4 sm:-inset-5 rounded-[1.8rem] bg-[radial-gradient(circle_at_20%_30%,rgba(88,170,255,0.22),transparent_38%),radial-gradient(circle_at_80%_60%,rgba(15,122,177,0.18),transparent_40%),linear-gradient(135deg,rgba(255,255,255,0.7),rgba(236,243,252,0.55))] blur-3xl"
-            />
+          <div className="relative mt-5 sm:mt-6">
             <Motion.form
-              initial={{ opacity: 0, y: 10 }}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.32, ease: "easeOut" }}
-              className="rt-login-form relative rt-panel rounded-[1.35rem] sm:rounded-[1.65rem] p-4 sm:p-5 space-y-4 sm:space-y-5 shadow-[0_24px_64px_rgba(8,26,56,0.16)]"
+              transition={{ duration: 0.3, ease: "easeOut" }}
+              className="rt-login-form relative rt-panel rounded-lg p-4 sm:p-5 space-y-4 sm:space-y-5"
               onSubmit={async (e) => {
               e.preventDefault();
               if (!canSubmit || submitting) return;
@@ -316,18 +318,18 @@ export default function LoginPage({ onLoginSuccess }) {
               }}
             >
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))]">Corporate Email</label>
+              <label className="text-xs font-medium text-[rgb(var(--muted))]">Corporate Email</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="rt-input text-base"
+                className="rt-input"
                 placeholder="name@webknot.in"
               />
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))]">Access Key</label>
+              <label className="text-xs font-medium text-[rgb(var(--muted))]">Password</label>
               <div className="relative">
                 <input
                   type={showPassword ? "text" : "password"}
@@ -339,24 +341,24 @@ export default function LoginPage({ onLoginSuccess }) {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))] transition-colors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))] transition-colors"
                   aria-label={showPassword ? "Hide password" : "Show password"}
                   title={showPassword ? "Hide password" : "Show password"}
                 >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
             </div>
 
             <button
               disabled={!canSubmit || submitting}
-              className="w-full rt-btn-primary py-3.5 font-black uppercase disabled:opacity-30 active:scale-[0.99] transition-all text-sm"
+              className="w-full rt-btn-primary disabled:opacity-40 transition-all"
             >
-              {submitting ? "Signing In…" : "Sign In"}
+              {submitting ? "Signing in…" : "Sign In"}
             </button>
 
             <div className="flex items-center justify-between gap-2 pt-1">
-              <div className="text-[10px] uppercase tracking-[0.16em] text-[rgb(var(--muted))] font-bold">Use corporate credentials</div>
+              <div className="text-xs text-[rgb(var(--muted))]">Use corporate credentials</div>
               <button
                 type="button"
                 onClick={() => {
@@ -366,86 +368,62 @@ export default function LoginPage({ onLoginSuccess }) {
                   setResetRequestId("");
                   setResetEmail(email.trim() || "");
                 }}
-                className="text-xs font-black uppercase tracking-widest text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] transition-colors"
+                className="text-xs font-medium text-[rgb(var(--primary))] hover:text-[rgb(var(--text))] transition-colors"
               >
                 Forgot password?
               </button>
             </div>
 
-            {submitError ? (
-              <div className="text-sm text-red-700 dark:text-red-200 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
-                {submitError}
-              </div>
-            ) : null}
-            {submitSuccess ? (
-              <div className="text-sm text-emerald-700 dark:text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
-                {submitSuccess}
-              </div>
-            ) : null}
             </Motion.form>
           </div>
         </div>
 
-        <footer className="rt-login-footer relative mt-4 sm:mt-6 flex items-center justify-between gap-2 text-[9px] sm:text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))] border-t border-[rgb(var(--border))] pt-3 sm:pt-4">
-          <span>© 2026 Webknot</span>
+        <footer className="rt-login-footer relative mt-6 sm:mt-8 flex items-center justify-between gap-2 text-xs text-[rgb(var(--muted))] border-t border-[rgb(var(--border))] pt-3 sm:pt-4">
+          <span>&copy; 2026 Webknot Technologies</span>
           <span className="hidden sm:inline">Talent Operations Platform</span>
         </footer>
       </section>
 
       <section className="rt-login-visual relative hidden xl:flex flex-col overflow-hidden">
-        <div className="absolute inset-0 bg-[linear-gradient(148deg,_rgb(8_24_48)_0%,_rgb(9_54_102)_46%,_rgb(5_124_174)_100%)]" />
-        <div className="absolute inset-0 opacity-[0.14]" style={{ backgroundImage: "linear-gradient(to right, rgba(255,255,255,0.28) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.28) 1px, transparent 1px)", backgroundSize: "36px 36px" }} />
-        <div className="absolute -top-24 -right-20 h-[26rem] w-[26rem] rounded-full bg-cyan-300/25 blur-[120px]" />
-        <div className="absolute -bottom-28 -left-20 h-[28rem] w-[28rem] rounded-full bg-blue-500/25 blur-[140px]" />
+        <div className="absolute inset-0 bg-[linear-gradient(160deg,_rgb(15_23_42)_0%,_rgb(30_41_59)_50%,_rgb(15_23_42)_100%)]" />
+        <div className="absolute inset-0 opacity-[0.06]" style={{ backgroundImage: "linear-gradient(to right, rgba(255,255,255,0.3) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.3) 1px, transparent 1px)", backgroundSize: "40px 40px" }} />
+        <div className="absolute -top-32 -right-20 h-[30rem] w-[30rem] rounded-full bg-blue-500/10 blur-[140px]" />
+        <div className="absolute -bottom-28 -left-20 h-[24rem] w-[24rem] rounded-full bg-slate-400/10 blur-[120px]" />
 
-        <Motion.div
-          aria-hidden
-          className="absolute right-10 top-16 h-20 w-20 rounded-full bg-white/10 border border-white/20 rt-float-slow"
-          animate={{ y: [0, -8, 0], scale: [1, 1.04, 1] }}
-          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-        />
-        <Motion.div
-          aria-hidden
-          className="absolute left-16 bottom-10 h-16 w-16 rounded-2xl bg-white/8 border border-white/16 rt-float-slow"
-          animate={{ y: [0, 10, 0], rotate: [0, -4, 0] }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
-        />
-
-        <div className="relative z-10 h-full min-h-0 px-8 py-7 2xl:px-12 2xl:py-8 flex flex-col overflow-y-auto">
-          <Motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: "easeOut" }} className="max-w-3xl">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 border border-white/30 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white/90">
-              <Activity size={12} className="text-emerald-300" /> Performance OS
+        <div className="relative z-10 h-full min-h-0 px-8 py-8 2xl:px-12 2xl:py-10 flex flex-col overflow-y-auto">
+          <Motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease: "easeOut" }} className="max-w-3xl">
+            <div className="inline-flex items-center gap-2 rounded-md bg-white/10 border border-white/15 px-2.5 py-1 text-[11px] font-medium uppercase tracking-[0.06em] text-white/85">
+              <Activity size={12} className="text-blue-300" /> Performance OS
             </div>
-            <h2 className="mt-4 text-[clamp(2.5rem,4.6vw,4.4rem)] leading-[0.96] tracking-[-0.03em] font-black text-white">
-              Calm, Precise Reviews
-              <span className="block text-white/60">Less clutter. More signal.</span>
+            <h2 className="mt-5 text-[clamp(2rem,4vw,3.5rem)] leading-[1.05] tracking-[-0.02em] font-bold text-white">
+              Structured Performance Reviews
+              <span className="block text-white/50 mt-1">Clear process. Reliable outcomes.</span>
             </h2>
-            <p className="mt-3 max-w-2xl text-sm text-white/82">
-              A focused command view for monthly submissions, manager scoring, and admin closure.
+            <p className="mt-4 max-w-2xl text-sm text-white/65 leading-relaxed">
+              A focused workspace for monthly submissions, manager evaluations, and admin oversight.
             </p>
           </Motion.div>
 
-          <div className="relative mt-6 grid grid-cols-12 gap-4 flex-1 min-h-0">
+          <div className="relative mt-8 grid grid-cols-12 gap-5 flex-1 min-h-0">
             <Motion.div
-              className="col-span-7 rounded-[1.5rem] border border-white/20 bg-white/10 backdrop-blur-xl p-5 flex flex-col gap-4 shadow-[0_24px_64px_rgba(4,12,30,0.35)]"
-              initial={{ opacity: 0, y: 10 }}
+              className="col-span-7 rounded-md border border-white/10 bg-white/5 backdrop-blur-md p-5 flex flex-col gap-4"
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35, ease: "easeOut" }}
+              transition={{ duration: 0.3, ease: "easeOut" }}
             >
               <div className="flex items-center justify-between gap-3">
-                <span className="inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-white/80">
-                  <TrendingUp size={15} className="text-emerald-300" /> Growth Graph
+                <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.06em] text-white/70">
+                  <TrendingUp size={15} className="text-blue-300" /> Growth Graph
                 </span>
-                <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-[11px] font-black text-white/85">
-                  <ShieldCheck size={14} className="text-emerald-300" /> Steady Gain
+                <span className="inline-flex items-center gap-2 rounded-md bg-white/8 px-2.5 py-1 text-[11px] font-medium text-white/70">
+                  <ShieldCheck size={14} className="text-emerald-400" /> Steady Gain
                 </span>
               </div>
 
-              <div className="relative overflow-hidden rounded-[1.25rem] border border-white/14 bg-white/8 p-4 shadow-[0_14px_44px_rgba(4,12,30,0.32)]">
-                <div className="absolute inset-0 bg-gradient-to-b from-white/6 via-transparent to-transparent" aria-hidden />
-                <div className="flex items-center justify-between text-white/85 text-xs font-semibold">
+              <div className="relative overflow-hidden rounded-lg border border-white/8 bg-white/5 p-4">
+                <div className="flex items-center justify-between text-white/75 text-xs font-medium">
                   <span>Cycle Readiness</span>
-                  <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-1 text-[11px] font-black">
+                  <span className="inline-flex items-center gap-1 rounded-md bg-white/8 px-2 py-1 text-[11px] font-medium">
                     {activeCockpit.cycle}
                   </span>
                 </div>
@@ -492,15 +470,15 @@ export default function LoginPage({ onLoginSuccess }) {
                     ))}
                   </svg>
                   <Motion.div
-                    className="absolute right-3 bottom-3 rounded-xl bg-white/12 px-3 py-2 text-white/88 text-xs font-semibold border border-white/14"
-                    initial={{ opacity: 0, y: 8 }}
+                    className="absolute right-3 bottom-3 rounded-md bg-white/8 px-3 py-2 text-white/80 text-xs font-medium border border-white/10"
+                    initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.35, ease: "easeOut", delay: 0.25 }}
+                    transition={{ duration: 0.3, ease: "easeOut", delay: 0.2 }}
                   >
-                    <div className="uppercase tracking-[0.14em] text-[10px] font-black text-white/70">Now</div>
-                    <div className="flex items-center gap-2 text-base font-black">
+                    <div className="text-[10px] font-medium text-white/55">Current</div>
+                    <div className="flex items-center gap-2 text-base font-semibold">
                       {growthSeries[growthSeries.length - 1]}%
-                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-200">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-400">
                         <TrendingUp size={13} /> +3.5%
                       </span>
                     </div>
@@ -510,40 +488,40 @@ export default function LoginPage({ onLoginSuccess }) {
             </Motion.div>
 
             <Motion.div
-              className="col-span-5 rounded-[1.5rem] border border-white/18 bg-white/10 backdrop-blur-xl p-5 flex flex-col gap-3 shadow-[0_20px_54px_rgba(4,12,30,0.32)]"
-              initial={{ opacity: 0, y: 12 }}
+              className="col-span-5 rounded-md border border-white/10 bg-white/5 backdrop-blur-md p-5 flex flex-col gap-3"
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, ease: "easeOut", delay: 0.06 }}
+              transition={{ duration: 0.3, ease: "easeOut", delay: 0.05 }}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-white/78">
-                  <ClipboardCheck size={15} className="text-cyan-200" /> Monthly Flow
+                <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.06em] text-white/70">
+                  <ClipboardCheck size={15} className="text-blue-300" /> Monthly Flow
                 </span>
-                <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-black text-white/80">
+                <span className="rounded-md bg-white/8 px-2 py-1 text-[10px] font-medium text-white/65">
                   {activeWorkflowPreview.label}
                 </span>
               </div>
 
-              <div className="mt-1 text-sm font-semibold text-white">{activeWorkflowPreview.title}</div>
-              <div className="text-xs leading-snug text-white/78">{activeWorkflowPreview.detail}</div>
+              <div className="mt-1 text-sm font-semibold text-white/90">{activeWorkflowPreview.title}</div>
+              <div className="text-xs leading-relaxed text-white/60">{activeWorkflowPreview.detail}</div>
 
-              <div className="mt-2 space-y-2.5">
+              <div className="mt-2 space-y-2">
                 {activeWorkflowPreview.checkpoints.map((point, idx) => (
                   <Motion.div
                     key={`${activeWorkflowPreview.id}:${point}`}
-                    className="flex items-start gap-2 text-xs text-white/85"
-                    initial={{ opacity: 0, x: -6 }}
+                    className="flex items-start gap-2 text-xs text-white/70"
+                    initial={{ opacity: 0, x: -4 }}
                     animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.25, ease: "easeOut", delay: 0.05 * idx }}
+                    transition={{ duration: 0.2, ease: "easeOut", delay: 0.04 * idx }}
                   >
-                    <span className="mt-[5px] h-1.5 w-1.5 rounded-full bg-cyan-200" />
-                    <span className="leading-snug">{point}</span>
+                    <span className="mt-[5px] h-1.5 w-1.5 rounded-full bg-blue-400" />
+                    <span className="leading-relaxed">{point}</span>
                   </Motion.div>
                 ))}
               </div>
 
-              <div className="mt-auto flex items-center gap-2 text-[11px] text-white/72">
-                <BadgeCheck size={16} className="text-emerald-300" /> Guardrails stay on during submissions and approvals.
+              <div className="mt-auto flex items-center gap-2 text-[11px] text-white/50">
+                <BadgeCheck size={14} className="text-blue-300" /> Guardrails active during review cycles.
               </div>
             </Motion.div>
           </div>
@@ -561,15 +539,15 @@ export default function LoginPage({ onLoginSuccess }) {
               className="absolute inset-0 bg-black/80 backdrop-blur-md"
             />
             <Motion.div
-              initial={{ scale: 0.94, opacity: 0 }}
+              initial={{ scale: 0.96, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.94, opacity: 0 }}
-              className="relative w-full max-w-sm rt-panel rounded-[2rem] p-7 shadow-2xl my-6 max-h-[90vh] overflow-y-auto"
+              exit={{ scale: 0.96, opacity: 0 }}
+              className="relative w-full max-w-sm rt-panel rounded-lg p-6 shadow-lg my-6 max-h-[90vh] overflow-y-auto"
             >
-              <h3 className="text-2xl font-black tracking-tight">Support</h3>
-              <p className="mt-3 text-sm text-[rgb(var(--muted))]">Talent Desk Assistance</p>
-              <div className="mt-5 flex items-center justify-between p-4 rounded-xl rt-panel-subtle overflow-hidden">
-                <span className="text-sm font-semibold text-blue-600 truncate mr-2">{hrEmail}</span>
+              <h3 className="text-xl font-bold tracking-tight">Support</h3>
+              <p className="mt-2 text-sm text-[rgb(var(--muted))]">Talent Desk Assistance</p>
+              <div className="mt-4 flex items-center justify-between p-3 rounded-md rt-panel-subtle overflow-hidden">
+                <span className="text-sm font-medium text-[rgb(var(--primary))] truncate mr-2">{hrEmail}</span>
                 <button
                   onClick={handleCopy}
                   className="p-2 text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] shrink-0 transition-colors"
@@ -579,7 +557,7 @@ export default function LoginPage({ onLoginSuccess }) {
               </div>
               <button
                 onClick={() => setShowAdminModal(false)}
-                className="mt-8 w-full py-3 rt-btn-ghost font-black rounded-xl uppercase tracking-widest active:scale-95 transition-all"
+                className="mt-6 w-full rt-btn-ghost rounded-md transition-all"
               >
                 Close
               </button>
@@ -599,22 +577,22 @@ export default function LoginPage({ onLoginSuccess }) {
               className="absolute inset-0 bg-black/80 backdrop-blur-md"
             />
             <Motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
+              initial={{ scale: 0.96, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="relative w-full max-w-lg rounded-[2rem] rt-panel p-6 sm:p-8 shadow-2xl my-6 max-h-[90vh] overflow-y-auto"
+              exit={{ scale: 0.96, opacity: 0 }}
+              className="relative w-full max-w-lg rounded-lg rt-panel p-5 sm:p-6 my-6 max-h-[90vh] overflow-y-auto"
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h3 className="text-2xl font-black tracking-tight">Reset Password</h3>
-                  <p className="mt-2 text-sm text-[rgb(var(--muted))]">
-                    Submit a reset request. A random verification code is sent to admins for approval.
+                  <h3 className="text-xl font-bold tracking-tight">Reset Password</h3>
+                  <p className="mt-1.5 text-sm text-[rgb(var(--muted))]">
+                    Submit a reset request. A verification code is sent to admins for approval.
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowResetModal(false)}
-                  className="rounded-xl p-2 text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition"
+                  className="rounded-md p-1.5 text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition"
                   aria-label="Close"
                   title="Close"
                 >
@@ -622,31 +600,26 @@ export default function LoginPage({ onLoginSuccess }) {
                 </button>
               </div>
 
-              <div className="mt-7 space-y-5">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-[rgb(var(--muted))]">Email</label>
+              <div className="mt-5 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-[rgb(var(--muted))]">Email</label>
                   <input
                     type="email"
                     value={resetEmail}
                     onChange={(e) => setResetEmail(e.target.value)}
-                    className="rt-input py-3 px-4 text-sm"
+                    className="rt-input py-2.5 px-3 text-sm"
                     placeholder="name@webknot.in"
                   />
                 </div>
 
                 {resetRequestId ? (
-                  <div className="text-xs text-blue-700 dark:text-blue-300 bg-blue-500/10 border border-blue-500/20 rounded-xl p-3">
+                  <div className="text-xs text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-md p-3">
                     Request ID: <span className="font-mono">{resetRequestId}</span>
                   </div>
                 ) : null}
 
-                {resetError ? (
-                  <div className="text-sm text-red-700 dark:text-red-200 bg-red-500/10 border border-red-500/20 rounded-xl p-3">
-                    {resetError}
-                  </div>
-                ) : null}
                 {resetSuccess ? (
-                  <div className="text-sm text-emerald-700 dark:text-emerald-200 bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
+                  <div className="text-sm text-emerald-700 dark:text-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-md p-3">
                     {resetSuccess}
                   </div>
                 ) : null}
@@ -677,7 +650,7 @@ export default function LoginPage({ onLoginSuccess }) {
                       setResetLoading(false);
                     }
                   }}
-                  className="w-full rt-btn-primary py-3.5 font-black uppercase disabled:opacity-30 active:scale-[0.99] transition-all text-sm"
+                  className="w-full rt-btn-primary disabled:opacity-40 transition-all"
                 >
                   {resetLoading ? "Submitting…" : "Send Reset Request"}
                 </button>
@@ -686,6 +659,7 @@ export default function LoginPage({ onLoginSuccess }) {
           </div>
         ) : null}
       </AnimatePresence>
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }

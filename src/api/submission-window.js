@@ -33,6 +33,69 @@ export async function fetchSubmissionWindowCurrent({ signal } = {}) {
   return res.json();
 }
 
+/* ── role-specific window helpers ── */
+
+function roleWindowEndpoint(role, action) {
+  const slug = String(role).toLowerCase() === "manager" ? "manager" : "employee";
+  return `/submission-window/${slug}${action ? `/${action}` : ""}`;
+}
+
+export async function fetchRoleSubmissionWindow(role, { signal } = {}) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl(roleWindowEndpoint(role, "current")), {
+    signal,
+    credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+  /* If role-specific endpoint doesn't exist, fall back to global */
+  if (res.status === 404) return fetchSubmissionWindowCurrent({ signal });
+  if (!res.ok) throw await toHttpError(res);
+  return res.json();
+}
+
+export async function scheduleRoleSubmissionWindow(role, { startAt, endAt }, { signal } = {}) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl(roleWindowEndpoint(role, "current/schedule")), {
+    method: "PUT",
+    signal,
+    credentials: "include",
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
+    body: JSON.stringify({ startAt, endAt }),
+  });
+  if (res.status === 404) return scheduleSubmissionWindow({ startAt, endAt }, { signal });
+  if (!res.ok) throw await toHttpError(res);
+  return res.json();
+}
+
+export async function openRoleSubmissionWindowNow(role, { signal } = {}) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl(roleWindowEndpoint(role, "open-now")), {
+    method: "POST",
+    signal,
+    credentials: "include",
+    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
+  });
+  if (res.status === 404) return openSubmissionWindowNow({ signal });
+  if (!res.ok) throw await toHttpError(res);
+  return res.json();
+}
+
+export async function closeRoleSubmissionWindowNow(role, { signal } = {}) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl(roleWindowEndpoint(role, "close-now")), {
+    method: "POST",
+    signal,
+    credentials: "include",
+    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
+  });
+  if (res.status === 404) return closeSubmissionWindowNow({ signal });
+  if (!res.ok) throw await toHttpError(res);
+  return res.json();
+}
+
 export async function scheduleSubmissionWindow({ startAt, endAt }, { signal } = {}) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/submission-window/current/schedule"), {

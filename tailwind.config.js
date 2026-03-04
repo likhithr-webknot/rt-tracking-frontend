@@ -6,7 +6,7 @@ export default {
     extend: {
       fontFamily: {
         sans: [
-          "Inter",
+          "Plus Jakarta Sans",
           "ui-sans-serif",
           "system-ui",
           "-apple-system",
@@ -17,6 +17,12 @@ export default {
           "Noto Sans",
           "Apple Color Emoji",
           "Segoe UI Emoji",
+        ],
+        mono: [
+          "Plus Jakarta Sans",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
         ],
       },
     },

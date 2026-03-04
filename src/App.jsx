@@ -14,7 +14,7 @@ import {
   markManualLogout,
   setAuth,
 } from "./api/auth.js";
-import { fetchSubmissionWindowCurrent } from "./api/submission-window.js";
+import { fetchSubmissionWindowCurrent, fetchRoleSubmissionWindow } from "./api/submission-window.js";
 
 function withWindowSource(data, source) {
   const obj = data && typeof data === "object" ? data : {};
@@ -156,9 +156,15 @@ export default function App() {
       setWindowError("");
 
       try {
-        const globalWindow = await fetchSubmissionWindowCurrent({ signal: controller.signal });
+        /* Try role-specific window first, fall back to global */
+        let windowResult;
+        try {
+          windowResult = await fetchRoleSubmissionWindow(effectivePortalRole, { signal: controller.signal });
+        } catch {
+          windowResult = await fetchSubmissionWindowCurrent({ signal: controller.signal });
+        }
         if (!alive) return;
-        setWindowData(withWindowSource(globalWindow, "global"));
+        setWindowData(withWindowSource(windowResult, effectivePortalRole.toLowerCase()));
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!alive) return;

@@ -207,38 +207,38 @@ export default function AIAgentsConfig() {
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
           <h2 className="rt-title">
-            Configure AI Agents
+            AI Agents
           </h2>
           <p className="text-slate-500 text-sm mt-2">
-            Stored in backend and available across sessions.
+            Configure AI-powered agents stored in backend and available across sessions.
           </p>
         </div>
         <button
           onClick={() => reloadAgents({ cursor: cursor ?? null, pageAction: "stay" }).catch(() => {})}
           disabled={loading}
-          className="rt-btn-ghost inline-flex items-center gap-2 text-xs uppercase tracking-widest"
+          className="rt-btn-ghost"
         >
           <RefreshCcw size={16} className={loading ? "animate-spin" : ""} /> Refresh
         </button>
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-4xl">
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-lg px-4 py-3">
           <div className="rt-kicker">Rows On Page</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{agents.length}</div>
+          <div className="mt-1 text-2xl font-semibold text-[rgb(var(--text))]">{agents.length}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-lg px-4 py-3">
           <div className="rt-kicker">Active</div>
-          <div className="mt-1 text-2xl font-black text-emerald-500">{activeAgents}</div>
+          <div className="mt-1 text-2xl font-semibold text-emerald-500">{activeAgents}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-lg px-4 py-3">
           <div className="rt-kicker">Inactive</div>
-          <div className="mt-1 text-2xl font-black text-amber-500">{inactiveAgents}</div>
+          <div className="mt-1 text-2xl font-semibold text-amber-500">{inactiveAgents}</div>
         </div>
       </div>
 
       {error ? (
-        <div className="max-w-7xl mx-auto rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
+        <div className="max-w-7xl mx-auto rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
           {error}
         </div>
       ) : null}
@@ -257,7 +257,7 @@ export default function AIAgentsConfig() {
       <section className="rt-panel overflow-hidden">
         <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h3 className="text-xl font-black tracking-tight">AI Agents</h3>
+            <h3 className="text-xl font-semibold tracking-tight">AI Agents</h3>
             <p className="text-slate-500 text-sm mt-1">
               {loading ? "Loading..." : agents.length ? `${agents.length} shown on this page` : "No agents configured yet."}
             </p>
@@ -265,7 +265,7 @@ export default function AIAgentsConfig() {
 
           <button
             onClick={openAddModal}
-            className="rt-btn-primary inline-flex items-center gap-2 px-6 py-3 font-black text-xs uppercase tracking-widest"
+            className="rt-btn-primary"
           >
             <Plus size={18} /> Add AI Agent
           </button>
@@ -273,11 +273,11 @@ export default function AIAgentsConfig() {
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-b border-[rgb(var(--border))]">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-slate-500 border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="p-6 font-black">Provider</th>
-                <th className="p-6 font-black">API Key</th>
-                <th className="p-6 text-right font-black px-8">Actions</th>
+                <th className="p-6 font-semibold">Provider</th>
+                <th className="p-6 font-semibold">API Key</th>
+                <th className="p-6 text-right font-semibold px-8">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
@@ -300,7 +300,7 @@ export default function AIAgentsConfig() {
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => openEditModal(agent)}
-                        className="p-2.5 bg-[rgb(var(--surface-2))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] hover:brightness-95 rounded-xl transition-all border border-[rgb(var(--border))]"
+                        className="p-2.5 bg-[rgb(var(--surface-2))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] hover:brightness-95 rounded-md transition-all border border-[rgb(var(--border))]"
                         title="Edit API key"
                         aria-label={`Edit API key for ${providerLabel(agent.provider)}`}
                       >
@@ -310,7 +310,7 @@ export default function AIAgentsConfig() {
                         onClick={() => {
                           setPendingDeleteAgent(agent);
                         }}
-                        className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
+                        className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-md transition-all border border-red-500/20"
                         title="Delete agent"
                         aria-label={`Delete agent ${providerLabel(agent.provider)}`}
                       >
@@ -338,9 +338,9 @@ export default function AIAgentsConfig() {
               onClick={() => reloadAgents({ cursor: null, pageAction: "reset" }).catch(() => {})}
               disabled={loading}
               className={[
-                "rt-btn-ghost text-xs uppercase tracking-widest",
+                "rt-btn-ghost",
                 loading ? "opacity-50 cursor-not-allowed" : "",
-              ].join(" ")}
+              ].join("")}
             >
               First Page
             </button>
@@ -367,7 +367,7 @@ export default function AIAgentsConfig() {
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-black uppercase tracking-tight">
+                <h3 className="font-semibold uppercase tracking-tight">
                   {modal.mode === "edit" ? "Edit AI Agent" : "Add AI Agent"}
                 </h3>
                 <p className="text-gray-500 text-sm mt-1">
@@ -378,7 +378,7 @@ export default function AIAgentsConfig() {
               </div>
               <button
                 onClick={closeModal}
-                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
+                className="p-2 rounded-md hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -388,7 +388,7 @@ export default function AIAgentsConfig() {
 
             <form onSubmit={onSubmit} className="mt-6 space-y-4">
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Provider *
                 </label>
                 <div className="relative mt-2">
@@ -408,7 +408,7 @@ export default function AIAgentsConfig() {
               </div>
 
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   API Key *
                 </label>
                 <div className="relative mt-2">
@@ -424,7 +424,7 @@ export default function AIAgentsConfig() {
                   <button
                     type="button"
                     onClick={() => setShowKey((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl hover:bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))]"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-md hover:bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))]"
                     aria-label={showKey ? "Hide key" : "Show key"}
                     title={showKey ? "Hide key" : "Show key"}
                   >
@@ -440,14 +440,14 @@ export default function AIAgentsConfig() {
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="rt-btn-ghost text-xs uppercase tracking-widest"
+                  className="rt-btn-ghost"
                   disabled={saving}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rt-btn-primary text-xs uppercase tracking-widest inline-flex items-center gap-2"
+                  className="rt-btn-primary"
                   disabled={saving}
                 >
                   {saving ? <Loader2 size={14} className="animate-spin" /> : null}

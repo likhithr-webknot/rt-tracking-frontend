@@ -1,4 +1,5 @@
 import React from "react";
+import ModalOverlay from "./ModalOverlay.jsx";
 
 export default function ConfirmDialog({
   open,
@@ -12,44 +13,48 @@ export default function ConfirmDialog({
   busy = false,
   showCancel = true,
 }) {
-  if (!open) return null;
-
   const confirmClass =
     confirmVariant === "primary"
-      ? "bg-purple-600 text-white hover:bg-purple-500"
-      : "bg-red-500 text-white hover:bg-red-400";
+      ? "bg-[rgb(var(--primary))] text-white hover:bg-[rgb(var(--primary-hover))]"
+      : "bg-red-600 text-white hover:bg-red-500";
 
   return (
-    <div className="fixed inset-0 z-[80] bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 overflow-y-auto">
-      <div className="w-full max-w-md rt-panel rounded-3xl p-5 sm:p-6 my-3 sm:my-6 max-h-[90dvh] overflow-y-auto">
-        <h3 className="font-black uppercase tracking-tight text-[rgb(var(--text))]">{title || "Confirm"}</h3>
-        <p className="mt-3 text-sm text-[rgb(var(--muted))] whitespace-pre-wrap">{message || "Are you sure?"}</p>
+    <ModalOverlay
+      open={open}
+      onClose={busy ? undefined : onCancel}
+      maxWidth="max-w-md"
+      zIndex={80}
+      showClose={false}
+      header={
+        <h3 className="font-semibold uppercase tracking-tight text-[rgb(var(--text))]">{title || "Confirm"}</h3>
+      }
+    >
+      <p className="text-sm text-[rgb(var(--muted))] whitespace-pre-wrap -mt-2">{message || "Are you sure?"}</p>
 
-        <div className="mt-6 flex items-center justify-end gap-2 sm:gap-3 flex-wrap">
-          {showCancel ? (
-            <button
-              type="button"
-              onClick={onCancel}
-              disabled={busy}
-              className="rt-btn-ghost px-4 py-2 text-xs uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {cancelText}
-            </button>
-          ) : null}
-
+      <div className="mt-6 flex items-center justify-end gap-2 sm:gap-3 flex-wrap">
+        {showCancel ? (
           <button
             type="button"
-            onClick={onConfirm}
+            onClick={onCancel}
             disabled={busy}
-            className={[
-              "rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest transition-all disabled:opacity-60 disabled:cursor-not-allowed",
-              confirmClass,
-            ].join(" ")}
+            className="rt-btn-ghost disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {busy ? "Please wait…" : confirmText}
+            {cancelText}
           </button>
-        </div>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={busy}
+          className={[
+            "rounded-md px-4 py-2 text-xs font-medium uppercase tracking-wider transition-all disabled:opacity-60 disabled:cursor-not-allowed",
+            confirmClass,
+          ].join(" ")}
+        >
+          {busy ? "Please wait…" : confirmText}
+        </button>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

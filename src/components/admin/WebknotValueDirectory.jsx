@@ -9,7 +9,7 @@ export default function WebknotValueDirectory({
   onAddValue,
   onEditValue,
   onDeleteValue,
-  pager,
+  pager, 
 }) {
   const filtered = useMemo(() => {
     const q = String(searchQuery || "").trim().toLowerCase();
@@ -35,37 +35,37 @@ export default function WebknotValueDirectory({
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
           <h2 className="rt-title">
-            Webknot Value Directory
+            Webknot Values
           </h2>
           <p className="text-slate-500 text-sm mt-2">
-            Curate the values that define how we operate.
+            Curate the core values that define how we operate.
           </p>
         </div>
         <button
           onClick={onAddValue}
-          className="rt-btn-primary px-8 py-4 font-black text-xs uppercase tracking-widest inline-flex items-center gap-2"
+          className="rt-btn-primary"
         >
           <Plus size={18} /> Add New Value
         </button>
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-4xl">
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-lg px-4 py-3">
           <div className="rt-kicker">Total Values</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{values.length}</div>
+          <div className="mt-1 text-2xl font-semibold text-[rgb(var(--text))]">{values.length}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-lg px-4 py-3">
           <div className="rt-kicker">Pillars</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{pillarCount}</div>
+          <div className="mt-1 text-2xl font-semibold text-[rgb(var(--text))]">{pillarCount}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-lg px-4 py-3">
           <div className="rt-kicker">On Page</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{filtered.length}</div>
+          <div className="mt-1 text-2xl font-semibold text-[rgb(var(--text))]">{filtered.length}</div>
         </div>
       </div>
 
       <div className="relative group max-w-2xl">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={20} />
         <input
           type="text"
           value={searchQuery}
@@ -75,44 +75,42 @@ export default function WebknotValueDirectory({
         />
       </div>
 
-      <div className="rt-panel overflow-hidden">
+      {/* ── Desktop table ── */}
+      <div className="rt-panel overflow-hidden hidden lg:block">
         <table className="w-full text-left">
-          <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-b border-[rgb(var(--border))]">
+          <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
             <tr>
-              <th className="p-6 font-black">Value</th>
-              <th className="p-6 font-black">Evaluation Criteria</th>
-              <th className="p-6 text-right font-black px-8">Actions</th>
+              <th className="px-6 py-4 font-semibold">Value</th>
+              <th className="px-6 py-4 font-semibold">Evaluation Criteria</th>
+              <th className="px-6 py-4 text-right font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[rgb(var(--border))]">
             {filtered.map((v) => (
-              <tr key={v.id} className="hover:bg-[rgb(var(--surface-2))] transition-colors group">
-                <td className="p-6">
-                  <div className="font-bold text-[rgb(var(--text))] tracking-tight">{v.title}</div>
-                  <div className="text-[10px] text-slate-500 font-bold uppercase mt-1 font-mono">
-                    {v.id}
-                  </div>
+              <tr key={v.id} className="hover:bg-[rgb(var(--surface-2))]/50 transition-colors group">
+                <td className="px-6 py-4">
+                  <div className="font-semibold text-[rgb(var(--text))] tracking-tight">{v.title}</div>
                 </td>
-                <td className="p-6">
-                  <span className="inline-flex max-w-[320px] items-center rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 text-xs font-semibold text-blue-500 break-words whitespace-normal">
+                <td className="px-6 py-4">
+                  <span className="inline-flex max-w-[360px] items-center rounded-md bg-[rgb(var(--primary))]/10 px-2.5 py-1 text-xs font-medium text-[rgb(var(--primary))] break-words whitespace-normal">
                     {v.pillar}
                   </span>
                 </td>
-                <td className="p-6 text-right px-8">
+                <td className="px-6 py-4 text-right">
                   <div className="flex justify-end gap-2">
                     <button
                       onClick={() => onEditValue?.(v)}
-                      className="p-2.5 bg-blue-500/5 text-blue-500 hover:bg-blue-500 hover:text-white rounded-xl transition-all border border-blue-500/10"
+                      className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
                       title="Edit"
                     >
-                      <Edit3 size={18} />
+                      <Edit3 size={16} />
                     </button>
                     <button
                       onClick={() => onDeleteValue?.(v)}
-                      className="p-2.5 bg-red-500/5 text-red-500 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/10"
+                      className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-red-500 hover:bg-red-500/10 transition-all"
                       title="Delete"
                     >
-                      <Trash2 size={18} />
+                      <Trash2 size={16} />
                     </button>
                   </div>
                 </td>
@@ -120,20 +118,56 @@ export default function WebknotValueDirectory({
             ))}
             {filtered.length === 0 && values.length > 0 ? (
               <tr>
-                <td className="p-10 text-center text-slate-500" colSpan={3}>
+                <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={3}>
                   No values match your search.
                 </td>
               </tr>
             ) : null}
             {values.length === 0 ? (
               <tr>
-                <td className="p-10 text-center text-slate-500" colSpan={3}>
+                <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={3}>
                   No values yet. Click "Add New Value" to create one.
                 </td>
               </tr>
             ) : null}
           </tbody>
         </table>
+      </div>
+
+      {/* ── Mobile cards ── */}
+      <div className="lg:hidden space-y-3">
+        {filtered.map((v) => (
+          <div key={v.id} className="rt-panel p-4 flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-[rgb(var(--text))] tracking-tight truncate">{v.title}</div>
+              <span className="mt-2 inline-flex items-center rounded-md bg-[rgb(var(--primary))]/10 px-2.5 py-1 text-xs font-medium text-[rgb(var(--primary))]">
+                {v.pillar}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => onEditValue?.(v)}
+                className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
+                title="Edit"
+              >
+                <Edit3 size={16} />
+              </button>
+              <button
+                onClick={() => onDeleteValue?.(v)}
+                className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-red-500 hover:bg-red-500/10 transition-all"
+                title="Delete"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && values.length > 0 ? (
+          <div className="rt-panel p-8 text-center text-[rgb(var(--muted))] text-sm">No values match your search.</div>
+        ) : null}
+        {values.length === 0 ? (
+          <div className="rt-panel p-8 text-center text-[rgb(var(--muted))] text-sm">No values yet. Click "Add New Value" to create one.</div>
+        ) : null}
       </div>
 
       {pager && (pager.canPrev || pager.canNext) ? (

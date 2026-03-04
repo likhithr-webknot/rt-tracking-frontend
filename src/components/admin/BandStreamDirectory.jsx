@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Edit3, Eye, EyeOff, Layers, Plus, Search, Trash2, X } from "lucide-react";
+import { Edit3, Eye, EyeOff, Plus, Search, Trash2, X } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 import {
@@ -266,27 +266,27 @@ export default function BandStreamDirectory() {
     <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
-          <h2 className="rt-title">Band & Stream Directory</h2>
+          <h2 className="rt-title">Bands & Streams</h2>
           <p className="text-slate-500 text-sm mt-2">
             Manage canonical bands and streams used across KPI and employee workflows.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-3 min-w-[260px]">
-          <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-panel-subtle rounded-lg px-4 py-3">
             <div className="rt-kicker">Bands</div>
-            <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{bands.length}</div>
+            <div className="mt-1 text-2xl font-semibold text-[rgb(var(--text))]">{bands.length}</div>
             <div className="text-[11px] text-[rgb(var(--muted))]">{activeBands} active</div>
           </div>
-          <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+          <div className="rt-panel-subtle rounded-lg px-4 py-3">
             <div className="rt-kicker">Streams</div>
-            <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{streams.length}</div>
+            <div className="mt-1 text-2xl font-semibold text-[rgb(var(--text))]">{streams.length}</div>
             <div className="text-[11px] text-[rgb(var(--muted))]">{activeStreams} active</div>
           </div>
         </div>
       </header>
 
       {error ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">{error}</div>
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">{error}</div>
       ) : null}
 
       <div className="flex flex-wrap gap-3 items-center justify-between">
@@ -302,13 +302,13 @@ export default function BandStreamDirectory() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => openAdd("band")}
-            className="rt-btn-primary inline-flex items-center gap-2 px-4 py-3 text-xs font-black uppercase tracking-widest"
+            className="rt-btn-primary"
           >
             <Plus size={16} /> Add Band
           </button>
           <button
             onClick={() => openAdd("stream")}
-            className="rt-btn-primary inline-flex items-center gap-2 px-4 py-3 text-xs font-black uppercase tracking-widest"
+            className="rt-btn-primary"
           >
             <Plus size={16} /> Add Stream
           </button>
@@ -325,12 +325,12 @@ export default function BandStreamDirectory() {
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left">
-              <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-b border-[rgb(var(--border))]">
+              <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-slate-500 border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="p-5 font-black">Code</th>
-                <th className="p-5 font-black">Label</th>
-                <th className="p-5 font-black">State</th>
-                <th className="p-5 text-right font-black">Actions</th>
+                <th className="p-5 font-semibold">Code</th>
+                <th className="p-5 font-semibold">Label</th>
+                <th className="p-5 font-semibold">State</th>
+                <th className="p-5 text-right font-semibold">Actions</th>
               </tr>
               </thead>
               <tbody className="divide-y divide-[rgb(var(--border))]">
@@ -339,19 +339,19 @@ export default function BandStreamDirectory() {
                   <td className="p-5 font-mono text-[rgb(var(--text))]">{row.code}</td>
                   <td className="p-5 text-[rgb(var(--text))]">{row.label}</td>
                   <td className="p-5">
-                    <span className={`inline-flex rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${row.active ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/20 text-slate-300"}`}>
+                    <span className={`inline-flex rounded-lg px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest ${row.active ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/20 text-slate-300"}`}>
                       {row.active ? "Active" : "Inactive"}
                     </span>
                   </td>
                   <td className="p-5">
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => openEdit("band", row)} className="p-2.5 rounded-xl bg-blue-500/10 text-blue-300 hover:bg-blue-500 hover:text-white transition-all" title="Edit">
+                      <button onClick={() => openEdit("band", row)} className="p-2.5 rounded-md bg-blue-500/10 text-blue-300 hover:bg-blue-500 hover:text-white transition-all" title="Edit">
                         <Edit3 size={16} />
                       </button>
-                      <button onClick={() => toggleActive("band", row)} className="p-2.5 rounded-xl bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white transition-all" title={row.active ? "Deactivate" : "Activate"}>
+                      <button onClick={() => toggleActive("band", row)} className="p-2.5 rounded-md bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white transition-all" title={row.active ? "Deactivate" : "Activate"}>
                         {row.active ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
-                      <button onClick={() => setPendingDelete({ type: "band", row })} className="p-2.5 rounded-xl bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white transition-all" title="Delete">
+                      <button onClick={() => setPendingDelete({ type: "band", row })} className="p-2.5 rounded-md bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white transition-all" title="Delete">
                         <Trash2 size={16} />
                       </button>
                     </div>
@@ -377,12 +377,12 @@ export default function BandStreamDirectory() {
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left">
-              <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-b border-[rgb(var(--border))]">
+              <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-slate-500 border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="p-5 font-black">Code</th>
-                <th className="p-5 font-black">Label</th>
-                <th className="p-5 font-black">State</th>
-                <th className="p-5 text-right font-black">Actions</th>
+                <th className="p-5 font-semibold">Code</th>
+                <th className="p-5 font-semibold">Label</th>
+                <th className="p-5 font-semibold">State</th>
+                <th className="p-5 text-right font-semibold">Actions</th>
               </tr>
               </thead>
               <tbody className="divide-y divide-[rgb(var(--border))]">
@@ -391,19 +391,19 @@ export default function BandStreamDirectory() {
                   <td className="p-5 font-mono text-[rgb(var(--text))]">{row.code}</td>
                   <td className="p-5 text-[rgb(var(--text))]">{row.label}</td>
                   <td className="p-5">
-                    <span className={`inline-flex rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${row.active ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/20 text-slate-300"}`}>
+                    <span className={`inline-flex rounded-lg px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest ${row.active ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/20 text-slate-300"}`}>
                       {row.active ? "Active" : "Inactive"}
                     </span>
                   </td>
                   <td className="p-5">
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => openEdit("stream", row)} className="p-2.5 rounded-xl bg-blue-500/10 text-blue-300 hover:bg-blue-500 hover:text-white transition-all" title="Edit">
+                      <button onClick={() => openEdit("stream", row)} className="p-2.5 rounded-md bg-blue-500/10 text-blue-300 hover:bg-blue-500 hover:text-white transition-all" title="Edit">
                         <Edit3 size={16} />
                       </button>
-                      <button onClick={() => toggleActive("stream", row)} className="p-2.5 rounded-xl bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white transition-all" title={row.active ? "Deactivate" : "Activate"}>
+                      <button onClick={() => toggleActive("stream", row)} className="p-2.5 rounded-md bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white transition-all" title={row.active ? "Deactivate" : "Activate"}>
                         {row.active ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
-                      <button onClick={() => setPendingDelete({ type: "stream", row })} className="p-2.5 rounded-xl bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white transition-all" title="Delete">
+                      <button onClick={() => setPendingDelete({ type: "stream", row })} className="p-2.5 rounded-md bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white transition-all" title="Delete">
                         <Trash2 size={16} />
                       </button>
                     </div>
@@ -426,19 +426,19 @@ export default function BandStreamDirectory() {
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-black uppercase tracking-tight">
+                <h3 className="font-semibold uppercase tracking-tight">
                   {editor.mode === "add" ? `Add ${titleFor(editor.type)}` : `Edit ${titleFor(editor.type)}`}
                 </h3>
                 <p className="text-gray-500 text-sm mt-1">Update directory metadata for UI and filtering.</p>
               </div>
-              <button onClick={closeEditor} className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]" aria-label="Close">
+              <button onClick={closeEditor} className="p-2 rounded-md hover:bg-[rgb(var(--surface-2))]" aria-label="Close">
                 <X size={18} />
               </button>
             </div>
 
             <form onSubmit={submitEditor} className="mt-6 space-y-4">
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   {titleFor(editor.type)} Code *
                 </label>
                 {editor.mode === "add" ? (
@@ -464,7 +464,7 @@ export default function BandStreamDirectory() {
               </div>
 
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Label *
                 </label>
                 <input
@@ -477,7 +477,7 @@ export default function BandStreamDirectory() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Sort Order</label>
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Sort Order</label>
                   <input
                     value={editor.sortOrder}
                     onChange={(e) => setEditor((prev) => ({ ...prev, sortOrder: e.target.value }))}
@@ -486,7 +486,7 @@ export default function BandStreamDirectory() {
                   />
                 </div>
                 <div className="flex items-end">
-                  <label className="inline-flex items-center gap-3 mt-2 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5">
+                  <label className="inline-flex items-center gap-3 mt-2 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5">
                     <input
                       type="checkbox"
                       checked={Boolean(editor.active)}
@@ -499,10 +499,10 @@ export default function BandStreamDirectory() {
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
-                <button type="button" onClick={closeEditor} className="rt-btn-ghost text-xs uppercase tracking-widest">
+                <button type="button" onClick={closeEditor} className="rt-btn-ghost">
                   Cancel
                 </button>
-                <button type="submit" disabled={saving} className="rt-btn-primary text-xs uppercase tracking-widest">
+                <button type="submit" disabled={saving} className="rt-btn-primary">
                   {saving ? "Saving…" : editor.mode === "add" ? "Add" : "Save Changes"}
                 </button>
               </div>

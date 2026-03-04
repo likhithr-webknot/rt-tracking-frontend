@@ -4,11 +4,25 @@ export const APP_SETTINGS_DEFAULTS = {
   apiBaseUrl: "",
   employeeValuesPageSize: 10,
   draftAutosaveDelayMs: 900,
+  notificationPollIntervalMs: 30000,
+  sessionTimeoutMinutes: 60,
+  tableAnimations: true,
+  compactTables: false,
+  enableSoundAlerts: true,
+  dateFormat: "MMM YYYY",
+  debugMode: false,
 };
 
 function toNumber(value, fallback) {
   const n = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function toBool(value, fallback) {
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
 }
 
 function sanitize(settings) {
@@ -22,11 +36,33 @@ function sanitize(settings) {
     5000,
     Math.max(500, toNumber(raw.draftAutosaveDelayMs, APP_SETTINGS_DEFAULTS.draftAutosaveDelayMs))
   );
+  const notificationPollIntervalMs = Math.min(
+    120000,
+    Math.max(5000, toNumber(raw.notificationPollIntervalMs, APP_SETTINGS_DEFAULTS.notificationPollIntervalMs))
+  );
+  const sessionTimeoutMinutes = Math.min(
+    480,
+    Math.max(5, toNumber(raw.sessionTimeoutMinutes, APP_SETTINGS_DEFAULTS.sessionTimeoutMinutes))
+  );
+  const tableAnimations = toBool(raw.tableAnimations, APP_SETTINGS_DEFAULTS.tableAnimations);
+  const compactTables = toBool(raw.compactTables, APP_SETTINGS_DEFAULTS.compactTables);
+  const enableSoundAlerts = toBool(raw.enableSoundAlerts, APP_SETTINGS_DEFAULTS.enableSoundAlerts);
+  const dateFormat = ["MMM YYYY", "YYYY-MM", "MM/YYYY"].includes(raw.dateFormat)
+    ? raw.dateFormat
+    : APP_SETTINGS_DEFAULTS.dateFormat;
+  const debugMode = toBool(raw.debugMode, APP_SETTINGS_DEFAULTS.debugMode);
 
   return {
     apiBaseUrl,
     employeeValuesPageSize,
     draftAutosaveDelayMs,
+    notificationPollIntervalMs,
+    sessionTimeoutMinutes,
+    tableAnimations,
+    compactTables,
+    enableSoundAlerts,
+    dateFormat,
+    debugMode,
   };
 }
 

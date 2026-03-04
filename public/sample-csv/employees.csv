@@ -1,0 +1,11 @@
+employeeId,employeeName,email,empRole,designation,stream,band,managerId
+EMP001,Alice Johnson,alice.johnson@company.com,Employee,Software Engineer,Engineering,B4,
+EMP002,Bob Smith,bob.smith@company.com,Employee,Software Engineer,Engineering,B3,
+EMP003,Carol Lee,carol.lee@company.com,Employee,UX Designer,Design,B4,
+EMP004,Dave Patel,dave.patel@company.com,Employee,QA Engineer,QA,B2,
+EMP005,Eve Nguyen,eve.nguyen@company.com,Employee,Senior Engineer,Engineering,B5,
+EMP006,Frank Zhao,frank.zhao@company.com,Employee,Product Analyst,Product,B3,
+EMP007,Grace Kim,grace.kim@company.com,Employee,Data Scientist,Data Science,B4,
+EMP008,Henry Das,henry.das@company.com,Employee,Software Engineer,Engineering,B2,
+EMP009,Irene Costa,irene.costa@company.com,Employee,UX Designer,Design,B3,
+EMP010,Jack Miller,jack.miller@company.com,Employee,QA Engineer,QA,B4,

@@ -114,11 +114,11 @@ export default function KPIRegistry({
     <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500 text-[rgb(var(--text))]">
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
-          <h2 className="rt-title">KPI Master Registry</h2>
+          <h2 className="rt-title">KPI Directory</h2>
           <p className="text-sm mt-2 text-slate-700 dark:text-slate-300">Map performance metrics to bands and streams.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <label className="inline-flex items-center gap-2 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2 text-[10px] font-black uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300">
+          <label className="inline-flex items-center gap-2 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-slate-700 dark:text-slate-300">
             <span>Slots</span>
             <select
               value={String(pageSize)}
@@ -127,7 +127,7 @@ export default function KPIRegistry({
                 if (!Number.isFinite(next) || next <= 0) return;
                 onPageSizeChange?.(next);
               }}
-              className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2 py-1 text-[11px] font-black text-[rgb(var(--text))] outline-none focus:border-blue-400"
+              className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2 py-1 text-[11px] font-semibold text-[rgb(var(--text))] outline-none focus:border-blue-400"
               aria-label="KPI slots per page"
               title="Slots per page"
             >
@@ -142,16 +142,16 @@ export default function KPIRegistry({
             onClick={() => onReload?.()}
             disabled={Boolean(loading)}
             className={[
-              "rt-btn-ghost inline-flex items-center gap-2 px-6 py-4 text-xs uppercase tracking-widest transition-all",
+              "rt-btn-ghost transition-all",
               loading ? "opacity-60 cursor-not-allowed" : "",
-            ].join(" ")}
+            ].join("")}
             title="Reload KPIs"
           >
             <RefreshCw size={18} /> {loading ? "Loading…" : "Refresh"}
           </button>
           <button
             onClick={onAddKpi}
-            className="rt-btn-primary px-8 py-4 font-black text-xs uppercase tracking-widest inline-flex items-center gap-2"
+            className="rt-btn-primary"
           >
             <Plus size={18} /> Add New KPI
           </button>
@@ -161,18 +161,18 @@ export default function KPIRegistry({
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="rt-panel-subtle p-4">
           <div className="rt-kicker">Rows Loaded</div>
-          <div className="mt-2 text-2xl font-black tracking-tight">{kpis.length}</div>
+          <div className="mt-2 text-2xl font-semibold tracking-tight">{kpis.length}</div>
         </div>
         <div className="rt-panel-subtle p-4">
           <div className="rt-kicker">Bands On Page</div>
-          <div className="mt-2 inline-flex items-center gap-2 text-2xl font-black tracking-tight">
+          <div className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <Layers3 size={18} className="text-blue-500" />
             <span>{bandStats.bands.length}</span>
           </div>
         </div>
         <div className="rt-panel-subtle p-4">
           <div className="rt-kicker">Overweight Pairs</div>
-          <div className="mt-2 inline-flex items-center gap-2 text-2xl font-black tracking-tight">
+          <div className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <AlertTriangle size={18} className={overweightComboCount > 0 ? "text-red-500" : "text-emerald-500"} />
             <span>{overweightComboCount}</span>
           </div>
@@ -180,7 +180,7 @@ export default function KPIRegistry({
       </div>
 
       {error ? (
-        <div className="rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+        <div className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
           Failed to load KPIs: <span className="font-mono">{error}</span>
         </div>
       ) : null}
@@ -211,7 +211,7 @@ export default function KPIRegistry({
                   setSelectedBands((prev) => Array.from(new Set([...prev, band])));
                 }}
                 className={[
-                  "inline-flex items-center gap-2 px-4 py-2 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] border transition-all",
+                  "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[10px] font-semibold uppercase tracking-wider border transition-all",
                   isSelected
                     ? "bg-purple-600 text-white border-purple-600 shadow-lg shadow-purple-900/20"
                     : "bg-[rgb(var(--surface))] text-slate-700 dark:text-slate-200 border-[rgb(var(--border))] hover:bg-[rgb(var(--surface-2))]",
@@ -237,7 +237,7 @@ export default function KPIRegistry({
                       e.stopPropagation();
                       setSelectedBands((prev) => prev.filter((b) => b !== band));
                     }}
-                    className="ml-1 rounded-xl p-1 hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--border))]"
+                    className="ml-1 rounded-md p-1 hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--border))]"
                     aria-label={`Deselect ${band}`}
                     title="Deselect"
                   >
@@ -251,7 +251,7 @@ export default function KPIRegistry({
       </div>
 
       {selectedBandWeightWarnings.length ? (
-        <div className="rounded-2xl border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+        <div className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
           Weightage exceeds 100% for band + stream:
           {" "}
           <span className="font-mono font-semibold">
@@ -262,13 +262,13 @@ export default function KPIRegistry({
 
       <div className="rt-panel overflow-hidden">
         <table className="w-full text-left text-sm">
-          <thead className="sticky top-0 z-10 bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-700 dark:text-slate-300 border-b border-[rgb(var(--border))]">
+          <thead className="sticky top-0 z-10 bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-slate-700 dark:text-slate-300 border-b border-[rgb(var(--border))]">
             <tr>
-              <th className="p-4 sm:p-5 font-black w-14">#</th>
-              <th className="p-4 sm:p-5 font-black">Objective</th>
-              <th className="p-4 sm:p-5 font-black">Stream</th>
-              <th className="p-4 sm:p-5 font-black">Band</th>
-              <th className="p-4 sm:p-5 text-right font-black px-8">Actions</th>
+              <th className="p-4 sm:p-5 font-semibold w-14">#</th>
+              <th className="p-4 sm:p-5 font-semibold">Objective</th>
+              <th className="p-4 sm:p-5 font-semibold">Stream</th>
+              <th className="p-4 sm:p-5 font-semibold">Band</th>
+              <th className="p-4 sm:p-5 text-right font-semibold px-8">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[rgb(var(--border))]">
@@ -280,7 +280,7 @@ export default function KPIRegistry({
                   <div className="text-[10px] text-slate-600 dark:text-slate-400 font-bold uppercase mt-1">Weight: {kpi.weight}</div>
                 </td>
                 <td className="p-4 sm:p-5">
-                  <span className="text-[10px] font-black uppercase px-3 py-1 bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300 rounded-lg border border-blue-200 dark:border-blue-500/20">
+                  <span className="text-[10px] font-semibold uppercase px-3 py-1 bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300 rounded-lg border border-blue-200 dark:border-blue-500/20">
                     {kpi.stream}
                   </span>
                 </td>
@@ -289,14 +289,14 @@ export default function KPIRegistry({
 	                  <div className="flex justify-end gap-2">
 	                    <button
 	                      onClick={() => onEditKpi?.(kpi)}
-	                      className="p-2.5 bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white rounded-xl transition-all border border-blue-200 dark:bg-blue-500/5 dark:text-blue-300 dark:hover:bg-blue-500 dark:border-blue-500/20"
+	                      className="p-2.5 bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white rounded-md transition-all border border-blue-200 dark:bg-blue-500/5 dark:text-blue-300 dark:hover:bg-blue-500 dark:border-blue-500/20"
 	                      title="Edit"
 	                    >
 	                      <Edit3 size={18} />
 	                    </button>
 	                    <button
                       onClick={() => onDeleteKpi?.(kpi)}
-                      className="p-2.5 bg-red-50 text-red-700 hover:bg-red-600 hover:text-white rounded-xl transition-all border border-red-200 dark:bg-red-500/5 dark:text-red-300 dark:hover:bg-red-500 dark:border-red-500/20"
+                      className="p-2.5 bg-red-50 text-red-700 hover:bg-red-600 hover:text-white rounded-md transition-all border border-red-200 dark:bg-red-500/5 dark:text-red-300 dark:hover:bg-red-500 dark:border-red-500/20"
                       title="Delete"
                     >
                       <Trash2 size={18} />

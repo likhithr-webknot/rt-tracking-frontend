@@ -25,6 +25,16 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      '/bands': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/streams': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        secure: false,
+      },
       '/auth': {
         target: 'http://localhost:8080',
         changeOrigin: true,
@@ -39,6 +49,12 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
         secure: false,
+        // Avoid proxying SPA page-load requests that collide with this API prefix
+        bypass(req) {
+          if (req.headers.accept && req.headers.accept.includes('text/html')) {
+            return req.url;
+          }
+        },
       },
       '/monthly-submissions': {
         target: 'http://localhost:8080',

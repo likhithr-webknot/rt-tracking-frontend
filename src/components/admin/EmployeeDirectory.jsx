@@ -12,6 +12,7 @@ import {
 import Toast from "../shared/Toast.jsx";
 import CursorPagination from "../shared/CursorPagination.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
+import ModalOverlay from "../shared/ModalOverlay.jsx";
 
 import {
   addEmployeeWithManager,
@@ -21,7 +22,7 @@ import {
   promoteEmployee as promoteEmployeeApi,
   updateEmployee,
 } from "../../api/employees.js";
-import { fetchBands, fetchStreams, normalizeDirectoryPage } from "../../api/band-stream-directory.js";
+import { fetchBands, fetchStreams, fetchBandDesignation, normalizeDirectoryPage } from "../../api/band-stream-directory.js";
 
 function computeNextEmployeeId(employees) {
   let maxEmp = -1;
@@ -109,6 +110,8 @@ export default function EmployeeDirectory({
     stream: "",
     managerId: "",
   });
+  const [addDesignation, setAddDesignation] = useState(null);
+  const [addDesignationLoading, setAddDesignationLoading] = useState(false);
   const [managers, setManagers] = useState([]);
   const [managersLoading, setManagersLoading] = useState(false);
   const [managersError, setManagersError] = useState("");
@@ -142,7 +145,10 @@ export default function EmployeeDirectory({
     role: "Employee",
     designation: "",
     band: "B4",
+    stream: "",
   });
+  const [editDesignation, setEditDesignation] = useState(null);
+  const [editDesignationLoading, setEditDesignationLoading] = useState(false);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -154,6 +160,7 @@ export default function EmployeeDirectory({
           e.id.toLowerCase().includes(q) ||
           e.role.toLowerCase().includes(q) ||
           e.band.toLowerCase().includes(q) ||
+          String(e.stream || "").toLowerCase().includes(q) ||
           (e.designation ?? "").toLowerCase().includes(q);
 
       const roleValue = String(e.role ?? "").trim() || "Unassigned";
@@ -200,8 +207,15 @@ export default function EmployeeDirectory({
 
   const visibleEmployees = filtered;
 
+  /* ── Clear stale selections when the employee list changes (pagination, reload) ── */
+  const employeeIdFingerprint = useMemo(() => employees.map((e) => e.id).join(","), [employees]);
+  useEffect(() => {
+    setSelectedEmployeeIds([]);
+  }, [employeeIdFingerprint]);
+
   const selectedIdSet = useMemo(() => new Set(selectedEmployeeIds), [selectedEmployeeIds]);
   const filteredIdSet = useMemo(() => new Set(filtered.map((e) => e.id)), [filtered]);
+  const employeeIdSet = useMemo(() => new Set(employees.map((e) => e.id)), [employees]);
   const allVisibleSelected = useMemo(() => {
     if (visibleEmployees.length === 0) return false;
     for (const emp of visibleEmployees) {
@@ -212,9 +226,11 @@ export default function EmployeeDirectory({
   }, [visibleEmployees, isSelf, selectedIdSet]);
 
   const deletableSelectedCount = useMemo(() => {
-    if (!currentEmployeeId) return selectedEmployeeIds.length;
-    return selectedEmployeeIds.filter((id) => String(id) !== String(currentEmployeeId)).length;
-  }, [selectedEmployeeIds, currentEmployeeId]);
+    // Only count IDs that exist in the current employee set (guards against stale selections)
+    const validSelected = selectedEmployeeIds.filter((id) => employeeIdSet.has(id));
+    if (!currentEmployeeId) return validSelected.length;
+    return validSelected.filter((id) => String(id) !== String(currentEmployeeId)).length;
+  }, [selectedEmployeeIds, currentEmployeeId, employeeIdSet]);
 
   const nextEmployeeId = useMemo(() => computeNextEmployeeId(employees), [employees]);
   const roleOptions = useMemo(() => buildOptionStats(employees, "role"), [employees]);
@@ -223,26 +239,59 @@ export default function EmployeeDirectory({
     [employees]
   );
   const bandOptions = useMemo(() => buildOptionStats(employees, "band"), [employees]);
+  const bandLabelMap = useMemo(() => {
+    const map = new Map();
+    for (const row of directoryBands) {
+      const code = String(row?.code || "").trim();
+      if (!code) continue;
+      const label = String(row?.label || row?.name || code).trim() || code;
+      map.set(code, label);
+    }
+    return map;
+  }, [directoryBands]);
+
+  const streamLabelMap = useMemo(() => {
+    const map = new Map();
+    for (const row of directoryStreams) {
+      const code = String(row?.code || "").trim();
+      if (!code) continue;
+      const label = String(row?.label || row?.name || code).trim() || code;
+      map.set(code, label);
+    }
+    return map;
+  }, [directoryStreams]);
+
   const bandSelectOptions = useMemo(() => {
     const fromDirectory = directoryBands
       .filter((row) => Boolean(row?.active))
-      .map((row) => String(row?.code || "").trim())
-      .filter(Boolean);
+      .map((row) => ({
+        value: String(row?.code || "").trim(),
+        label: String(row?.label || row?.name || row?.code || "").trim() || String(row?.code || ""),
+      }))
+      .filter((row) => Boolean(row.value));
     if (fromDirectory.length) return fromDirectory;
 
     const defaults = ["B1", "B2", "B3", "B4", "B5", "B5H", "B5L", "B6H", "B6L", "B7H", "B7L", "B8"];
     const fromEmployees = employees
       .map((emp) => String(emp?.band ?? "").trim())
-      .filter(Boolean);
-    return Array.from(new Set([...defaults, ...fromEmployees])).sort((a, b) =>
-      a.localeCompare(b, undefined, { numeric: true })
-    );
+      .filter(Boolean)
+      .map((value) => ({ value, label: value }));
+    return Array.from(
+      new Map([
+        ...defaults.map((value) => [value, { value, label: value }]),
+        ...fromEmployees.map((row) => [row.value, row]),
+      ]).values()
+    ).sort((a, b) => a.value.localeCompare(b.value, undefined, { numeric: true }));
   }, [directoryBands, employees]);
+
   const streamSelectOptions = useMemo(() => {
     const fromDirectory = directoryStreams
       .filter((row) => Boolean(row?.active))
-      .map((row) => String(row?.code || "").trim())
-      .filter(Boolean);
+      .map((row) => ({
+        value: String(row?.code || "").trim(),
+        label: String(row?.label || row?.name || row?.code || "").trim() || String(row?.code || ""),
+      }))
+      .filter((row) => Boolean(row.value));
     if (fromDirectory.length) return fromDirectory;
 
     const fromEmployees = Array.from(
@@ -251,19 +300,23 @@ export default function EmployeeDirectory({
           .map((emp) => String(emp?.stream ?? "").trim())
           .filter(Boolean)
       )
-    ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    )
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((value) => ({ value, label: value }));
     if (fromEmployees.length > 0) return fromEmployees;
-    return ["Development"];
+    return [{ value: "Development", label: "Development" }];
   }, [directoryStreams, employees]);
+
   const defaultAddBand = useMemo(
-    () => (bandSelectOptions.includes("B4") ? "B4" : bandSelectOptions[0] || "B4"),
+    () => (bandSelectOptions.find((opt) => opt.value === "B4")?.value || bandSelectOptions[0]?.value || "B4"),
     [bandSelectOptions]
   );
   const defaultAddStream = useMemo(
-    () => streamSelectOptions[0] || "",
+    () => streamSelectOptions[0]?.value || "",
     [streamSelectOptions]
   );
   const addRoleIsAdmin = String(addDraft.empRole || "").trim().toLowerCase() === "admin";
+  const editRoleIsAdmin = String(draft.role || "").trim().toLowerCase() === "admin";
   const managerCount = useMemo(
     () => {
       const value = directoryTotals?.managerCount;
@@ -311,7 +364,7 @@ export default function EmployeeDirectory({
       const rows = [];
       let cursor = null;
       for (let i = 0; i < 20; i += 1) {
-        const data = await fetcher({ limit: 100, cursor, signal: controller.signal });
+        const data = await fetcher({ limit: 100, cursor, activeOnly: true, signal: controller.signal });
         const page = normalizeDirectoryPage(data);
         rows.push(...page.items);
         if (!page.nextCursor) break;
@@ -341,6 +394,71 @@ export default function EmployeeDirectory({
       controller.abort();
     };
   }, []);
+
+  // Auto-fetch designation for add modal based on selected band/stream
+  useEffect(() => {
+    const controller = new AbortController();
+    const band = String(addDraft.band || "").trim();
+    const stream = String(addDraft.stream || "").trim();
+    if (addRoleIsAdmin || !band || !stream) {
+      setAddDesignation(null);
+      setAddDesignationLoading(false);
+      return () => controller.abort();
+    }
+    setAddDesignationLoading(true);
+    (async () => {
+      try {
+        const res = await fetchBandDesignation({ band, stream, signal: controller.signal });
+        if (!controller.signal.aborted) {
+          setAddDesignation(res);
+          if (res?.designation) {
+            setAddDraft((d) => ({ ...d, designation: res.designation }));
+          }
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setAddDesignation(null);
+      } finally {
+        if (!controller.signal.aborted) setAddDesignationLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [addDraft.band, addDraft.stream, addRoleIsAdmin]);
+
+  // Auto-fetch designation for edit modal based on selected band/stream
+  useEffect(() => {
+    if (!editingEmployee) {
+      setEditDesignation(null);
+      setEditDesignationLoading(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    const band = String(draft.band || "").trim();
+    const stream = String(draft.stream || "").trim();
+    if (editRoleIsAdmin || !band || !stream) {
+      setEditDesignation(null);
+      setEditDesignationLoading(false);
+      return () => controller.abort();
+    }
+    setEditDesignationLoading(true);
+    (async () => {
+      try {
+        const res = await fetchBandDesignation({ band, stream, signal: controller.signal });
+        if (!controller.signal.aborted) {
+          setEditDesignation(res);
+          if (res?.designation) {
+            setDraft((d) => ({ ...d, designation: res.designation }));
+          }
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setEditDesignation(null);
+      } finally {
+        if (!controller.signal.aborted) setEditDesignationLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [draft.band, draft.stream, editRoleIsAdmin, editingEmployee]);
 
   async function promoteEmployee(employeeId) {
     const emp = employees.find((e) => e.id === employeeId);
@@ -525,6 +643,7 @@ export default function EmployeeDirectory({
       role: emp.role ?? "Employee",
       designation: emp.designation ?? "",
       band: emp.band ?? "B4",
+      stream: emp.stream ?? "",
     });
   }
 
@@ -542,14 +661,17 @@ export default function EmployeeDirectory({
       return;
     }
 
+    const roleKey = String(draft.role || "").trim().toLowerCase();
+    const isAdminRole = roleKey === "admin";
+
     const payload = {
       employeeId: String(current.id ?? editingEmployeeId),
       employeeName: draft.name.trim(),
       email: String(current.email ?? "").trim(),
       empRole: draft.role,
-      stream: String(current.stream ?? "").trim() || null,
+      stream: isAdminRole ? null : (String(draft.stream ?? current.stream ?? "").trim() || null),
       designation: draft.designation.trim() || null,
-      band: draft.band,
+      band: isAdminRole ? null : (draft.band || null),
       managerId: String(current.managerId ?? "").trim() || null,
       updatedById: currentEmployeeId ? String(currentEmployeeId) : null,
       createdAt: current.createdAt || null,
@@ -570,6 +692,7 @@ export default function EmployeeDirectory({
                   role: payload.empRole || emp.role,
                   designation: payload.designation || "",
                   band: payload.band || emp.band,
+                  stream: payload.stream || emp.stream,
                 }
               : emp
           )
@@ -680,90 +803,88 @@ export default function EmployeeDirectory({
   }
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto">
-      <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+    <div className="space-y-6 max-w-[1600px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <h2 className="rt-title">
-            Personnel Directory
+            Employee Directory
           </h2>
-          <p className="text-slate-500 text-sm mt-1">Search and manage employees.</p>
+          <p className="text-[rgb(var(--muted))] text-sm mt-1">Search and manage employees across your organisation.</p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
           <button
             onClick={openAdd}
-            className="rt-btn-primary inline-flex items-center gap-2 px-5 py-3 font-black text-xs uppercase tracking-widest"
+            className="rt-btn-primary text-sm"
             title="Add employee"
           >
-            <Plus size={16} /> Add Employee
+            <Plus size={15} />Add Employee
           </button>
 
           <button
             onClick={deleteSelected}
             disabled={deletableSelectedCount === 0 || mutating}
             className={[
-              "inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border transition-all",
-              "border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-200 hover:bg-red-500 hover:text-white",
+              "rt-btn-danger transition-all text-sm",
               deletableSelectedCount === 0 || mutating ? "opacity-60 cursor-not-allowed" : "",
             ].join(" ")}
             title="Delete selected employees"
           >
-            <Trash2 size={16} /> Delete Selected{deletableSelectedCount ? ` (${deletableSelectedCount})` : ""}
+            <Trash2 size={15} /> Delete{deletableSelectedCount ? ` (${deletableSelectedCount})` : ""}
           </button>
         </div>
       </header>
 
-      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
-          <div className="rt-kicker">Total Employees</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{totalEmployeesDisplay}</div>
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
+          <div className="rt-kicker">Total</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{totalEmployeesDisplay}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
           <div className="rt-kicker">Managers</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{managerCount}</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{managerCount}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
           <div className="rt-kicker">Filtered</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{visibleEmployees.length}</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--primary))]">{visibleEmployees.length}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
           <div className="rt-kicker">Bands</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{bandCount}</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{bandCount}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
           <div className="rt-kicker">Admins</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{adminCount}</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{adminCount}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
           <div className="rt-kicker">Employees</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{employeeCount}</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{employeeCount}</div>
         </div>
       </section>
 
       {employeesError ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
           Failed to load employees: <span className="font-mono">{employeesError}</span>
         </div>
       ) : null}
 
-      <div className="relative max-w-2xl">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-        <input
-          type="text"
-          placeholder="Search by name, id, role, designation, band..."
-          className="w-full rt-input py-4 pl-12 pr-4 text-sm"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </div>
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={16} />
+          <input
+            type="text"
+            placeholder="Search by name, id, role, designation, band..."
+            className="w-full rt-input py-3 pl-11 pr-4 text-sm"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
 
-      
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-5xl">
-        <div>
+        <div className="grid grid-cols-3 gap-2 sm:flex sm:gap-2">
           <select
             value={roleFilter}
             onChange={(e) => setRoleFilter(e.target.value)}
-            className="w-full rt-input py-4 px-4 text-sm"
+            className="w-full sm:w-auto rt-input py-3 px-3 text-xs sm:text-sm"
             title="Filter by role"
           >
             <option value="all">All roles</option>
@@ -773,13 +894,11 @@ export default function EmployeeDirectory({
               </option>
             ))}
           </select>
-        </div>
 
-        <div>
           <select
             value={designationFilter}
             onChange={(e) => setDesignationFilter(e.target.value)}
-            className="w-full rt-input py-4 px-4 text-sm"
+            className="w-full sm:w-auto rt-input py-3 px-3 text-xs sm:text-sm"
             title="Filter by designation"
           >
             <option value="all">All designations</option>
@@ -789,13 +908,11 @@ export default function EmployeeDirectory({
               </option>
             ))}
           </select>
-        </div>
 
-        <div>
           <select
             value={bandFilter}
             onChange={(e) => setBandFilter(e.target.value)}
-            className="w-full rt-input py-4 px-4 text-sm"
+            className="w-full sm:w-auto rt-input py-3 px-3 text-xs sm:text-sm"
             title="Filter by band"
           >
             <option value="all">All bands</option>
@@ -808,140 +925,259 @@ export default function EmployeeDirectory({
         </div>
       </div>
 
-      <div className="rt-panel overflow-hidden">
-        <table className="w-full text-left">
-          <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-b border-[rgb(var(--border))]">
-            <tr>
-              <th className="p-6 font-black w-[64px]">
-                <input
-                  type="checkbox"
-                  checked={allVisibleSelected}
-                  onChange={toggleSelectAllVisible}
-                  disabled={visibleEmployees.length === 0 || visibleEmployees.every((emp) => isSelf(emp))}
-                  className="h-4 w-4 accent-purple-600"
-                  aria-label="Select all visible employees"
-                  title="Select all visible"
-                />
-              </th>
-              <th className="p-6 font-black">Employee</th>
-              <th className="p-6 font-black">Role</th>
-              <th className="p-6 font-black">Designation</th>
-              <th className="p-6 font-black">Band</th>
-              <th className="p-6 font-black">Submission Window</th>
-              <th className="p-6 text-right font-black px-8">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[rgb(var(--border))]">
-            {visibleEmployees.map((emp) => (
-              <tr key={emp.id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
-                <td className="p-6">
+      {/* ── Desktop Table View (hidden below lg) ── */}
+      <div className="rt-panel overflow-hidden hidden lg:block">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
+              <tr>
+                <th className="px-4 py-3 font-semibold w-[48px]">
                   <input
                     type="checkbox"
-                    checked={selectedIdSet.has(emp.id)}
-                    onChange={() => toggleRowSelected(emp.id)}
-                    disabled={isSelf(emp)}
-                    className="h-4 w-4 accent-purple-600"
-                    aria-label={`Select ${emp.name}`}
-                    title="Select"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    disabled={visibleEmployees.length === 0 || visibleEmployees.every((emp) => isSelf(emp))}
+                    className="h-4 w-4 accent-[rgb(var(--primary))]"
+                    aria-label="Select all visible employees"
+                    title="Select all visible"
                   />
-                </td>
-                <td className="p-6">
-                  <div className="font-bold">{emp.name}</div>
-                  <div className="text-xs text-slate-500 font-mono mt-1">{emp.id}</div>
-                </td>
-                <td className="p-6">{emp.role}</td>
-                <td className="p-6 text-[rgb(var(--text))]">{emp.designation ?? emp.role}</td>
-                <td className="p-6 font-mono text-purple-300">{emp.band}</td>
-                <td className="p-6">
-                  <div className="space-y-3">
-                    {globalWindowOpen ? (
-                      emp.submissionWindowForceClosed ? (
-                        <span className="inline-flex items-center rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-blue-500 dark:text-blue-300">
-                          Closed for this employee
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[rgb(var(--text))]">
-                          Open for all
-                        </span>
-                      )
-                    ) : (
-                      <span className="inline-flex items-center rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-[rgb(var(--muted))]">
-                        Closed for all
-                      </span>
-                    )}
-
-                    <div className="flex items-center gap-2">
+                </th>
+                <th className="px-4 py-3 font-semibold">Employee</th>
+                <th className="px-4 py-3 font-semibold">Role</th>
+                <th className="px-4 py-3 font-semibold">Designation</th>
+                <th className="px-4 py-3 font-semibold">Band</th>
+                <th className="px-4 py-3 font-semibold">Stream</th>
+                <th className="px-4 py-3 font-semibold">Submission Window</th>
+                <th className="px-4 py-3 text-right font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[rgb(var(--border))]">
+              {visibleEmployees.map((emp) => (
+                <tr key={emp.id} className="hover:bg-[rgb(var(--surface-2))]/60 transition-colors group">
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIdSet.has(emp.id)}
+                      onChange={() => toggleRowSelected(emp.id)}
+                      disabled={isSelf(emp)}
+                      className="h-4 w-4 accent-[rgb(var(--primary))]"
+                      aria-label={`Select ${emp.name}`}
+                      title="Select"
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="font-semibold text-[rgb(var(--text))]">{emp.name}</div>
+                    <div className="text-[11px] text-[rgb(var(--muted))] font-mono mt-0.5">{emp.id}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={[
+                      "inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold border",
+                      emp.role === "Admin" ? "bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/20" :
+                      emp.role === "Manager" ? "bg-purple-500/10 text-purple-600 dark:text-purple-300 border-purple-500/20" :
+                      "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
+                    ].join(" ")}>
+                      {emp.role}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-[rgb(var(--text))]">{emp.designation ?? emp.role}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-mono text-sm font-semibold text-[rgb(var(--text))]">{emp.band}</div>
+                    {bandLabelMap.get(emp.band) && bandLabelMap.get(emp.band) !== emp.band ? (
+                      <div className="text-[11px] text-[rgb(var(--muted))]">{bandLabelMap.get(emp.band)}</div>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="font-mono text-sm font-semibold text-[rgb(var(--text))]">{emp.stream || "—"}</div>
+                    {emp.stream && streamLabelMap.get(emp.stream) && streamLabelMap.get(emp.stream) !== emp.stream ? (
+                      <div className="text-[11px] text-[rgb(var(--muted))]">{streamLabelMap.get(emp.stream)}</div>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => setEmployeeSubmissionWindow(emp, "open")}
                         disabled={windowUpdatingId === emp.id || globalWindowOpen}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2.5 py-1.5 text-[11px] font-bold text-blue-600 dark:text-blue-300 transition-all hover:bg-blue-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                        title={globalWindowOpen ? "Cannot start only one employee while global window is already open" : "Open submission window only for this employee"}
+                        className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-300 transition-all hover:bg-emerald-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                        title={globalWindowOpen ? "Cannot open while global window is active" : "Open submission window for this employee"}
                       >
-                        <Play size={14} /> Open Only This
+                        <Play size={12} /> Open
                       </button>
                       <button
                         onClick={() => setEmployeeSubmissionWindow(emp, "close")}
                         disabled={windowUpdatingId === emp.id || !globalWindowOpen || emp.submissionWindowForceClosed}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2.5 py-1.5 text-[11px] font-bold text-[rgb(var(--text))] transition-all hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-                        title={globalWindowOpen ? "Close submission only for this employee" : "Global window is closed for all employees"}
+                        className="inline-flex items-center gap-1 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2 py-1 text-[11px] font-semibold text-[rgb(var(--muted))] transition-all hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30 disabled:cursor-not-allowed disabled:opacity-40"
+                        title={globalWindowOpen ? "Close submission for this employee" : "Global window is already closed"}
                       >
-                        <Square size={13} /> Close This
+                        <Square size={11} /> Close
                       </button>
                     </div>
-                  </div>
-                </td>
-                <td className="p-6 text-right px-8">
-                  <div className="flex justify-end gap-2">
-                    <button
-                      onClick={() => openEdit(emp)}
-                      className="p-2.5 bg-blue-500/10 text-blue-300 hover:bg-blue-500 hover:text-white rounded-xl transition-all border border-blue-500/20"
-                      title="Edit"
-                    >
-                      <Edit3 size={18} />
-                    </button>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex justify-end gap-1.5">
+                      <button
+                        onClick={() => openEdit(emp)}
+                        className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500 hover:text-white rounded-md transition-all border border-blue-500/20"
+                        title="Edit"
+                      >
+                        <Edit3 size={15} />
+                      </button>
 
-                    <button
-                      onClick={() => requestPromoteEmployee(emp)}
-                      disabled={promotingId === emp.id}
-                      className="p-2.5 bg-purple-500/10 text-purple-300 hover:bg-purple-500 hover:text-white rounded-xl transition-all border border-purple-500/20"
-                      title="Promote"
-                    >
-                      <ArrowUpCircle size={18} />
-                    </button>
+                      <button
+                        onClick={() => requestPromoteEmployee(emp)}
+                        disabled={promotingId === emp.id}
+                        className="p-2 bg-purple-500/10 text-purple-600 dark:text-purple-300 hover:bg-purple-500 hover:text-white rounded-md transition-all border border-purple-500/20"
+                        title="Promote"
+                      >
+                        <ArrowUpCircle size={15} />
+                      </button>
 
-                    <button
-                      onClick={() => requestRemoveEmployee(emp)}
-                      disabled={isSelf(emp)}
-                      className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
-                      title="Remove"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+                      <button
+                        onClick={() => requestRemoveEmployee(emp)}
+                        disabled={isSelf(emp)}
+                        className="p-2 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500 hover:text-white rounded-md transition-all border border-red-500/20"
+                        title="Remove"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
 
-            {!employeesLoading && filtered.length === 0 ? (
-              <tr>
-                <td className="p-10 text-center text-slate-500" colSpan={7}>
-                  No employees to show.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+              {!employeesLoading && filtered.length === 0 ? (
+                <tr>
+                  <td className="py-16 text-center" colSpan={8}>
+                    <div className="flex flex-col items-center gap-3">
+                      <Search size={32} className="text-[rgb(var(--muted))]/40" />
+                      <p className="text-[rgb(var(--muted))] text-sm">No employees match your filters.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Mobile Card View (visible below lg) ── */}
+      <div className="lg:hidden space-y-3">
+        {visibleEmployees.length > 0 ? (
+          <label className="flex items-center gap-2 text-xs text-[rgb(var(--muted))] px-1">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={toggleSelectAllVisible}
+              disabled={visibleEmployees.length === 0 || visibleEmployees.every((emp) => isSelf(emp))}
+              className="h-3.5 w-3.5 accent-[rgb(var(--primary))]"
+            />
+            Select all ({visibleEmployees.length})
+          </label>
+        ) : null}
+
+        {visibleEmployees.map((emp) => (
+          <div key={emp.id} className="rt-panel rounded-xl p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <input
+                  type="checkbox"
+                  checked={selectedIdSet.has(emp.id)}
+                  onChange={() => toggleRowSelected(emp.id)}
+                  disabled={isSelf(emp)}
+                  className="h-4 w-4 mt-1 shrink-0 accent-[rgb(var(--primary))]"
+                />
+                <div className="min-w-0">
+                  <div className="font-semibold text-[rgb(var(--text))] truncate">{emp.name}</div>
+                  <div className="text-[11px] text-[rgb(var(--muted))] font-mono">{emp.id}</div>
+                </div>
+              </div>
+              <span className={[
+                "shrink-0 inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold border",
+                emp.role === "Admin" ? "bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/20" :
+                emp.role === "Manager" ? "bg-purple-500/10 text-purple-600 dark:text-purple-300 border-purple-500/20" :
+                "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
+              ].join(" ")}>
+                {emp.role}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 text-[11px]">
+              <div>
+                <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Designation</div>
+                <div className="text-[rgb(var(--text))] font-medium truncate">{emp.designation ?? emp.role}</div>
+              </div>
+              <div>
+                <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Band</div>
+                <div className="text-[rgb(var(--text))] font-mono font-semibold">{emp.band}</div>
+              </div>
+              <div>
+                <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Stream</div>
+                <div className="text-[rgb(var(--text))] font-mono font-semibold">{emp.stream || "—"}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-1 border-t border-[rgb(var(--border))]">
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setEmployeeSubmissionWindow(emp, "open")}
+                  disabled={windowUpdatingId === emp.id || globalWindowOpen}
+                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-300 transition-all hover:bg-emerald-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Play size={10} /> Open
+                </button>
+                <button
+                  onClick={() => setEmployeeSubmissionWindow(emp, "close")}
+                  disabled={windowUpdatingId === emp.id || !globalWindowOpen || emp.submissionWindowForceClosed}
+                  className="inline-flex items-center gap-1 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2 py-1 text-[10px] font-semibold text-[rgb(var(--muted))] transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Square size={9} /> Close
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => openEdit(emp)}
+                  className="p-1.5 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500 hover:text-white rounded-md transition-all border border-blue-500/20"
+                  title="Edit"
+                >
+                  <Edit3 size={14} />
+                </button>
+                <button
+                  onClick={() => requestPromoteEmployee(emp)}
+                  disabled={promotingId === emp.id}
+                  className="p-1.5 bg-purple-500/10 text-purple-600 dark:text-purple-300 hover:bg-purple-500 hover:text-white rounded-md transition-all border border-purple-500/20"
+                  title="Promote"
+                >
+                  <ArrowUpCircle size={14} />
+                </button>
+                <button
+                  onClick={() => requestRemoveEmployee(emp)}
+                  disabled={isSelf(emp)}
+                  className="p-1.5 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500 hover:text-white rounded-md transition-all border border-red-500/20"
+                  title="Remove"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {!employeesLoading && filtered.length === 0 ? (
+          <div className="rt-panel rounded-xl p-10 flex flex-col items-center gap-3">
+            <Search size={28} className="text-[rgb(var(--muted))]/40" />
+            <p className="text-[rgb(var(--muted))] text-sm">No employees match your filters.</p>
+          </div>
+        ) : null}
       </div>
 
       {pager ? (
-        <div className="pt-4">
+        <div className="pt-2">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <button
               type="button"
               onClick={pager.onReset}
               disabled={Boolean(pager.loading) || !pager.onReset}
               className={[
-                "rt-btn-ghost inline-flex items-center gap-2 px-4 py-2 text-[11px] uppercase tracking-widest transition-all",
+                "rt-btn-ghost transition-all text-sm",
                 Boolean(pager.loading) || !pager.onReset ? "opacity-50 cursor-not-allowed" : "",
               ].join(" ")}
               title="First page"
@@ -1011,26 +1247,21 @@ export default function EmployeeDirectory({
 
       
       {showAddModal ? (
-        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-black uppercase tracking-tight">Add Employee</h3>
-                <p className="text-gray-500 text-sm mt-1">Creates a new employee record.</p>
-              </div>
-              <button
-                onClick={closeAdd}
-                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
-                aria-label="Close"
-                title="Close"
-              >
-                <X size={18} />
-              </button>
+        <ModalOverlay
+          open={showAddModal}
+          onClose={closeAdd}
+          maxWidth="max-w-lg"
+          zIndex={60}
+          header={
+            <div>
+              <h3 className="font-semibold uppercase tracking-tight">Add Employee</h3>
+              <p className="text-gray-500 text-sm mt-1">Creates a new employee record.</p>
             </div>
-
-	            <form onSubmit={submitAdd} className="mt-6 space-y-4">
+          }
+        >
+	            <form onSubmit={submitAdd} className="mt-1 space-y-4">
 	              <div>
-	                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+	                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
 	                  Employee ID
 	                </label>
 	                <input
@@ -1064,7 +1295,7 @@ export default function EmployeeDirectory({
 	              </div>
 
 	              <div>
-	                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+	                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
 	                  Employee Name *
 	                </label>
 	                <input
@@ -1076,7 +1307,7 @@ export default function EmployeeDirectory({
               </div>
 
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Email
                 </label>
                 <input
@@ -1089,7 +1320,7 @@ export default function EmployeeDirectory({
 
               <div className={addRoleIsAdmin ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 sm:grid-cols-2 gap-4"}>
                 <div>
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                     Role
                   </label>
                   <select
@@ -1114,7 +1345,7 @@ export default function EmployeeDirectory({
 
                 {!addRoleIsAdmin ? (
                   <div>
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                       Band
                     </label>
                     <select
@@ -1123,8 +1354,8 @@ export default function EmployeeDirectory({
                       className="mt-2 rt-input text-sm"
                     >
                       {bandSelectOptions.map((band) => (
-                        <option key={`add-band:${band}`} value={band}>
-                          {band}
+                        <option key={`add-band:${band.value}`} value={band.value}>
+                          {band.label}
                         </option>
                       ))}
                     </select>
@@ -1133,13 +1364,13 @@ export default function EmployeeDirectory({
               </div>
 
               {addRoleIsAdmin ? (
-                <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
+                <div className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
                   Admin role does not require Band and Stream.
                 </div>
               ) : null}
 
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Designation
                 </label>
                 <input
@@ -1153,7 +1384,7 @@ export default function EmployeeDirectory({
               <div className={addRoleIsAdmin ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 sm:grid-cols-2 gap-4"}>
                 {!addRoleIsAdmin ? (
                   <div>
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                       Stream
                     </label>
                     <select
@@ -1161,17 +1392,27 @@ export default function EmployeeDirectory({
                       onChange={(e) => setAddDraft((d) => ({ ...d, stream: e.target.value }))}
                       className="mt-2 rt-input text-sm"
                     >
+                      <option value="">Unassigned</option>
                       {streamSelectOptions.map((stream) => (
-                        <option key={`add-stream:${stream}`} value={stream}>
-                          {stream}
+                        <option key={`add-stream:${stream.value}`} value={stream.value}>
+                          {stream.label}
                         </option>
                       ))}
                     </select>
+                    {addDraft.band && addDraft.stream ? (
+                      <div className="mt-2 text-xs text-[rgb(var(--muted))]">
+                        {addDesignationLoading
+                          ? "Loading designation…"
+                          : addDesignation?.designation
+                            ? `Designation: ${addDesignation.designation}`
+                            : "No designation found for this band/stream."}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 
                 <div>
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                     Manager (optional)
                   </label>
                   <select
@@ -1205,7 +1446,7 @@ export default function EmployeeDirectory({
                 <button
                   type="button"
                   onClick={closeAdd}
-                  className="rt-btn-ghost text-xs uppercase tracking-widest"
+                  className="rt-btn-ghost"
                 >
                   Cancel
                 </button>
@@ -1213,7 +1454,7 @@ export default function EmployeeDirectory({
                   type="submit"
                   disabled={employeesLoading || mutating}
                   className={[
-                    "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all",
+                    "rt-btn-primary transition-all",
                     employeesLoading || mutating ? "opacity-60 cursor-not-allowed" : "",
                   ].join(" ")}
                 >
@@ -1221,32 +1462,27 @@ export default function EmployeeDirectory({
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       
       {editingEmployee ? (
-        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-black uppercase tracking-tight">Edit Employee</h3>
-                <p className="text-gray-500 text-sm mt-1 font-mono">{editingEmployee.id}</p>
-              </div>
-              <button
-                onClick={closeEdit}
-                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
-                aria-label="Close"
-                title="Close"
-              >
-                <X size={18} />
-              </button>
+        <ModalOverlay
+          open={Boolean(editingEmployee)}
+          onClose={closeEdit}
+          maxWidth="max-w-lg"
+          zIndex={60}
+          header={
+            <div>
+              <h3 className="font-semibold uppercase tracking-tight">Edit Employee</h3>
+              <p className="text-gray-500 text-sm mt-1 font-mono">{editingEmployee.id}</p>
             </div>
+          }
+        >
 
             <form onSubmit={saveEdit} className="mt-6 space-y-4">
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Employee ID
                 </label>
                 <input
@@ -1257,7 +1493,7 @@ export default function EmployeeDirectory({
               </div>
 
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Employee Name *
                 </label>
                 <input
@@ -1269,37 +1505,71 @@ export default function EmployeeDirectory({
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-                    Role
-                  </label>
-                  <select
-                    value={draft.role}
-                    onChange={(e) => setDraft((d) => ({ ...d, role: e.target.value }))}
-                    className="mt-2 rt-input text-sm"
-                  >
-                    <option value="Employee">Employee</option>
-                    <option value="Manager">Manager</option>
-                    <option value="Admin">Admin</option>
-                  </select>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                      Role
+                    </label>
+                    <select
+                      value={draft.role}
+                      onChange={(e) => setDraft((d) => ({ ...d, role: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                    >
+                      <option value="Employee">Employee</option>
+                      <option value="Manager">Manager</option>
+                      <option value="Admin">Admin</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                      Band
+                    </label>
+                    <select
+                      value={draft.band}
+                      onChange={(e) => setDraft((d) => ({ ...d, band: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                    >
+                      {bandSelectOptions.map((band) => (
+                        <option key={`edit-band:${band.value}`} value={band.value}>
+                          {band.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
-                    Band
-                  </label>
-                  <input
-                    value={draft.band}
-                    onChange={(e) => setDraft((d) => ({ ...d, band: e.target.value }))}
-                    className="mt-2 rt-input text-sm"
-                    placeholder="e.g., B5L"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                      Stream
+                    </label>
+                    <select
+                      value={draft.stream}
+                      onChange={(e) => setDraft((d) => ({ ...d, stream: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                    >
+                      <option value="">Unassigned</option>
+                      {streamSelectOptions.map((stream) => (
+                        <option key={`edit-stream:${stream.value}`} value={stream.value}>
+                          {stream.label}
+                        </option>
+                      ))}
+                    </select>
+                    {draft.band && draft.stream ? (
+                      <div className="mt-2 text-xs text-[rgb(var(--muted))]">
+                        {editDesignationLoading
+                          ? "Loading designation…"
+                          : editDesignation?.designation
+                            ? `Designation: ${editDesignation.designation}`
+                            : "No designation found for this band/stream."}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
 
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Designation
                 </label>
                 <input
@@ -1315,7 +1585,7 @@ export default function EmployeeDirectory({
                   type="button"
                   onClick={closeEdit}
                   disabled={mutating}
-                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-ghost disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
@@ -1323,7 +1593,7 @@ export default function EmployeeDirectory({
                   type="submit"
                   disabled={mutating}
                   className={[
-                    "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all",
+                    "rt-btn-primary transition-all",
                     mutating ? "opacity-60 cursor-not-allowed" : "",
                   ].join(" ")}
                 >
@@ -1331,8 +1601,7 @@ export default function EmployeeDirectory({
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </div>
   );

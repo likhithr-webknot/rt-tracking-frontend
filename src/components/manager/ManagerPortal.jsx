@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Bell,
   BellDot,
+  Calendar,
   CheckCheck,
   ChevronLeft,
   ChevronRight,
@@ -44,6 +45,7 @@ import {
 import Toast from "../shared/Toast.jsx";
 import CursorPagination from "../shared/CursorPagination.jsx";
 import ThemeToggle from "../shared/ThemeToggle.jsx";
+import ModalOverlay from "../shared/ModalOverlay.jsx";
 
 const MANAGER_REVIEW_DRAFT_KEY = "rt_tracking_manager_review_draft_v1";
 const MANAGER_SIDEBAR_PREF_KEY = "rt_tracking_manager_sidebar_open_v1";
@@ -538,35 +540,35 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
   return (
     <aside
       className={[
-        "fixed left-0 top-0 h-full bg-[linear-gradient(180deg,_rgb(var(--surface))_0%,_rgb(var(--surface-2))_100%)] backdrop-blur-xl transition-all duration-300 z-50 shadow-[0_16px_36px_rgba(8,22,45,0.18)]",
+        "rt-sidebar fixed left-0 top-0 h-full transition-all duration-300 z-50",
         "flex flex-col",
         "md:translate-x-0",
-        isOpen ? "translate-x-0 w-72" : "-translate-x-full md:translate-x-0 md:w-24",
+        isOpen ? "translate-x-0 w-64" : "-translate-x-full md:translate-x-0 md:w-[72px]",
       ].join(" ")}
     >
-      <div className="p-6 flex items-center justify-between">
+      <div className="p-5 flex items-center justify-between">
         {isOpen ? (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <img
               src="/unnamed.webp"
               alt="Webknot Technologies logo"
-              className="h-9 w-9 rounded-xl object-cover bg-white"
+              className="h-8 w-8 rounded-md object-cover bg-white"
             />
-            <span className="font-black tracking-tight uppercase text-[rgb(var(--text))]">
+            <span className="font-semibold tracking-tight text-[rgb(var(--sidebar-text))]">
               Webknot
             </span>
           </div>
         ) : null}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="p-2 hover:bg-[rgb(var(--surface-2))] rounded-xl text-slate-500 transition-colors"
+          className="p-1.5 hover:bg-[rgb(var(--sidebar-hover))] rounded-md text-[rgb(var(--sidebar-muted))] transition-colors"
           aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
-          {isOpen ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
+          {isOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
         </button>
       </div>
 
-      <nav className="mt-6 px-3 space-y-1.5 flex-1 overflow-y-auto pb-6">
+      <nav className="mt-4 px-3 space-y-0.5 flex-1 overflow-y-auto pb-6">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
@@ -574,25 +576,17 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
               key={item.id}
               onClick={() => setActiveTab(item.id)}
               className={[
-                "w-full rounded-xl transition-all duration-150 border group",
-                "px-4 py-3.5",
-                isOpen ? "flex items-center justify-start gap-4" : "flex items-center justify-center",
-                isActive
-                  ? "bg-[rgb(var(--primary-soft))] border-transparent text-[rgb(var(--text))] shadow-[0_10px_18px_rgba(46,103,220,0.16)]"
-                  : "border-transparent text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]",
+                "rt-sidebar-nav-item",
+                isOpen ? "justify-start gap-3" : "justify-center",
+                isActive ? "rt-sidebar-nav-item--active" : "",
               ].join(" ")}
               title={!isOpen ? item.label : undefined}
             >
-              <span
-                className={[
-                  "w-6 grid place-items-center shrink-0 transition-colors",
-                  isActive ? "text-[rgb(var(--primary))]" : "text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))]",
-                ].join(" ")}
-              >
+              <span className="w-5 grid place-items-center shrink-0">
                 {item.icon}
               </span>
               {isOpen ? (
-                <span className="text-sm font-bold tracking-tight whitespace-nowrap">
+                <span className="text-sm font-medium whitespace-nowrap">
                   {item.label}
                 </span>
               ) : null}
@@ -601,33 +595,33 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         })}
       </nav>
 
-      <div className="mt-auto w-full px-3 pb-6 space-y-3">
+      <div className="mt-auto w-full px-3 pb-5 space-y-2">
         <div
           className={[
-            "rounded-xl bg-[rgb(var(--surface-2))] p-3 text-[rgb(var(--text))]",
+            "rounded-md bg-[rgb(var(--sidebar-hover))] border border-[rgb(var(--sidebar-border))] p-3",
             isOpen ? "" : "hidden",
           ].join(" ")}
         >
-          <div className="font-bold tracking-tight text-[rgb(var(--text))] truncate">
+          <div className="font-medium text-[rgb(var(--sidebar-text))] truncate text-sm">
             {account?.name || account?.email || "Unknown"}
           </div>
-          <div className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))] truncate">
+          <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--sidebar-muted))] truncate">
             {account?.role || "Manager"}
           </div>
-          <div className="mt-1 text-xs text-slate-500 truncate">{account?.subtitle || "—"}</div>
+          <div className="mt-1 text-xs text-[rgb(var(--sidebar-muted))] truncate">{account?.subtitle || "—"}</div>
         </div>
 
         {!isOpen ? (
-          <div className="grid place-items-center text-slate-500">
+          <div className="grid place-items-center text-[rgb(var(--sidebar-muted))]">
             <div
-              className="h-10 w-10 rounded-xl bg-[rgb(var(--surface-2))] grid place-items-center"
+              className="h-9 w-9 rounded-md bg-[rgb(var(--sidebar-hover))] border border-[rgb(var(--sidebar-border))] grid place-items-center"
               title={[
                 account?.name || account?.email || "Unknown",
                 account?.role || "Manager",
                 account?.subtitle || "",
               ].filter(Boolean).join(" • ")}
             >
-              <UserCircle2 size={18} />
+              <UserCircle2 size={16} />
             </div>
           </div>
         ) : null}
@@ -643,14 +637,14 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         <button
           onClick={onLogout}
           className={[
-            "w-full rounded-xl transition-all font-bold group",
-            isOpen ? "flex items-center justify-start gap-4 p-3" : "flex items-center justify-center p-3",
-            "hover:bg-red-500/10",
+            "w-full rounded-md transition-colors font-medium group text-[rgb(var(--sidebar-muted))]",
+            isOpen ? "flex items-center justify-start gap-3 px-3 py-2.5" : "flex items-center justify-center p-2.5",
+            "hover:text-red-400 hover:bg-[rgb(var(--sidebar-hover))]",
           ].join(" ")}
           title={!isOpen ? "Logout" : undefined}
         >
-          <span className="w-6 grid place-items-center shrink-0">
-            <LogOut size={20} className="group-hover:translate-x-1 transition-transform" />
+          <span className="w-5 grid place-items-center shrink-0">
+            <LogOut size={18} />
           </span>
           {isOpen ? <span className="text-sm">Logout</span> : null}
         </button>
@@ -675,7 +669,31 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [managerStream, setManagerStream] = useState(() => String(auth?.stream || "").trim());
   const [filter, setFilter] = useState("PENDING_MANAGER_REVIEW"); // SUBMITTED | ALL | PENDING_MANAGER_REVIEW
   const [teamSearch, setTeamSearch] = useState("");
-  const [activeTab, setActiveTab] = useState("team"); // team | self-review
+  /* ── Path-based routing: sync activeTab ↔ URL path ── */
+  const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review"]), []);
+
+  const getMgrTabFromPath = useCallback(() => {
+    const raw = window.location.pathname.replace(/^\//, "").split("/")[0];
+    return MGR_VALID_TABS.has(raw) ? raw : "team";
+  }, [MGR_VALID_TABS]);
+
+  const [activeTab, setActiveTabRaw] = useState(() => getMgrTabFromPath());
+
+  const setActiveTab = useCallback((tab) => {
+    setActiveTabRaw(tab);
+    const path = tab === "team" ? "/" : `/${tab}`;
+    if (window.location.pathname !== path) {
+      window.history.pushState(null, "", path);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPathChange = () => setActiveTabRaw(getMgrTabFromPath());
+    window.addEventListener("popstate", onPathChange);
+    return () => {
+      window.removeEventListener("popstate", onPathChange);
+    };
+  }, [getMgrTabFromPath]);
   const [managerSelfReviewText, setManagerSelfReviewText] = useState("");
   const [managerSelfKpiRatings, setManagerSelfKpiRatings] = useState({});
   const [managerSelfValueRatings, setManagerSelfValueRatings] = useState({});
@@ -789,6 +807,11 @@ export default function ManagerPortal({ onLogout, auth }) {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2400);
   }, []);
+
+  useEffect(() => { if (notificationsError) showToast({ title: "Notifications Error", message: notificationsError, tone: "error" }); }, [notificationsError, showToast]);
+  useEffect(() => { if (teamError) showToast({ title: "Team Load Failed", message: teamError, tone: "error" }); }, [teamError, showToast]);
+  useEffect(() => { if (managerDraftError) showToast({ title: "Draft Error", message: managerDraftError, tone: "error" }); }, [managerDraftError, showToast]);
+  useEffect(() => { if (selfRatingValidationError) showToast({ title: "Validation", message: selfRatingValidationError, tone: "error" }); }, [selfRatingValidationError, showToast]);
 
   const unreadNotificationsCount = useMemo(
     () => notifications.reduce((count, item) => (item?.read ? count : count + 1), 0),
@@ -1163,7 +1186,9 @@ export default function ManagerPortal({ onLogout, auth }) {
         for (const k of list) map[String(k.id)] = { title: k.title, weight: k.weight };
         setKpiIndex(map);
         setSelfKpis(list);
-      } catch { void 0; } finally {
+      } catch (err) {
+        if (err?.name !== "AbortError" && mounted) showToast({ title: "KPI Load Failed", message: err?.message || "Failed to load KPI definitions.", tone: "error" });
+      } finally {
         if (mounted) setSelfKpisLoading(false);
       }
     })();
@@ -1210,9 +1235,10 @@ export default function ManagerPortal({ onLogout, auth }) {
         }
         if (!mounted) return;
         setSelfValues(deduped);
-      } catch {
+      } catch (err) {
         if (!mounted) return;
         setSelfValues([]);
+        if (err?.name !== "AbortError") showToast({ title: "Values Load Failed", message: err?.message || "Failed to load values.", tone: "error" });
       } finally {
         if (mounted) setSelfValuesLoading(false);
       }
@@ -1340,6 +1366,7 @@ export default function ManagerPortal({ onLogout, auth }) {
           return;
         }
         setTeamInsightsRows([]);
+        showToast({ title: "Team Insights Failed", message: err?.message || "Failed to load team insights.", tone: "error" });
       } finally {
         setTeamInsightsLoading(false);
       }
@@ -2044,6 +2071,125 @@ export default function ManagerPortal({ onLogout, auth }) {
   }
 
   return (
+    <>
+    {/* ─── Cycle label + Notification Panel (outside rt-shell) ─── */}
+    <div className="fixed right-4 top-4 z-[65] flex items-center gap-3 md:right-6 md:top-5">
+      <span className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-[rgb(var(--border))]/60 bg-[rgb(var(--surface))]/80 backdrop-blur-md px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-[rgb(var(--muted))] shadow-sm">
+        <Calendar size={14} />
+        {cycleInfo?.label || "—"}
+      </span>
+      <div className="flex flex-col items-end" ref={notificationsPanelRef}>
+        <button
+          type="button"
+          onClick={() => {
+              const nextOpen = !notificationsOpen;
+              setNotificationsOpen(nextOpen);
+              if (nextOpen) reloadNotifications({ silent: true }).catch(() => {});
+            }}
+            className={[
+              "relative inline-flex h-10 w-10 items-center justify-center rounded-md border border-[rgb(var(--border))]",
+              "bg-[rgb(var(--surface))] text-[rgb(var(--text))]",
+              "transition-all duration-200 hover:bg-[rgb(var(--surface-2))]",
+              unreadNotificationsCount > 0 ? "" : "",
+            ].join(" ")}
+            aria-label="Manager notifications"
+            title="Manager notifications"
+          >
+            {unreadNotificationsCount > 0 ? <BellDot size={16} /> : <Bell size={16} />}
+            {unreadNotificationsCount > 0 ? (
+              <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-red-600 px-1 py-0.5 text-center text-[9px] font-semibold text-white">
+                {unreadNotificationsCount > 99 ? "99+" : unreadNotificationsCount}
+              </span>
+            ) : null}
+          </button>
+
+          {notificationsOpen ? (
+            <div className="mt-3 w-[min(92vw,420px)] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] shadow-lg">
+              <div className="flex items-center justify-between border-b border-[rgb(var(--border))] px-4 py-3">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                    Manager Alerts
+                  </div>
+                  <div className="mt-1 text-sm font-medium text-[rgb(var(--text))]">
+                    {unreadNotificationsCount} unread
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => reloadNotifications().catch(() => {})}
+                    className="rounded-md border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-wider text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                  >
+                    Refresh
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => markEveryNotificationRead().catch(() => {})}
+                    className="inline-flex items-center gap-1 rounded-md border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-medium uppercase tracking-wider text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                  >
+                    <CheckCheck size={13} />
+                    Mark all
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-[400px] overflow-y-auto p-3">
+                {!notificationsError && notificationsLoading && notifications.length === 0 ? (
+                  <div className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
+                    Loading alerts...
+                  </div>
+                ) : null}
+                {!notificationsError && !notificationsLoading && notifications.length === 0 ? (
+                  <div className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
+                    No manager alerts yet.
+                  </div>
+                ) : null}
+                <div className="space-y-2">
+                  {notifications.map((item) => (
+                    <button
+                      key={String(item.id)}
+                      type="button"
+                      onClick={() => markNotificationRead(item.id)}
+                      className={[
+                        "w-full rounded-md border px-3 py-2.5 text-left transition",
+                        item.read
+                          ? "border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] opacity-90"
+                          : "border-blue-500/35 bg-blue-500/10",
+                      ].join(" ")}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                            Employee Submission
+                          </div>
+                          <div className="mt-1 text-sm font-bold text-[rgb(var(--text))] break-words">{item.title}</div>
+                          {item.message ? (
+                            <div className="mt-1 text-xs text-[rgb(var(--muted))] break-words">{item.message}</div>
+                          ) : null}
+                        </div>
+                        <div className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[rgb(var(--muted))]">
+                          {formatNotificationTimestamp(item.createdAt)}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                {notificationsNextCursor ? (
+                  <button
+                    type="button"
+                    onClick={() => reloadNotifications({ cursor: notificationsNextCursor, append: true }).catch(() => {})}
+                    className="mt-3 w-full rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2 text-xs font-bold uppercase tracking-wider text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                  >
+                    Load more
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
     <div className="rt-shell flex min-h-screen text-[rgb(var(--text))] font-sans overflow-x-hidden">
       {isSidebarOpen ? (
         <button
@@ -2056,7 +2202,7 @@ export default function ManagerPortal({ onLogout, auth }) {
 
       <button
         type="button"
-        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
+        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
         onClick={() => setIsSidebarOpen((prev) => !prev)}
         aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
       >
@@ -2072,126 +2218,7 @@ export default function ManagerPortal({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-72" : "md:ml-24"} p-4 pt-20 md:pt-6 lg:p-10`}>
-        <div className="pointer-events-none absolute inset-0 -z-10">
-          <div className="absolute -top-24 right-14 h-72 w-72 rounded-full bg-blue-500/10 blur-3xl" />
-          <div className="absolute bottom-8 left-1/3 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
-        </div>
-        <div className="fixed right-4 top-4 z-[65] flex flex-col items-end md:right-8 md:top-5" ref={notificationsPanelRef}>
-          <button
-            type="button"
-            onClick={() => {
-              const nextOpen = !notificationsOpen;
-              setNotificationsOpen(nextOpen);
-              if (nextOpen) reloadNotifications({ silent: true }).catch(() => {});
-            }}
-            className={[
-              "relative inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[rgb(var(--border))]",
-              "bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-[0_12px_28px_rgba(8,22,45,0.15)]",
-              "transition-all duration-300 hover:bg-[rgb(var(--surface-2))] hover:shadow-[0_16px_30px_rgba(8,22,45,0.2)]",
-              unreadNotificationsCount > 0 ? "animate-[pulse_2.4s_ease-in-out_infinite]" : "",
-            ].join(" ")}
-            aria-label="Manager notifications"
-            title="Manager notifications"
-          >
-            {unreadNotificationsCount > 0 ? <BellDot size={18} /> : <Bell size={18} />}
-            {unreadNotificationsCount > 0 ? (
-              <span className="absolute -right-1.5 -top-1.5 min-w-[20px] rounded-full bg-red-600 px-1.5 py-0.5 text-center text-[10px] font-black text-white">
-                {unreadNotificationsCount > 99 ? "99+" : unreadNotificationsCount}
-              </span>
-            ) : null}
-          </button>
-
-          {notificationsOpen ? (
-            <div className="mt-3 w-[min(92vw,420px)] rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] shadow-[0_24px_52px_rgba(7,18,42,0.24)] backdrop-blur-xl">
-              <div className="flex items-center justify-between border-b border-[rgb(var(--border))] px-4 py-3">
-                <div>
-                  <div className="text-xs font-black uppercase tracking-[0.18em] text-[rgb(var(--muted))]">
-                    Manager Alerts
-                  </div>
-                  <div className="mt-1 text-sm font-bold text-[rgb(var(--text))]">
-                    {unreadNotificationsCount} unread
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => reloadNotifications().catch(() => {})}
-                    className="rounded-lg border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
-                  >
-                    Refresh
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => markEveryNotificationRead().catch(() => {})}
-                    className="inline-flex items-center gap-1 rounded-lg border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
-                  >
-                    <CheckCheck size={13} />
-                    Mark all
-                  </button>
-                </div>
-              </div>
-
-              <div className="max-h-[400px] overflow-y-auto p-3">
-                {notificationsError ? (
-                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-200">
-                    {notificationsError}
-                  </div>
-                ) : null}
-                {!notificationsError && notificationsLoading && notifications.length === 0 ? (
-                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
-                    Loading alerts...
-                  </div>
-                ) : null}
-                {!notificationsError && !notificationsLoading && notifications.length === 0 ? (
-                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
-                    No manager alerts yet.
-                  </div>
-                ) : null}
-                <div className="space-y-2">
-                  {notifications.map((item) => (
-                    <button
-                      key={String(item.id)}
-                      type="button"
-                      onClick={() => markNotificationRead(item.id)}
-                      className={[
-                        "w-full rounded-xl border px-3 py-2.5 text-left transition",
-                        item.read
-                          ? "border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] opacity-90"
-                          : "border-blue-500/35 bg-blue-500/10",
-                      ].join(" ")}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[rgb(var(--muted))]">
-                            Employee Submission
-                          </div>
-                          <div className="mt-1 text-sm font-bold text-[rgb(var(--text))] break-words">{item.title}</div>
-                          {item.message ? (
-                            <div className="mt-1 text-xs text-[rgb(var(--muted))] break-words">{item.message}</div>
-                          ) : null}
-                        </div>
-                        <div className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))]">
-                          {formatNotificationTimestamp(item.createdAt)}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-
-                {notificationsNextCursor ? (
-                  <button
-                    type="button"
-                    onClick={() => reloadNotifications({ cursor: notificationsNextCursor, append: true }).catch(() => {})}
-                    className="mt-3 w-full rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2 text-xs font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
-                  >
-                    Load more
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-        </div>
+      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-64" : "md:ml-[72px]"} p-4 pt-20 md:pt-6 lg:p-8`}>
         <header className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-end md:justify-between gap-6">
           <div className="rt-page-header">
             <div className="rt-kicker">Manager Portal</div>
@@ -2276,9 +2303,9 @@ export default function ManagerPortal({ onLogout, auth }) {
               }}
               disabled={teamLoading || teamInsightsLoading}
               className={[
-                "rt-btn-ghost inline-flex items-center gap-2 text-xs uppercase tracking-widest transition-all",
+                "rt-btn-ghost transition-all",
                 teamLoading || teamInsightsLoading ? "opacity-60 cursor-not-allowed" : "",
-              ].join(" ")}
+              ].join("")}
               title="Refresh"
             >
               <RefreshCw size={18} /> {teamLoading || teamInsightsLoading ? "Loading…" : "Refresh"}
@@ -2289,7 +2316,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       {activeTab === "team" ? (
         <section className="max-w-7xl mx-auto mt-10 grid grid-cols-1 xl:grid-cols-3 gap-8">
           {(teamLoading && teamSubs.length === 0) || (teamInsightsLoading && teamInsightSourceRows.length === 0) ? (
-            <div className="xl:col-span-3 rt-panel-subtle rounded-3xl p-6 text-sm text-[rgb(var(--muted))] animate-pulse">
+            <div className="xl:col-span-3 rt-panel-subtle rounded-lg p-6 text-sm text-[rgb(var(--muted))] animate-pulse">
               Loading team submissions and manager insights…
             </div>
           ) : null}
@@ -2299,22 +2326,22 @@ export default function ManagerPortal({ onLogout, auth }) {
               <p className="rt-section-subtitle">Queue health, review velocity, and actionable pending load.</p>
             </div>
             <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-              <div className="rt-panel-subtle p-4 rounded-2xl">
+              <div className="rt-panel-subtle p-4 rounded-lg">
                 <div className="rt-kicker">Review Coverage</div>
                 <div className="mt-2 text-2xl rt-stat-value">{managerInsights.reviewedCoverage}%</div>
               </div>
-              <div className="rt-panel-subtle p-4 rounded-2xl">
+              <div className="rt-panel-subtle p-4 rounded-lg">
                 <div className="rt-kicker">Pending Queue</div>
                 <div className="mt-2 text-2xl rt-stat-value">{managerInsights.pendingCoverage}%</div>
               </div>
-              <div className="rt-panel-subtle p-4 rounded-2xl">
+              <div className="rt-panel-subtle p-4 rounded-lg">
                 <div className="rt-kicker">Avg Review Time</div>
                 <div className="mt-2 flex items-center gap-2 text-2xl rt-stat-value">
                   <Clock3 size={18} />
                   {managerInsights.avgTurnaroundHours}h
                 </div>
               </div>
-              <div className="rt-panel-subtle p-4 rounded-2xl">
+              <div className="rt-panel-subtle p-4 rounded-lg">
                 <div className="rt-kicker">Reject Signals</div>
                 <div className="mt-2 flex items-center gap-2 text-2xl rt-stat-value">
                   <TrendingUp size={18} />
@@ -2323,7 +2350,7 @@ export default function ManagerPortal({ onLogout, auth }) {
               </div>
             </div>
             <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="rt-panel-subtle p-4 rounded-2xl">
+              <div className="rt-panel-subtle p-4 rounded-lg">
                 <div className="rt-kicker">Queue Funnel</div>
                 <div className="mt-4 space-y-3">
                   {managerInsights.queueFunnel.map((item) => (
@@ -2342,14 +2369,14 @@ export default function ManagerPortal({ onLogout, auth }) {
                   ))}
                 </div>
               </div>
-              <div className="rt-panel-subtle p-4 rounded-2xl">
+              <div className="rt-panel-subtle p-4 rounded-lg">
                 <div className="rt-kicker">Pending Preview</div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {managerInsights.pendingPreview.length ? (
                     managerInsights.pendingPreview.map((emp) => (
                       <span
                         key={`pending:${emp.id}`}
-                        className="inline-flex items-center gap-2 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-1.5 text-xs"
+                        className="inline-flex items-center gap-2 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-1.5 text-xs"
                       >
                         <span className="font-semibold text-[rgb(var(--text))]">{emp.name}</span>
                         <span className="font-mono text-[rgb(var(--muted))]">{emp.id}</span>
@@ -2362,12 +2389,12 @@ export default function ManagerPortal({ onLogout, auth }) {
               </div>
             </div>
             <div className="mt-6 grid grid-cols-1 xl:grid-cols-3 gap-4">
-              <div className="rt-panel-subtle p-4 rounded-2xl">
+              <div className="rt-panel-subtle p-4 rounded-lg">
                 <div className="rt-kicker">Stream Granularity</div>
                 <div className="mt-3 space-y-2">
                   {managerGranularity.streamRows.length ? (
                     managerGranularity.streamRows.map((row) => (
-                      <div key={`stream:${row.name}`} className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2">
+                      <div key={`stream:${row.name}`} className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-semibold text-[rgb(var(--text))]">{row.name}</span>
                           <span className="font-mono text-[rgb(var(--muted))]">{row.total}</span>
@@ -2382,12 +2409,12 @@ export default function ManagerPortal({ onLogout, auth }) {
                   )}
                 </div>
               </div>
-              <div className="rt-panel-subtle p-4 rounded-2xl">
+              <div className="rt-panel-subtle p-4 rounded-lg">
                 <div className="rt-kicker">Band Granularity</div>
                 <div className="mt-3 space-y-2">
                   {managerGranularity.bandRows.length ? (
                     managerGranularity.bandRows.map((row) => (
-                      <div key={`band:${row.name}`} className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2">
+                      <div key={`band:${row.name}`} className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-semibold text-[rgb(var(--text))]">{row.name}</span>
                           <span className="font-mono text-[rgb(var(--muted))]">{row.total}</span>
@@ -2402,12 +2429,12 @@ export default function ManagerPortal({ onLogout, auth }) {
                   )}
                 </div>
               </div>
-              <div className="rt-panel-subtle p-4 rounded-2xl">
+              <div className="rt-panel-subtle p-4 rounded-lg">
                 <div className="rt-kicker">Top Employee Signals</div>
                 <div className="mt-3 space-y-2">
                   {managerGranularity.topEmployees.length ? (
                     managerGranularity.topEmployees.map((row, idx) => (
-                      <div key={`signal:${row.id}:${idx}`} className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2">
+                      <div key={`signal:${row.id}:${idx}`} className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2">
                         <div className="flex items-center justify-between gap-2 text-xs">
                           <span className="font-semibold text-[rgb(var(--text))] truncate">{row.name}</span>
                           <span className="font-mono text-[rgb(var(--text))]">{row.score.toFixed(1)}</span>
@@ -2434,21 +2461,15 @@ export default function ManagerPortal({ onLogout, auth }) {
               </div>
             </div>
 
-            {teamError ? (
-              <div className="px-8 pb-6 text-sm text-red-700 dark:text-red-200">
-                Failed to load: <span className="font-mono">{teamError}</span>
-              </div>
-            ) : null}
-
             <div className="overflow-x-auto">
               <table className="w-full text-left">
-                <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-t border-b border-[rgb(var(--border))]">
+                <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-slate-500 border-t border-b border-[rgb(var(--border))]">
                   <tr>
-                    <th className="p-6 font-black">Employee</th>
-                    <th className="p-6 font-black">Status</th>
-                    <th className="p-6 font-black">Submitted At</th>
-                    <th className="p-6 font-black">Manager Review</th>
-                    <th className="p-6 text-right font-black px-8">Action</th>
+                    <th className="p-6 font-semibold">Employee</th>
+                    <th className="p-6 font-semibold">Status</th>
+                    <th className="p-6 font-semibold">Submitted At</th>
+                    <th className="p-6 font-semibold">Manager Review</th>
+                    <th className="p-6 text-right font-semibold px-8">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[rgb(var(--border))]">
@@ -2474,7 +2495,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                         <td className="p-6">
                           <span
                             className={[
-                              "text-[10px] font-black uppercase px-3 py-1 rounded-lg border",
+                              "text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border",
                               isSubmitted
                                 ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
                                 : "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20",
@@ -2488,11 +2509,11 @@ export default function ManagerPortal({ onLogout, auth }) {
                         </td>
                         <td className="p-6">
                           {s.managerSubmitted ? (
-                            <span className="text-[10px] font-black uppercase px-3 py-1 rounded-lg border bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20">
+                            <span className="text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20">
                               Submitted
                             </span>
                           ) : (
-                            <span className="text-[10px] font-black uppercase px-3 py-1 rounded-lg border bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20">
+                            <span className="text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20">
                               Pending
                             </span>
                           )}
@@ -2501,10 +2522,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                           <button
                             type="button"
                             onClick={() => setReviewModal({ open: true, row: s })}
-                            className={[
-                              "inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all border",
-                              "border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))]",
-                            ].join(" ")}
+                            className="rt-btn-ghost transition-all"
                             title="Review"
                           >
                             Open Review
@@ -2531,9 +2549,9 @@ export default function ManagerPortal({ onLogout, auth }) {
                   onClick={teamPager.onReset}
                   disabled={Boolean(teamPager.loading)}
                   className={[
-                    "rt-btn-ghost text-xs uppercase tracking-widest",
+                    "rt-btn-ghost",
                     teamPager.loading ? "opacity-50 cursor-not-allowed" : "",
-                  ].join(" ")}
+                  ].join("")}
                 >
                   First Page
                 </button>
@@ -2555,17 +2573,17 @@ export default function ManagerPortal({ onLogout, auth }) {
               Click an employee name in the table to open their submitted content and review inputs.
             </p>
             <div className="mt-5 space-y-3">
-              <div className="rt-panel-subtle rounded-2xl px-4 py-3">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Reportees</div>
-                <div className="mt-1 text-xl font-black text-[rgb(var(--text))]">{reporteeCount}</div>
+              <div className="rt-panel-subtle rounded-lg px-4 py-3">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Reportees</div>
+                <div className="mt-1 text-xl font-semibold text-[rgb(var(--text))]">{reporteeCount}</div>
               </div>
-              <div className="rt-panel-subtle rounded-2xl px-4 py-3">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Submitted</div>
-                <div className="mt-1 text-xl font-black text-[rgb(var(--text))]">{submittedCount}</div>
+              <div className="rt-panel-subtle rounded-lg px-4 py-3">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Submitted</div>
+                <div className="mt-1 text-xl font-semibold text-[rgb(var(--text))]">{submittedCount}</div>
               </div>
-              <div className="rt-panel-subtle rounded-2xl px-4 py-3">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Pending Manager Review</div>
-                <div className="mt-1 text-xl font-black text-[rgb(var(--text))]">{pendingManagerReviewCount}</div>
+              <div className="rt-panel-subtle rounded-lg px-4 py-3">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Pending Manager Review</div>
+                <div className="mt-1 text-xl font-semibold text-[rgb(var(--text))]">{pendingManagerReviewCount}</div>
               </div>
             </div>
           </section>
@@ -2579,12 +2597,12 @@ export default function ManagerPortal({ onLogout, auth }) {
             <p className="rt-section-subtitle mt-1">Write your monthly self review, rate KPIs and Webknot values, then submit.</p>
 
             {selfReviewLocked && !selfNeedsResubmission ? (
-              <div className="mt-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-200">
+              <div className="mt-5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-200">
                 This month is submitted and locked. You can submit once per month.
               </div>
             ) : null}
             {!selfReviewLocked && selfNeedsResubmission ? (
-              <div className="mt-5 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
+              <div className="mt-5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
                 Admin requested changes. Please update your self review and submit again.
                 {selfLatestReviewComment ? (
                   <div className="mt-2 text-xs font-mono text-amber-900 dark:text-amber-100 break-words">
@@ -2595,26 +2613,14 @@ export default function ManagerPortal({ onLogout, auth }) {
             ) : null}
 
             {(hydratingSelfSubmission || selfKpisLoading || selfValuesLoading) ? (
-              <div className="mt-5 rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))] animate-pulse">
+              <div className="mt-5 rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))] animate-pulse">
                 Loading your self review template (KPIs and Webknot values)…
-              </div>
-            ) : null}
-
-            {managerDraftError ? (
-              <div className="mt-5 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-                {managerDraftError}
               </div>
             ) : null}
 
             <div className="mt-5 text-xs text-[rgb(var(--muted))]">
               Draft: {selfReviewLocked ? "Locked" : (hydratingSelfSubmission ? "Loading…" : managerDraftSaving ? "Saving…" : "Saved")}
             </div>
-            {selfRatingValidationError ? (
-              <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-                {selfRatingValidationError}
-              </div>
-            ) : null}
-
             <div className="mt-6 space-y-4">
               <textarea
                 value={managerSelfReviewText}
@@ -2642,18 +2648,18 @@ export default function ManagerPortal({ onLogout, auth }) {
                   onClick={enhanceManagerSelfReview}
                   disabled={selfReviewLocked || aiEnhancingSelfReview || !String(managerSelfReviewText || "").trim() || !aiAgent}
                   className={[
-                    "inline-flex items-center gap-2 rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all border",
+                    "rt-btn-primary transition-all",
                     selfReviewLocked || aiEnhancingSelfReview || !String(managerSelfReviewText || "").trim() || !aiAgent
-                      ? "border-[rgb(var(--border))] text-[rgb(var(--muted))] bg-[rgb(var(--surface-2))] cursor-not-allowed"
-                      : "bg-purple-600 text-white border-purple-600 hover:bg-purple-500 shadow-xl shadow-purple-900/20",
+                      ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+                      : "",
                   ].join(" ")}
                 >
                   <Sparkles size={16} /> {aiEnhancingSelfReview ? "Enhancing…" : "AI Enhance"}
                 </button>
               </div>
 
-              <div className="rt-panel-subtle rounded-2xl p-4">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">KPI Ratings (1-5)</div>
+              <div className="rt-panel-subtle rounded-lg p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">KPI Ratings (1-5)</div>
                 <div className="mt-3 space-y-3 max-h-[260px] overflow-y-auto pr-1">
                   {filteredSelfKpis.map((k) => {
                     const id = String(k?.id || "").trim();
@@ -2691,8 +2697,8 @@ export default function ManagerPortal({ onLogout, auth }) {
                 </div>
               </div>
 
-              <div className="rt-panel-subtle rounded-2xl p-4">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Webknot Values Ratings (1-5)</div>
+              <div className="rt-panel-subtle rounded-lg p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Webknot Values Ratings (1-5)</div>
                 <div className="mt-3 space-y-3 max-h-[260px] overflow-y-auto pr-1">
                   {selfValues.map((valueItem) => {
                     const id = String(valueItem?.id || "").trim();
@@ -2737,7 +2743,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                   type="button"
                   onClick={saveManagerSelfReviewDraft}
                   disabled={savingSelfReview || selfReviewLocked}
-                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60"
+                  className="rt-btn-ghost disabled:opacity-60"
                 >
                   Save Draft
                 </button>
@@ -2745,7 +2751,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                   type="button"
                   onClick={submitManagerSelfReview}
                   disabled={savingSelfReview || selfReviewLocked}
-                  className="rt-btn-primary text-xs uppercase tracking-widest disabled:opacity-60"
+                  className="rt-btn-primary disabled:opacity-60"
                 >
                   {selfReviewLocked ? "Submitted" : "Submit Self Review"}
                 </button>
@@ -2758,45 +2764,40 @@ export default function ManagerPortal({ onLogout, auth }) {
       </main>
 
       {reviewModal.open && selectedRow ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[70] overflow-y-auto">
-          <div className="w-full max-w-6xl rt-panel rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-                  Manager Review
-                </div>
-                <div className="mt-2 text-2xl font-black tracking-tight text-[rgb(var(--text))]">
-                  {selectedRow.employee.name}
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  {String(selectedRow.month || month)}
-                </div>
+        <ModalOverlay
+          open={reviewModal.open}
+          onClose={closeReviewModal}
+          maxWidth="max-w-6xl"
+          zIndex={70}
+          header={
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                Manager Review
               </div>
-              <button
-                type="button"
-                onClick={closeReviewModal}
-                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
-                aria-label="Close"
-                title="Close"
-              >
-                <X size={18} />
-              </button>
+              <div className="mt-2 text-2xl font-semibold tracking-tight text-[rgb(var(--text))]">
+                {selectedRow.employee.name}
+              </div>
+              <div className="mt-1 text-xs text-gray-500">
+                {String(selectedRow.month || month)}
+              </div>
             </div>
+          }
+        >
 
             <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="rt-panel-subtle rounded-[2.5rem] p-6">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                   Employee Submitted
                 </div>
                 <div className="mt-4 space-y-5">
                   <div className="grid grid-cols-2 gap-3 text-xs text-[rgb(var(--muted))] font-mono">
                     <div>
-                      <div className="uppercase tracking-[0.18em] text-[rgb(var(--muted))]">Employee</div>
+                      <div className="uppercase tracking-wider text-[rgb(var(--muted))]">Employee</div>
                       <div className="mt-1 text-[rgb(var(--text))] font-semibold">{selectedRow.employee.name}</div>
                       <div className="mt-0.5">{selectedRow.employee.email || "—"}</div>
                     </div>
                     <div className="text-right">
-                      <div className="uppercase tracking-[0.18em] text-[rgb(var(--muted))]">Month</div>
+                      <div className="uppercase tracking-wider text-[rgb(var(--muted))]">Month</div>
                       <div className="mt-1 text-[rgb(var(--text))] font-semibold">{String(selectedRow.month || month)}</div>
                       {selectedRow.cycleLabel ? (
                         <div className="mt-0.5">{String(selectedRow.cycleLabel)}</div>
@@ -2805,14 +2806,14 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Self Review</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Self Review</div>
                     <div className="mt-2 text-sm text-[rgb(var(--text))] whitespace-pre-wrap">
                       {String(selectedRow.payload?.selfReviewText || "—")}
                     </div>
                   </div>
 
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">KPI Ratings (Employee)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">KPI Ratings (Employee)</div>
                     <div className="mt-2 space-y-2">
                       {Object.keys(selectedRow.payload?.kpiRatings || {}).length ? (
                         Object.entries(selectedRow.payload.kpiRatings).map(([id, v]) => (
@@ -2836,7 +2837,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Webknot Values (Employee)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Webknot Values (Employee)</div>
                     <div className="mt-2 space-y-2">
                       {selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object" && Object.keys(selectedRow.payload.webknotValueRatings).length ? (
                         Object.entries(selectedRow.payload.webknotValueRatings)
@@ -2863,11 +2864,11 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Certifications</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Certifications</div>
                     <div className="mt-2 space-y-2">
                       {normalizeCertificationsForState(selectedRow.payload?.certifications).length ? (
                         normalizeCertificationsForState(selectedRow.payload?.certifications).map((cert, idx) => (
-                          <div key={`${cert.name}:${idx}`} className="rt-panel-subtle rounded-xl px-3 py-2 text-sm">
+                          <div key={`${cert.name}:${idx}`} className="rt-panel-subtle rounded-md px-3 py-2 text-sm">
                             <div className="font-semibold text-[rgb(var(--text))]">{cert.name}</div>
                             <div className="text-[11px] text-[rgb(var(--muted))] break-words">{cert.proof || "No proof provided"}</div>
                           </div>
@@ -2879,14 +2880,14 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="rt-panel-subtle rounded-xl px-3 py-3">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Recognitions</div>
-                      <div className="mt-1 text-lg font-black text-[rgb(var(--text))]">
+                    <div className="rt-panel-subtle rounded-md px-3 py-3">
+                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Recognitions</div>
+                      <div className="mt-1 text-lg font-semibold text-[rgb(var(--text))]">
                         {Number(selectedRow.payload?.recognitionsCount || 0)}
                       </div>
                     </div>
-                    <div className="rt-panel-subtle rounded-xl px-3 py-3">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-[rgb(var(--muted))]">Status</div>
+                    <div className="rt-panel-subtle rounded-md px-3 py-3">
+                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Status</div>
                       <div className="mt-1 text-sm font-bold text-[rgb(var(--text))]">
                         {String(selectedRow.status || selectedRow.reviewStatus || "SUBMITTED")}
                       </div>
@@ -2896,12 +2897,12 @@ export default function ManagerPortal({ onLogout, auth }) {
               </div>
 
               <div className="rt-panel-subtle rounded-[2.5rem] p-6">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                   Manager Evaluation
                 </div>
                 <div className="mt-4 space-y-5">
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Webknot Values (Employee Reference)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Webknot Values (Employee Reference)</div>
                     <div className="mt-2 space-y-2">
                       {selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object" && Object.keys(selectedRow.payload.webknotValueRatings).length ? (
                         Object.entries(selectedRow.payload.webknotValueRatings)
@@ -2926,7 +2927,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">KPI Ratings (Manager)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">KPI Ratings (Manager)</div>
                     <div className="mt-2 space-y-3">
                       {Object.keys(selectedRow.payload?.kpiRatings || {}).length ? (
                         Object.entries(selectedRow.payload.kpiRatings).map(([id]) => {
@@ -2970,7 +2971,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Webknot Value Ratings (Manager)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Webknot Value Ratings (Manager)</div>
                     <div className="mt-2 space-y-3">
                       {Array.from(
                         new Set([
@@ -3037,7 +3038,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="text-xs font-black uppercase tracking-widest text-gray-500">Manager Comments</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Manager Comments</div>
                     <textarea
                       value={managerNotes}
                       onChange={(e) => setManagerNotes(e.target.value)}
@@ -3051,10 +3052,10 @@ export default function ManagerPortal({ onLogout, auth }) {
                         onClick={enhanceManagerReviewNotes}
                         disabled={aiEnhancingManagerNotes || !String(managerNotes || "").trim() || !aiAgent}
                         className={[
-                          "inline-flex items-center gap-2 rounded-2xl px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all border",
+                          "rt-btn-primary rt-btn-sm transition-all",
                           aiEnhancingManagerNotes || !String(managerNotes || "").trim() || !aiAgent
-                            ? "border-[rgb(var(--border))] text-[rgb(var(--muted))] bg-[rgb(var(--surface-2))] cursor-not-allowed"
-                            : "bg-purple-600 text-white border-purple-600 hover:bg-purple-500",
+                            ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+                            : "",
                         ].join(" ")}
                       >
                         <Sparkles size={14} /> {aiEnhancingManagerNotes ? "Enhancing…" : "AI Enhance Comments"}
@@ -3080,7 +3081,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                         saveManagerReviewDrafts(next);
                         showToast({ title: "Saved", message: "Manager draft saved locally." });
                       }}
-                      className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
+                      className="rt-btn-ghost transition-all"
                     >
                       Save draft
                     </button>
@@ -3089,10 +3090,10 @@ export default function ManagerPortal({ onLogout, auth }) {
                       onClick={() => submitManagerReviewDecision("REJECT")}
                       disabled={savingReview}
                       className={[
-                        "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
+                        "rt-btn-danger transition-all",
                         savingReview
-                          ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
-                          : "bg-amber-500/10 text-amber-800 dark:text-amber-200 border border-amber-500/30 hover:bg-amber-500 hover:text-white",
+                          ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+                          : "",
                       ].join(" ")}
                     >
                       {savingReview ? "Working…" : "Reject with comments"}
@@ -3102,10 +3103,10 @@ export default function ManagerPortal({ onLogout, auth }) {
                       onClick={() => submitManagerReviewDecision("SUBMIT")}
                       disabled={savingReview}
                       className={[
-                        "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
+                        "rt-btn-primary transition-all",
                         savingReview
-                          ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
-                          : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
+                          ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+                          : "",
                       ].join(" ")}
                     >
                       {savingReview ? "Submitting…" : "Submit review"}
@@ -3120,11 +3121,11 @@ export default function ManagerPortal({ onLogout, auth }) {
                 </div>
               </div>
             </div>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
+    </>
   );
 }

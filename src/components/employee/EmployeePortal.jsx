@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Calendar,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import ThemeToggle from "../shared/ThemeToggle.jsx";
+import ModalOverlay from "../shared/ModalOverlay.jsx";
 
 import { fetchMe } from "../../api/auth.js";
 import { fetchCertifications, normalizeCertifications } from "../../api/certifications.js";
@@ -374,35 +376,35 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
   return (
     <aside
       className={[
-        "fixed left-0 top-0 h-full bg-[linear-gradient(180deg,_rgb(var(--surface))_0%,_rgb(var(--surface-2))_100%)] backdrop-blur-xl transition-all duration-300 z-50 shadow-[0_16px_36px_rgba(8,22,45,0.18)]",
+        "rt-sidebar fixed left-0 top-0 h-full transition-all duration-300 z-50",
         "flex flex-col",
         "md:translate-x-0",
-        isOpen ? "translate-x-0 w-72" : "-translate-x-full md:translate-x-0 md:w-24",
+        isOpen ? "translate-x-0 w-64" : "-translate-x-full md:translate-x-0 md:w-[72px]",
       ].join(" ")}
     >
-      <div className="p-6 flex items-center justify-between">
+      <div className="p-5 flex items-center justify-between">
         {isOpen ? (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <img
               src="/unnamed.webp"
               alt="Webknot Technologies logo"
-              className="h-9 w-9 rounded-xl object-cover bg-white"
+              className="h-8 w-8 rounded-md object-cover bg-white"
             />
-            <span className="font-black tracking-tight uppercase text-[rgb(var(--text))]">
+            <span className="font-semibold tracking-tight text-[rgb(var(--sidebar-text))]">
               Webknot
             </span>
           </div>
         ) : null}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="p-2 hover:bg-[rgb(var(--surface-2))] rounded-xl text-slate-500 transition-colors"
+          className="p-1.5 hover:bg-[rgb(var(--sidebar-hover))] rounded-md text-[rgb(var(--sidebar-muted))] transition-colors"
           aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
-          {isOpen ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
+          {isOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
         </button>
       </div>
 
-      <nav className="mt-6 px-3 space-y-1.5 flex-1 overflow-y-auto pb-6">
+      <nav className="mt-4 px-3 space-y-0.5 flex-1 overflow-y-auto pb-6">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
@@ -410,25 +412,17 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
               key={item.id}
               onClick={() => setActiveTab(item.id)}
               className={[
-                "w-full rounded-xl transition-all duration-150 border group",
-                "px-4 py-3.5",
-                isOpen ? "flex items-center justify-start gap-4" : "flex items-center justify-center",
-                isActive
-                  ? "bg-[rgb(var(--primary-soft))] border-transparent text-[rgb(var(--text))] shadow-[0_10px_18px_rgba(46,103,220,0.16)]"
-                  : "border-transparent text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]",
+                "rt-sidebar-nav-item",
+                isOpen ? "justify-start gap-3" : "justify-center",
+                isActive ? "rt-sidebar-nav-item--active" : "",
               ].join(" ")}
               title={!isOpen ? item.label : undefined}
             >
-              <span
-                className={[
-                  "w-6 grid place-items-center shrink-0 transition-colors",
-                  isActive ? "text-[rgb(var(--primary))]" : "text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))]",
-                ].join(" ")}
-              >
+              <span className="w-5 grid place-items-center shrink-0">
                 {item.icon}
               </span>
               {isOpen ? (
-                <span className="text-sm font-bold tracking-tight whitespace-nowrap">
+                <span className="text-sm font-medium whitespace-nowrap">
                   {item.label}
                 </span>
               ) : null}
@@ -437,20 +431,20 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         })}
       </nav>
 
-      <div className="mt-auto w-full px-3 pb-6 space-y-3">
+      <div className="mt-auto w-full px-3 pb-5 space-y-2">
         <div
           className={[
-            "rounded-xl bg-[rgb(var(--surface-2))] p-3 text-[rgb(var(--text))]",
+            "rounded-md bg-[rgb(var(--sidebar-hover))] border border-[rgb(var(--sidebar-border))] p-3",
             isOpen ? "" : "hidden",
           ].join(" ")}
         >
-          <div className="font-bold tracking-tight text-[rgb(var(--text))] truncate">
+          <div className="font-medium text-[rgb(var(--sidebar-text))] truncate text-sm">
             {account?.name || account?.email || "Unknown"}
           </div>
-          <div className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))] truncate">
+          <div className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--sidebar-muted))] truncate">
             {account?.role || "Employee"}
           </div>
-          <div className="mt-1 text-xs text-slate-500 truncate">{account?.designation || "—"}</div>
+          <div className="mt-1 text-xs text-[rgb(var(--sidebar-muted))] truncate">{account?.designation || "—"}</div>
         </div>
         {isOpen ? (
           <ThemeToggle />
@@ -463,14 +457,14 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         <button
           onClick={onLogout}
           className={[
-            "w-full rounded-xl transition-all font-bold group",
-            isOpen ? "flex items-center justify-start gap-4 p-3" : "flex items-center justify-center p-3",
-            "hover:bg-red-500/10",
+            "w-full rounded-md transition-colors font-medium group text-[rgb(var(--sidebar-muted))]",
+            isOpen ? "flex items-center justify-start gap-3 px-3 py-2.5" : "flex items-center justify-center p-2.5",
+            "hover:text-red-400 hover:bg-[rgb(var(--sidebar-hover))]",
           ].join(" ")}
           title={!isOpen ? "Logout" : undefined}
         >
-          <span className="w-6 grid place-items-center shrink-0">
-            <LogOut size={20} className="group-hover:translate-x-1 transition-transform" />
+          <span className="w-5 grid place-items-center shrink-0">
+            <LogOut size={18} />
           </span>
           {isOpen ? <span className="text-sm">Logout</span> : null}
         </button>
@@ -482,7 +476,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
 function InfoRow({ label, value }) {
   return (
     <div className="flex items-start justify-between gap-6 py-3 border-b border-[rgb(var(--border))] last:border-b-0">
-      <div className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+      <div className="text-[10px] font-medium text-[rgb(var(--muted))] uppercase tracking-wider">
         {label}
       </div>
       <div className="text-sm text-[rgb(var(--text))] font-mono text-right break-all">{value}</div>
@@ -537,16 +531,16 @@ function ProfileTab({ employee, authEmail }) {
       <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
         <div className="flex items-start justify-between gap-6 flex-wrap">
           <div>
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
               Employee Details
             </div>
-            <div className="mt-3 text-2xl font-black tracking-tight text-[rgb(var(--text))]">
+            <div className="mt-3 text-2xl font-semibold tracking-tight text-[rgb(var(--text))]">
               {display?.name || email}
             </div>
             <div className="mt-1 text-sm text-slate-600 dark:text-slate-300 font-mono">{display?.id || "—"}</div>
           </div>
-          <div className="rt-panel-subtle rounded-2xl px-4 py-3">
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+          <div className="rt-panel-subtle rounded-lg px-4 py-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
               Support
             </div>
             <div className="mt-1 text-sm text-[rgb(var(--text))] font-mono">hr@webknot.in</div>
@@ -606,7 +600,7 @@ function SelfReviewEditor({
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
             Self Review
           </div>
           <div className="mt-2 text-sm text-[rgb(var(--muted))]">
@@ -636,10 +630,10 @@ function SelfReviewEditor({
             }}
             disabled={locked || enhancing || !String(text || "").trim() || !aiAgent}
             className={[
-              "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
+              "rt-btn-primary transition-all",
               locked || enhancing || !String(text || "").trim() || !aiAgent
-                ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
-                : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
+                ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+                : "",
             ].join(" ")}
             title={!aiAgent ? "AI Agent is not configured" : "Enhance text using AI"}
           >
@@ -659,10 +653,10 @@ function SelfReviewEditor({
               }}
               disabled={locked || !canFinalSubmit || enhancing}
               className={[
-                "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
+                "rt-btn-primary transition-all",
                 locked || !canFinalSubmit || enhancing
-                  ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
-                  : "bg-emerald-500 text-white hover:bg-emerald-400 shadow-xl shadow-emerald-900/20",
+                  ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+                  : "bg-[rgb(var(--success))] text-white hover:opacity-90",
               ].join(" ")}
               title={locked ? "This month's review is locked" : (!canFinalSubmit ? "Complete required fields first" : "Submit your self review")}
             >
@@ -673,7 +667,7 @@ function SelfReviewEditor({
       </div>
 
       {!aiAgent ? (
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
           AI Enhance is not configured. Please contact support/admin.
         </div>
       ) : null}
@@ -745,19 +739,13 @@ function KpisTab({
         </p>
       </header>
 
-      {error ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-          Failed to load KPIs: <span className="font-mono">{error}</span>
-        </div>
-      ) : null}
-
       {loading ? (
-        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
+        <div className="rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))]">
           Loading KPIs…
         </div>
       ) : null}
       {!fullyLoaded && (prefetching || loading) ? (
-        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
+        <div className="rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))]">
           Loading full KPI list for this month…
         </div>
       ) : null}
@@ -774,11 +762,11 @@ function KpisTab({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-[rgb(var(--border))]">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-gray-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="p-6 font-black">KPI</th>
-                <th className="p-6 font-black">Weightage</th>
-                <th className="p-6 font-black">Your Rating (1-5)</th>
+                <th className="p-4 font-medium">KPI</th>
+                <th className="p-4 font-medium">Weightage</th>
+                <th className="p-4 font-medium">Your Rating (1-5)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
@@ -868,10 +856,10 @@ function KpisTab({
             onClick={onProceed}
             disabled={proceedDisabled}
             className={[
-              "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
+              "rt-btn-primary transition-all",
               proceedDisabled
-                ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
-                : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
+                ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+                : "",
             ].join(" ")}
             title={
               locked
@@ -925,13 +913,8 @@ function ValuesTab({
         </p>
       </header>
 
-      {error ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-          Failed to load values: <span className="font-mono">{error}</span>
-        </div>
-      ) : null}
       {loading ? (
-        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
+        <div className="rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))]">
           Loading values…
         </div>
       ) : null}
@@ -948,11 +931,11 @@ function ValuesTab({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-[rgb(var(--border))]">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-gray-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="p-6 font-black">Value</th>
-                <th className="p-6 font-black">Evaluation Criteria</th>
-                <th className="p-6 font-black">Your Rating (1-5)</th>
+                <th className="p-4 font-medium">Value</th>
+                <th className="p-4 font-medium">Evaluation Criteria</th>
+                <th className="p-4 font-medium">Your Rating (1-5)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
@@ -971,7 +954,7 @@ function ValuesTab({
                     <td className="p-6">
                       <span
                         className={[
-                          "inline-flex text-[10px] font-black uppercase px-3 py-1 rounded-lg border",
+                          "inline-flex text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border",
                           isPillarMissing
                             ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
                             : "bg-blue-500/10 text-blue-400 border-blue-500/20",
@@ -1044,10 +1027,10 @@ function ValuesTab({
           onClick={onProceed}
           disabled={locked ? false : !canProceed}
           className={[
-            "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
+            "rt-btn-primary transition-all",
             locked || canProceed
-              ? "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20"
-              : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed",
+              ? ""
+              : "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed",
           ].join(" ")}
           title={locked || canProceed ? "Proceed" : "Rate at least one value to proceed"}
         >
@@ -1100,14 +1083,8 @@ function CertificationsTab({
         </p>
       </header>
 
-      {error ? (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-          Failed to load certifications: <span className="font-mono">{error}</span>
-        </div>
-      ) : null}
-
       {loading ? (
-        <div className="rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
+        <div className="rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))]">
           Loading certifications…
         </div>
       ) : null}
@@ -1115,10 +1092,10 @@ function CertificationsTab({
       <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-gray-500 border-t border-b border-[rgb(var(--border))]">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-gray-500 border-t border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="p-6 font-black">Certification</th>
-                <th className="p-6 font-black">Completed</th>
+                <th className="p-4 font-medium">Certification</th>
+                <th className="p-4 font-medium">Completed</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
@@ -1186,10 +1163,10 @@ function CertificationsTab({
               onClick={onProceed}
               disabled={locked ? false : !canProceed}
               className={[
-                "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
+                "rt-btn-primary transition-all",
                 locked || canProceed
-                  ? "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20"
-                  : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed",
+                  ? ""
+                  : "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed",
               ].join(" ")}
               title={locked || canProceed ? "Proceed" : "Add proof for selected certifications"}
             >
@@ -1200,25 +1177,21 @@ function CertificationsTab({
       </section>
 
       {proofModal.open ? (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg rt-panel rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-black uppercase tracking-tight">Proof of Certification</h3>
-                <p className="text-gray-500 text-sm mt-1">{proofModal.name}</p>
-              </div>
-              <button
-                onClick={closeProofModal}
-                  className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
-                aria-label="Close"
-                title="Close"
-              >
-                <X size={18} />
-              </button>
+        <ModalOverlay
+          open={proofModal.open}
+          onClose={closeProofModal}
+          maxWidth="max-w-lg"
+          zIndex={60}
+          header={
+            <div>
+              <h3 className="font-semibold uppercase tracking-tight">Proof of Certification</h3>
+              <p className="text-gray-500 text-sm mt-1">{proofModal.name}</p>
             </div>
+          }
+        >
 
             {proofError ? (
-              <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
+              <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
                 {proofError}
               </div>
             ) : null}
@@ -1251,7 +1224,7 @@ function CertificationsTab({
               className="mt-6 space-y-4"
             >
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Proof *
                 </label>
                 <input
@@ -1277,7 +1250,7 @@ function CertificationsTab({
                 <button
                   type="button"
                   onClick={closeProofModal}
-                  className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
+                  className="rt-btn-ghost"
                 >
                   Cancel
                 </button>
@@ -1285,16 +1258,15 @@ function CertificationsTab({
                   type="submit"
                   disabled={locked}
                   className={[
-                    "rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest transition-all",
-                    locked ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed" : "bg-purple-600 text-white hover:bg-purple-500",
+                    "rt-btn-primary",
+                    locked ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed" : "",
                   ].join(" ")}
                 >
                   Save
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </div>
   );
@@ -1311,7 +1283,7 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
       </header>
 
       <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
-        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
           Awards Received
         </div>
         <div className="mt-4 flex items-center gap-4 flex-wrap">
@@ -1348,10 +1320,10 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
             onClick={onProceed}
             disabled={locked ? false : !canProceed}
             className={[
-              "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
+              "rt-btn-primary transition-all",
               locked || canProceed
-                ? "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20"
-                : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed",
+                ? ""
+                : "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed",
             ].join(" ")}
           >
             Proceed
@@ -1453,20 +1425,20 @@ function ReviewTab({
       </header>
 
       {reviewFeedback.needsResubmission && reviewFeedback.rows.length ? (
-        <section className="rounded-[2rem] border border-amber-500/40 bg-amber-500/10 p-5 sm:p-6 space-y-3">
-          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-900 dark:text-amber-100">
+        <section className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-5 sm:p-6 space-y-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-100">
             Changes Requested
           </div>
           {reviewFeedback.rows.map((row) => {
             const isReject = row.action === "REJECT";
             return (
-              <div key={row.id} className="rounded-2xl border border-amber-400/30 bg-white/40 dark:bg-black/20 p-4 space-y-2">
+              <div key={row.id} className="rounded-lg border border-amber-400/30 bg-white/40 dark:bg-black/20 p-4 space-y-2">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-100">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-100">
                     {row.reviewer}
                   </div>
                   <div className={[
-                    "text-[10px] font-black uppercase tracking-wider rounded-full px-2 py-1 border",
+                    "text-[10px] font-semibold uppercase tracking-wider rounded-full px-2 py-1 border",
                     isReject
                       ? "border-amber-500/40 text-amber-900 dark:text-amber-100 bg-amber-500/15"
                       : "border-[rgb(var(--border))] text-[rgb(var(--muted))] bg-[rgb(var(--surface-2))]",
@@ -1489,7 +1461,7 @@ function ReviewTab({
       ) : null}
 
       <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-4">
-        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
           Employee
         </div>
         <div className="text-sm text-[rgb(var(--text))]">
@@ -1500,7 +1472,7 @@ function ReviewTab({
       </section>
 
       <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
           KPI Ratings
         </div>
         {Array.isArray(kpis) && kpis.length ? (
@@ -1520,14 +1492,14 @@ function ReviewTab({
       </section>
 
       <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
           Self Review
         </div>
         <div className="text-sm text-[rgb(var(--text))] whitespace-pre-wrap">{String(selfReviewText || "")}</div>
       </section>
 
       <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
           Webknot Values
         </div>
         {valueRatings.length ? (
@@ -1545,7 +1517,7 @@ function ReviewTab({
       </section>
 
       <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
           Certifications
         </div>
         {Array.isArray(selectedCertifications) && selectedCertifications.length ? (
@@ -1563,7 +1535,7 @@ function ReviewTab({
       </section>
 
       <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
           Recognitions
         </div>
         <div className="text-sm text-[rgb(var(--text))]">
@@ -1584,7 +1556,7 @@ function ReviewTab({
             }
           }}
           disabled={locked}
-          className="inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
+          className="rt-btn-ghost transition-all"
         >
           Save draft
         </button>
@@ -1601,10 +1573,10 @@ function ReviewTab({
           }}
           disabled={locked || !canFinalSubmit}
           className={[
-            "inline-flex items-center gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest transition-all",
+            "rt-btn-primary transition-all",
             locked || !canFinalSubmit
-              ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border border-[rgb(var(--border))] cursor-not-allowed"
-              : "bg-purple-600 text-white hover:bg-purple-500 shadow-xl shadow-purple-900/20",
+              ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+              : "",
           ].join(" ")}
           title={locked ? "This month's review is locked" : (!canFinalSubmit ? "Complete required fields first" : "Final submit")}
         >
@@ -1617,66 +1589,252 @@ function ReviewTab({
   );
 }
 
-function AlreadyRespondedScreen({ month, submittedAt, onLogout }) {
+function AlreadyRespondedScreen({
+  month,
+  submittedAt,
+  onLogout,
+  selfReviewText,
+  kpis,
+  kpiRatings,
+  selectedValues,
+  selectedCertifications,
+  recognitionsCount,
+  valuesIndex,
+  submissionMeta,
+  employee,
+  authEmail,
+}) {
   const monthLabel = formatMonthHeadline(month);
   const submittedLabel = submittedAt ? formatReviewTimestamp(submittedAt) : "—";
+
+  const valueRatings = useMemo(() => {
+    const idx = valuesIndex && typeof valuesIndex === "object" ? valuesIndex : {};
+    const ratings = normalizeWebknotValueRatingsForState(selectedValues);
+    const out = [];
+    for (const [idRaw, ratingRaw] of Object.entries(ratings)) {
+      const id = String(idRaw || "").trim();
+      const rating = typeof ratingRaw === "number" && Number.isFinite(ratingRaw)
+        ? Math.round(ratingRaw * 10) / 10
+        : null;
+      if (!id || rating == null) continue;
+      const title = idx?.[id]?.title ? String(idx[id].title) : id;
+      out.push({ id, title, rating });
+    }
+    out.sort((a, b) => String(a.title).localeCompare(String(b.title), undefined, { numeric: true }));
+    return out;
+  }, [selectedValues, valuesIndex]);
+
+  const mgrEval = submissionMeta?.managerEvaluation || null;
+  const mgrReview = submissionMeta?.managerReview || null;
+  const hasManagerData = Boolean(
+    mgrEval || (mgrReview && typeof mgrReview === "object" && String(mgrReview.comments || "").trim())
+  );
+
+  const mgrKpiRatings = mgrEval?.kpiRatings && typeof mgrEval.kpiRatings === "object" ? mgrEval.kpiRatings : {};
+  const mgrValueRatings = mgrEval?.webknotValueRatings && typeof mgrEval.webknotValueRatings === "object" ? mgrEval.webknotValueRatings : {};
+  const mgrComments = String(mgrReview?.comments || mgrEval?.comments || "").trim();
+
+  const mgrValueRows = useMemo(() => {
+    const idx = valuesIndex && typeof valuesIndex === "object" ? valuesIndex : {};
+    return Object.entries(mgrValueRatings).map(([id, rating]) => ({
+      id,
+      title: idx?.[id]?.title ? String(idx[id].title) : id,
+      rating: Number(rating),
+    })).sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+  }, [mgrValueRatings, valuesIndex]);
+
   return (
     <div className="rt-shell font-sans overflow-x-hidden">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-12 py-8 sm:py-12 lg:py-20">
-        <div className="rt-panel relative overflow-hidden rounded-[2rem]">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-12 py-8 sm:py-12">
+        {/* ── Header ── */}
+        <div className="rt-panel relative overflow-hidden rounded-lg mb-8">
           <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: "radial-gradient(circle at 20% 20%, #3b82f6 0, transparent 55%), radial-gradient(circle at 90% 30%, #22c55e 0, transparent 60%)" }} />
-          <div className="relative p-8 sm:p-12">
-            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-200">
-              <CheckCircle2 size={14} /> Already Responded
-            </div>
-            <h1 className="mt-4 text-4xl sm:text-5xl font-black tracking-tight text-[rgb(var(--text))]">
-              Submission Already Completed
-            </h1>
-            <p className="mt-3 text-[rgb(var(--muted))]">
-              Your self review for <span className="font-bold text-[rgb(var(--text))]">{monthLabel}</span> is already submitted.
-            </p>
-
-            <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="rt-panel-subtle rounded-2xl p-6">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
-                  Submission Details
+          <div className="relative p-6 sm:p-8">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-200">
+                  <CheckCircle2 size={14} /> Submitted
                 </div>
-                <div className="mt-3 text-sm text-[rgb(var(--text))] space-y-2">
-                  <div className="flex items-center justify-between gap-4">
-                    <span className="text-[rgb(var(--muted))]">Status</span>
-                    <span className="font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Submitted</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-4">
-                    <span className="text-[rgb(var(--muted))] inline-flex items-center gap-1.5"><Clock size={14} /> Submitted at</span>
-                    <span className="font-mono">{submittedLabel}</span>
-                  </div>
-                </div>
+                <h1 className="mt-3 text-2xl sm:text-3xl font-semibold tracking-tight text-[rgb(var(--text))]">
+                  {monthLabel} — Submission Review
+                </h1>
+                <p className="mt-1.5 text-sm text-[rgb(var(--muted))]">
+                  {employee?.name || authEmail || "—"} &middot; Submitted {submittedLabel}
+                </p>
               </div>
-
-              <div className="rounded-2xl border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-6">
-                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-amber-700 dark:text-amber-200">
-                  <ShieldAlert size={14} /> Need Correction?
-                </div>
-                <div className="mt-3 text-sm text-amber-800 dark:text-amber-100">
-                  If you find any mistake in your response, contact HR to request reopening.
-                </div>
-                <div className="mt-2 text-sm font-mono text-amber-800 dark:text-amber-100">
-                  hr@webknot.in
-                </div>
-              </div>
-            </div>
-            {typeof onLogout === "function" ? (
-              <div className="mt-8 flex justify-end">
-                <button
-                  type="button"
-                  onClick={onLogout}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-5 py-3 text-[11px] font-black uppercase tracking-widest text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
-                  title="Logout"
-                >
+              {typeof onLogout === "function" ? (
+                <button type="button" onClick={onLogout} className="rt-btn-ghost" title="Logout">
                   <LogOut size={15} /> Logout
                 </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Side-by-side content ── */}
+        <div className={`grid grid-cols-1 ${hasManagerData ? "lg:grid-cols-2" : ""} gap-6`}>
+
+          {/* ═══ LEFT: Employee Self Review ═══ */}
+          <div className="space-y-5">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--primary))]">
+              Your Self Review
+            </div>
+
+            {/* Self Review Text */}
+            <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Self Review</div>
+              <div className="text-sm text-[rgb(var(--text))] whitespace-pre-wrap">{String(selfReviewText || "—")}</div>
+            </div>
+
+            {/* Employee KPI Ratings */}
+            <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Your KPI Ratings</div>
+              {Array.isArray(kpis) && kpis.length ? (
+                <div className="space-y-1.5">
+                  {kpis.map((k) => (
+                    <div key={k.id} className="flex items-center justify-between gap-3">
+                      <span className="text-sm text-[rgb(var(--text))] truncate">{k.title}</span>
+                      <span className="font-mono text-sm">{String(kpiRatings?.[k.id] ?? "—")}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-[rgb(var(--muted))]">No KPIs.</div>
+              )}
+            </div>
+
+            {/* Employee Value Ratings */}
+            <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Your Value Ratings</div>
+              {valueRatings.length ? (
+                <div className="space-y-1.5">
+                  {valueRatings.map((row) => (
+                    <div key={row.id} className="flex items-center justify-between gap-3">
+                      <span className="text-sm text-[rgb(var(--text))] truncate">{row.title}</span>
+                      <span className="font-mono text-sm">{row.rating.toFixed(1)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-[rgb(var(--muted))]">No value ratings.</div>
+              )}
+            </div>
+
+            {/* Certifications */}
+            <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Certifications</div>
+              {Array.isArray(selectedCertifications) && selectedCertifications.length ? (
+                <div className="space-y-2">
+                  {selectedCertifications.map((c, idx) => (
+                    <div key={`${c?.name || idx}`} className="rounded-lg border border-[rgb(var(--border))] px-3 py-2">
+                      <div className="text-sm font-semibold truncate">{String(c?.name || "Certification")}</div>
+                      {c?.proof ? (
+                        <a className="text-[11px] text-blue-600 hover:underline break-all" href={c.proof} target="_blank" rel="noreferrer noopener">{c.proof}</a>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-[rgb(var(--muted))]">No certifications.</div>
+              )}
+            </div>
+
+            {/* Recognitions */}
+            <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Recognitions</div>
+              <div className="text-lg font-semibold">{Number(recognitionsCount || 0)}</div>
+            </div>
+          </div>
+
+          {/* ═══ RIGHT: Manager Review ═══ */}
+          {hasManagerData ? (
+            <div className="space-y-5">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                Manager Review
               </div>
-            ) : null}
+
+              {/* Manager Comments */}
+              {mgrComments ? (
+                <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Comments</div>
+                  <div className="text-sm text-[rgb(var(--text))] whitespace-pre-wrap">{mgrComments}</div>
+                  {submissionMeta?.managerSubmittedAt ? (
+                    <div className="text-[10px] text-[rgb(var(--muted))] font-mono mt-2">
+                      Reviewed: {formatReviewTimestamp(submissionMeta.managerSubmittedAt)}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* Manager KPI Ratings */}
+              <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager KPI Ratings</div>
+                {Object.entries(mgrKpiRatings).length ? (
+                  <div className="space-y-1.5">
+                    {Array.isArray(kpis) && kpis.length ? (
+                      kpis.map((k) => {
+                        const mgrRating = mgrKpiRatings[k.id];
+                        return (
+                          <div key={k.id} className="flex items-center justify-between gap-3">
+                            <span className="text-sm text-[rgb(var(--text))] truncate">{k.title}</span>
+                            <span className="font-mono text-sm">{mgrRating != null ? String(mgrRating) : "—"}</span>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      Object.entries(mgrKpiRatings).map(([kpiId, rating]) => (
+                        <div key={kpiId} className="flex items-center justify-between gap-3">
+                          <span className="text-sm text-[rgb(var(--text))] truncate">{kpiId}</span>
+                          <span className="font-mono text-sm">{String(rating)}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-xs text-[rgb(var(--muted))]">No manager KPI ratings yet.</div>
+                )}
+              </div>
+
+              {/* Manager Value Ratings */}
+              <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Value Ratings</div>
+                {mgrValueRows.length ? (
+                  <div className="space-y-1.5">
+                    {mgrValueRows.map((row) => (
+                      <div key={row.id} className="flex items-center justify-between gap-3">
+                        <span className="text-sm text-[rgb(var(--text))] truncate">{row.title}</span>
+                        <span className="font-mono text-sm">{Number.isFinite(row.rating) ? row.rating.toFixed(1) : "—"}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-[rgb(var(--muted))]">No manager value ratings yet.</div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                Manager Review
+              </div>
+              <div className="rt-panel-subtle rounded-lg p-8 text-center">
+                <Clock size={24} className="mx-auto text-[rgb(var(--muted))] mb-3" />
+                <div className="text-sm font-semibold text-[rgb(var(--text))]">Pending Manager Review</div>
+                <div className="text-xs text-[rgb(var(--muted))] mt-1.5">
+                  Your manager hasn't submitted their review yet. Check back later.
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Need correction info ── */}
+        <div className="mt-8 rounded-lg border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-5">
+          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-200">
+            <ShieldAlert size={14} /> Need Corrections?
+          </div>
+          <div className="mt-2 text-sm text-amber-800 dark:text-amber-100">
+            If you find any mistake in your response, contact HR at <span className="font-mono">hr@webknot.in</span> to request reopening.
           </div>
         </div>
       </div>
@@ -1694,7 +1852,31 @@ export default function EmployeePortal({ onLogout, auth }) {
     } catch { void 0; }
     return window.innerWidth >= 1024;
   });
-  const [activeTab, setActiveTab] = useState("profile");
+  /* ── Path-based routing: sync activeTab ↔ URL path ── */
+  const EMP_VALID_TABS = useMemo(() => new Set(["profile", "kpis", "values", "certifications", "recognitions", "review"]), []);
+
+  const getEmpTabFromPath = useCallback(() => {
+    const raw = window.location.pathname.replace(/^\//, "").split("/")[0];
+    return EMP_VALID_TABS.has(raw) ? raw : "profile";
+  }, [EMP_VALID_TABS]);
+
+  const [activeTab, setActiveTabRaw] = useState(() => getEmpTabFromPath());
+
+  const setActiveTab = useCallback((tab) => {
+    setActiveTabRaw(tab);
+    const path = tab === "profile" ? "/" : `/${tab}`;
+    if (window.location.pathname !== path) {
+      window.history.pushState(null, "", path);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPathChange = () => setActiveTabRaw(getEmpTabFromPath());
+    window.addEventListener("popstate", onPathChange);
+    return () => {
+      window.removeEventListener("popstate", onPathChange);
+    };
+  }, [getEmpTabFromPath]);
 
   const [employee, setEmployee] = useState(() =>
     normalizeEmployeeFromAuth(auth, {
@@ -1702,6 +1884,14 @@ export default function EmployeePortal({ onLogout, auth }) {
       fallbackRole: String(auth?.role || auth?.claims?.role || "").trim() || "Employee",
     })
   );
+
+  const [toast, setToast] = useState(null);
+  const toastTimerRef = useRef(null);
+  const showToast = useCallback((nextToast) => {
+    setToast(nextToast);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
+  }, []);
 
   const [portalBootstrapError, setPortalBootstrapError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1731,6 +1921,14 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [valuesError, setValuesError] = useState("");
   const [selectedValues, setSelectedValues] = useState({}); // { [valueId]: rating }
   const [recognitionsCount, setRecognitionsCount] = useState(0);
+
+  // Route all error states through toast
+  useEffect(() => { if (portalBootstrapError) showToast({ title: "Portal Error", message: portalBootstrapError, tone: "error" }); }, [portalBootstrapError, showToast]);
+  useEffect(() => { if (error) showToast({ title: "Profile Error", message: error, tone: "error" }); }, [error, showToast]);
+  useEffect(() => { if (kpisError) showToast({ title: "KPI Error", message: kpisError, tone: "error" }); }, [kpisError, showToast]);
+  useEffect(() => { if (valuesError) showToast({ title: "Values Error", message: valuesError, tone: "error" }); }, [valuesError, showToast]);
+  useEffect(() => { if (certificationsError) showToast({ title: "Certifications Error", message: certificationsError, tone: "error" }); }, [certificationsError, showToast]);
+  useEffect(() => { if (draftSaveError) showToast({ title: "Draft Save Failed", message: draftSaveError, tone: "error" }); }, [draftSaveError, showToast]);
 
   const authEmail = String(auth?.email || auth?.claims?.sub || "").trim();
   const role = String(auth?.role || auth?.claims?.role || "").trim() || "Employee";
@@ -2171,6 +2369,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           cycleLabel: normalized.cycleLabel || null,
           reviewStatus: normalized.reviewStatus || null,
           managerReview: normalized.managerReview || null,
+          managerEvaluation: normalized.managerEvaluation || null,
           managerSubmittedAt: normalized.managerSubmittedAt || null,
           adminReview: normalized.adminReview || null,
           adminSubmittedAt: normalized.adminSubmittedAt || null,
@@ -2379,6 +2578,7 @@ export default function EmployeePortal({ onLogout, auth }) {
         cycleLabel: normalized?.cycleLabel ?? buildCycleMeta(submissionMonth).cycleLabel,
         reviewStatus: normalized?.reviewStatus ?? "SUBMITTED",
         managerReview: normalized?.managerReview ?? null,
+        managerEvaluation: normalized?.managerEvaluation ?? null,
         managerSubmittedAt: normalized?.managerSubmittedAt ?? null,
         adminReview: normalized?.adminReview ?? null,
         adminSubmittedAt: normalized?.adminSubmittedAt ?? null,
@@ -2571,16 +2771,8 @@ export default function EmployeePortal({ onLogout, auth }) {
     if (activeTab === "profile") {
       return (
         <>
-          {error ? (
-            <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-              Failed to load employee details: <span className="font-mono">{error}</span>
-              <div className="mt-2 text-xs text-slate-600 dark:text-slate-300">
-                If this is unexpected, please contact support: <span className="font-mono">hr@webknot.in</span>
-              </div>
-            </div>
-          ) : null}
           {loading ? (
-            <div className="max-w-4xl mx-auto mb-6 rt-panel-subtle rounded-2xl p-4 text-sm text-[rgb(var(--muted))]">
+            <div className="max-w-4xl mx-auto mb-6 rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))]">
               Loading profile…
             </div>
           ) : null}
@@ -2676,11 +2868,30 @@ export default function EmployeePortal({ onLogout, auth }) {
         month={submissionMeta?.month || submissionMonth}
         submittedAt={submissionMeta?.submittedAt || submissionMeta?.updatedAt || null}
         onLogout={onLogout}
+        selfReviewText={selfReviewText}
+        kpis={visibleKpis}
+        kpiRatings={kpiRatings}
+        selectedValues={selectedValues}
+        selectedCertifications={selectedCertifications}
+        recognitionsCount={recognitionsCount}
+        valuesIndex={valuesIndex}
+        submissionMeta={submissionMeta}
+        employee={employee}
+        authEmail={authEmail}
       />
     );
   }
 
   return (
+    <>
+    {/* ─── Cycle label (outside rt-shell to avoid overflow:hidden breaking fixed) ─── */}
+    <div className="fixed right-4 top-4 z-[65] flex items-center gap-3 md:right-6 md:top-5">
+      <span className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-[rgb(var(--border))]/60 bg-[rgb(var(--surface))]/80 backdrop-blur-md px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-[rgb(var(--muted))] shadow-sm">
+        <Calendar size={14} />
+        {cycleInfo?.label || "—"}
+      </span>
+    </div>
+
     <div className="rt-shell flex min-h-screen text-[rgb(var(--text))] font-sans overflow-x-hidden">
       {isSidebarOpen ? (
         <button
@@ -2693,7 +2904,7 @@ export default function EmployeePortal({ onLogout, auth }) {
 
       <button
         type="button"
-        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
+        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
         onClick={() => setIsSidebarOpen((prev) => !prev)}
         aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
       >
@@ -2709,11 +2920,7 @@ export default function EmployeePortal({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-72" : "md:ml-24"} p-4 pt-20 md:pt-6 lg:p-12`}>
-        <div className="pointer-events-none absolute inset-0 -z-10">
-          <div className="absolute -top-24 right-8 h-64 w-64 rounded-full bg-blue-500/10 blur-3xl" />
-          <div className="absolute bottom-6 left-1/3 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
-        </div>
+      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-64" : "md:ml-[72px]"} p-4 pt-20 md:pt-6 lg:p-8`}>
         <div className="max-w-4xl mx-auto mb-6 rt-page-header">
           <div className="rt-kicker">Employee Portal</div>
           <h1 className="rt-page-title">Monthly Performance Workspace</h1>
@@ -2721,13 +2928,9 @@ export default function EmployeePortal({ onLogout, auth }) {
             Complete each step, then submit your final review for manager evaluation.
           </p>
         </div>
-        {portalBootstrapError ? (
-          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-            {portalBootstrapError}
-          </div>
-        ) : null}
+
         {!locked && needsResubmission ? (
-          <div className="max-w-4xl mx-auto mb-6 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
+          <div className="max-w-4xl mx-auto mb-6 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
             Changes requested on your submission. Please update and resubmit this month.
             {latestReviewComment ? (
               <div className="mt-2 text-xs font-mono text-amber-900 dark:text-amber-100 break-words">
@@ -2738,7 +2941,7 @@ export default function EmployeePortal({ onLogout, auth }) {
         ) : null}
         <div className="max-w-4xl mx-auto mb-6 flex items-end justify-between gap-4 flex-wrap">
           <div className="space-y-1">
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
               Month
             </div>
             <select
@@ -2764,7 +2967,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           </div>
 
           <div className="text-right">
-            <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
               Draft
             </div>
             <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">
@@ -2778,11 +2981,6 @@ export default function EmployeePortal({ onLogout, auth }) {
                     ? "Not saved"
                     : "Saved"}
             </div>
-            {draftSaveError ? (
-              <div className="mt-1 text-[10px] font-mono text-red-700 dark:text-red-300 max-w-[260px] break-words">
-                {draftSaveError}
-              </div>
-            ) : null}
           </div>
         </div>
 
@@ -2790,6 +2988,8 @@ export default function EmployeePortal({ onLogout, auth }) {
 
         {main}
       </main>
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
+    </>
   );
 }

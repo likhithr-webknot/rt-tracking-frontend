@@ -68,15 +68,14 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry, o
   return (
     <div className="rt-shell font-sans overflow-x-hidden">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-12 py-8 sm:py-12 lg:py-20">
-        <div className="rt-panel relative overflow-hidden rounded-[2rem]">
-          <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: "radial-gradient(circle at 20% 20%, #a855f7 0, transparent 55%), radial-gradient(circle at 90% 30%, #22c55e 0, transparent 60%)" }} />
+        <div className="rt-panel relative overflow-hidden rounded-lg">
           <div className="relative p-8 sm:p-12">
             <div className="flex items-start justify-between gap-6 flex-wrap">
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))]">
-                  <Lock size={14} className="text-purple-300" /> Submissions Locked
+                <div className="inline-flex items-center gap-2 rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                  <Lock size={14} className="text-[rgb(var(--muted))]" /> Submissions Locked
                 </div>
-                <h1 className="mt-4 text-4xl sm:text-5xl font-black tracking-tight">
+                <h1 className="mt-4 text-3xl sm:text-4xl font-bold tracking-tight">
                   Submission Window Closed
                 </h1>
                 <p className="mt-3 text-[rgb(var(--muted))]">
@@ -85,7 +84,7 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry, o
               </div>
 
               <div className="rt-panel-subtle p-4 min-w-[280px]">
-                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
+                <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
                   <Calendar size={14} className="text-slate-400" /> Window Schedule
                 </div>
                 <div className="mt-3 space-y-2 text-sm">
@@ -110,8 +109,8 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry, o
             </div>
 
             <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="rt-panel-subtle rounded-2xl p-6">
-                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+              <div className="rt-panel-subtle rounded-lg p-6">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                   What You Can Do
                 </div>
                 <ul className="mt-3 text-sm text-[rgb(var(--text))] space-y-2">
@@ -121,8 +120,8 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry, o
                 </ul>
               </div>
 
-              <div className="rounded-2xl border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-6">
-                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-amber-700 dark:text-amber-200">
+              <div className="rounded-lg border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-6">
+                <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-200">
                   <ShieldAlert size={14} /> Support
                 </div>
                 <div className="mt-3 text-sm text-amber-800 dark:text-amber-100">
@@ -137,7 +136,7 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry, o
                 {typeof onRetry === "function" ? (
                   <button
                     onClick={onRetry}
-                    className="mt-5 inline-flex items-center justify-center rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] px-5 py-3 font-black text-[11px] uppercase tracking-widest hover:bg-[rgb(var(--surface-2))] transition-all"
+                    className="mt-5 rt-btn-ghost transition-all"
                     type="button"
                   >
                     Retry
@@ -157,7 +156,7 @@ export default function SubmissionWindowClosed({ portalWindow, error, onRetry, o
                 <button
                   type="button"
                   onClick={onLogout}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-4 py-2 text-[11px] font-black uppercase tracking-widest text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all"
+                  className="rt-btn-ghost rt-btn-sm transition-all"
                   title="Logout"
                 >
                   <LogOut size={14} /> Logout

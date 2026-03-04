@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from "react";
 import { Edit3, Eye, EyeOff, Plus, Search, Trash2, X } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
+import ModalOverlay from "../shared/ModalOverlay.jsx";
 import CursorPagination from "../shared/CursorPagination.jsx";
 
 function extractCertificationName(raw) {
@@ -108,31 +109,31 @@ export default function Certifications({
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
           <h2 className="rt-title">
-            Certifications
+            Certification Registry
           </h2>
           <p className="text-slate-500 text-sm mt-2">
-            Admin manages the certification registry. Employees can only complete items from this list.
+            Manage the master list of certifications available to employees.
           </p>
         </div>
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-4xl">
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-lg px-4 py-3">
           <div className="rt-kicker">Total</div>
-          <div className="mt-1 text-2xl font-black text-[rgb(var(--text))]">{catalog.length}</div>
+          <div className="mt-1 text-2xl font-semibold text-[rgb(var(--text))]">{catalog.length}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-lg px-4 py-3">
           <div className="rt-kicker">Listed</div>
-          <div className="mt-1 text-2xl font-black text-emerald-500">{listedCount}</div>
+          <div className="mt-1 text-2xl font-semibold text-emerald-500">{listedCount}</div>
         </div>
-        <div className="rt-panel-subtle rounded-2xl px-4 py-3">
+        <div className="rt-panel-subtle rounded-lg px-4 py-3">
           <div className="rt-kicker">Unlisted</div>
-          <div className="mt-1 text-2xl font-black text-amber-500">{unlistedCount}</div>
+          <div className="mt-1 text-2xl font-semibold text-amber-500">{unlistedCount}</div>
         </div>
       </div>
 
       <div className="relative group max-w-2xl">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={20} />
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={20} />
         <input
           type="text"
           value={query}
@@ -142,63 +143,58 @@ export default function Certifications({
         />
       </div>
 
-      <section className="rt-panel overflow-hidden">
-        <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
+      <section>
+        <div className="flex items-center justify-between gap-4 flex-wrap mb-4">
           <div>
-            <h3 className="text-xl font-black tracking-tight">
-              Certification Registry
-            </h3>
-            <p className="text-slate-500 text-sm mt-1">
-              {catalog.length ? `${catalog.length} listed` : "No certifications listed yet."}
+            <p className="text-sm text-[rgb(var(--muted))]">
+              {catalog.length ? `${catalog.length} certifications in registry` : "No certifications listed yet."}
             </p>
           </div>
 
           <button
             onClick={() => setShowCatalogModal(true)}
-            className="rt-btn-primary inline-flex items-center gap-2 px-6 py-3 font-black text-xs uppercase tracking-widest"
+            className="rt-btn-primary"
           >
-            <Plus size={18} /> Add certification
+            <Plus size={18} /> Add Certification
           </button>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* ── Desktop table ── */}
+        <div className="rt-panel overflow-hidden hidden lg:block">
           <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-[0.2em] text-slate-500 border-b border-[rgb(var(--border))]">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="p-6 font-black">Certification</th>
-                <th className="p-6 font-black">Status</th>
-                <th className="p-6 text-right font-black px-8">Actions</th>
+                <th className="px-6 py-4 font-semibold">Certification</th>
+                <th className="px-6 py-4 font-semibold">Status</th>
+                <th className="px-6 py-4 text-right font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
               {filteredCatalog.map((item) => (
-                <tr key={String(item.id)} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
-                  <td className="p-6">
-                    <div className="font-bold text-[rgb(var(--text))] tracking-tight">{item.name}</div>
-                    <div className="text-xs text-[rgb(var(--muted))] mt-1">
-                      Employees will only be able to complete registry items.
-                    </div>
+                <tr key={String(item.id)} className="hover:bg-[rgb(var(--surface-2))]/50 transition-colors group">
+                  <td className="px-6 py-4">
+                    <div className="font-semibold text-[rgb(var(--text))] tracking-tight">{item.name}</div>
                   </td>
-                  <td className="p-6">
+                  <td className="px-6 py-4">
                     {item.listed ? (
-                      <span className="text-[10px] font-black uppercase px-3 py-1 bg-emerald-500/10 text-emerald-300 rounded-lg border border-emerald-500/20">
+                      <span className="text-[10px] font-semibold uppercase px-2.5 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-md">
                         Listed
                       </span>
                     ) : (
-                      <span className="text-[10px] font-black uppercase px-3 py-1 bg-red-500/10 text-red-300 rounded-lg border border-red-500/20">
+                      <span className="text-[10px] font-semibold uppercase px-2.5 py-1 bg-red-500/10 text-red-600 dark:text-red-400 rounded-md">
                         Unlisted
                       </span>
                     )}
                   </td>
-                  <td className="p-6 text-right px-8">
+                  <td className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => openEdit(item)}
-                        className="p-2.5 bg-[rgb(var(--surface-2))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] hover:brightness-95 rounded-xl transition-all border border-[rgb(var(--border))]"
+                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
                         title="Edit"
                         aria-label={`Edit ${item.name}`}
                       >
-                        <Edit3 size={18} />
+                        <Edit3 size={16} />
                       </button>
 
                       <button
@@ -207,43 +203,34 @@ export default function Certifications({
                           setBusy(true);
                           try {
                             await onSetCertificationListed?.(item.id, !item.listed);
-                            showToast({
-                              title: item.listed ? "Unlisted" : "Listed",
-                              message: item.name,
-                            });
+                            showToast({ title: item.listed ? "Unlisted" : "Listed", message: item.name });
                           } catch (err) {
-                            showToast({
-                              title: "Update failed",
-                              message: err?.message || "Please try again.",
-                            });
+                            showToast({ title: "Update failed", message: err?.message || "Please try again." });
                           } finally {
                             setBusy(false);
                           }
                         }}
                         disabled={busy}
                         className={[
-                          "p-2.5 rounded-xl transition-all border",
+                          "p-2 rounded-md transition-all",
                           item.listed
-                            ? "bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white border-amber-500/20"
-                            : "bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500 hover:text-white border-emerald-500/20",
+                            ? "text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                            : "text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10",
                         ].join(" ")}
                         title={item.listed ? "Unlist" : "List"}
                         aria-label={`${item.listed ? "Unlist" : "List"} ${item.name}`}
                       >
-                        {item.listed ? <EyeOff size={18} /> : <Eye size={18} />}
+                        {item.listed ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
 
                       <button
-                        onClick={async () => {
-                          if (busy) return;
-                          setPendingDeleteItem(item);
-                        }}
+                        onClick={() => { if (!busy) setPendingDeleteItem(item); }}
                         disabled={busy}
-                        className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-xl transition-all border border-red-500/20"
+                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-red-500 hover:bg-red-500/10 transition-all"
                         title="Delete"
                         aria-label={`Delete ${item.name}`}
                       >
-                        <Trash2 size={18} />
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </td>
@@ -252,7 +239,7 @@ export default function Certifications({
 
               {filteredCatalog.length === 0 ? (
                 <tr>
-                  <td className="p-10 text-center text-slate-500" colSpan={3}>
+                  <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={3}>
                     No certifications to show.
                   </td>
                 </tr>
@@ -260,26 +247,84 @@ export default function Certifications({
             </tbody>
           </table>
         </div>
+
+        {/* ── Mobile cards ── */}
+        <div className="lg:hidden space-y-3">
+          {filteredCatalog.map((item) => (
+            <div key={String(item.id)} className="rt-panel p-4 flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold text-[rgb(var(--text))] tracking-tight truncate">{item.name}</div>
+                <div className="mt-1.5">
+                  {item.listed ? (
+                    <span className="text-[10px] font-semibold uppercase px-2.5 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-md">Listed</span>
+                  ) : (
+                    <span className="text-[10px] font-semibold uppercase px-2.5 py-1 bg-red-500/10 text-red-600 dark:text-red-400 rounded-md">Unlisted</span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => openEdit(item)}
+                  className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
+                  title="Edit"
+                >
+                  <Edit3 size={16} />
+                </button>
+                <button
+                  onClick={async () => {
+                    if (busy) return;
+                    setBusy(true);
+                    try {
+                      await onSetCertificationListed?.(item.id, !item.listed);
+                      showToast({ title: item.listed ? "Unlisted" : "Listed", message: item.name });
+                    } catch (err) {
+                      showToast({ title: "Update failed", message: err?.message || "Please try again." });
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  disabled={busy}
+                  className={[
+                    "p-2 rounded-md transition-all",
+                    item.listed
+                      ? "text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                      : "text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10",
+                  ].join(" ")}
+                  title={item.listed ? "Unlist" : "List"}
+                >
+                  {item.listed ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+                <button
+                  onClick={() => { if (!busy) setPendingDeleteItem(item); }}
+                  disabled={busy}
+                  className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-red-500 hover:bg-red-500/10 transition-all"
+                  title="Delete"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            </div>
+          ))}
+          {filteredCatalog.length === 0 ? (
+            <div className="rt-panel p-8 text-center text-[rgb(var(--muted))] text-sm">No certifications to show.</div>
+          ) : null}
+        </div>
       </section>
 
       
       {showCatalogModal ? (
-        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-black uppercase tracking-tight">Add Certification</h3>
-                <p className="text-gray-500 text-sm mt-1">Adds an item to the admin registry.</p>
-              </div>
-              <button
-                onClick={closeCatalogModal}
-                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
-                aria-label="Close"
-                title="Close"
-              >
-                <X size={18} />
-              </button>
+        <ModalOverlay
+          open={showCatalogModal}
+          onClose={closeCatalogModal}
+          maxWidth="max-w-lg"
+          zIndex={60}
+          header={
+            <div>
+              <h3 className="font-semibold uppercase tracking-tight">Add Certification</h3>
+              <p className="text-[rgb(var(--muted))] text-sm mt-1">Adds an item to the admin registry.</p>
             </div>
+          }
+        >
 
             <form
               onSubmit={async (e) => {
@@ -312,7 +357,7 @@ export default function Certifications({
               className="mt-6 space-y-4"
             >
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-[rgb(var(--muted))] uppercase tracking-wider">
                   Certification *
                 </label>
                 <input
@@ -327,41 +372,36 @@ export default function Certifications({
                 <button
                   type="button"
                   onClick={closeCatalogModal}
-                  className="rt-btn-ghost text-xs uppercase tracking-widest"
+                  className="rt-btn-ghost"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={busy}
-                  className="rt-btn-primary text-xs uppercase tracking-widest"
+                  className="rt-btn-primary"
                 >
                   {busy ? "Working…" : "Add"}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       
       {editModal.open ? (
-        <div className="fixed inset-0 bg-slate-950/65 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-          <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-black uppercase tracking-tight">Edit Certification</h3>
-                <p className="text-gray-500 text-sm mt-1">Updates the registry item name.</p>
-              </div>
-              <button
-                onClick={closeEdit}
-                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
-                aria-label="Close"
-                title="Close"
-              >
-                <X size={18} />
-              </button>
+        <ModalOverlay
+          open={editModal.open}
+          onClose={closeEdit}
+          maxWidth="max-w-lg"
+          zIndex={60}
+          header={
+            <div>
+              <h3 className="font-semibold uppercase tracking-tight">Edit Certification</h3>
+              <p className="text-gray-500 text-sm mt-1">Updates the registry item name.</p>
             </div>
+          }
+        >
 
             <form
               onSubmit={async (e) => {
@@ -396,7 +436,7 @@ export default function Certifications({
               className="mt-6 space-y-4"
             >
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-[rgb(var(--muted))] uppercase tracking-wider">
                   Certification *
                 </label>
                 <input
@@ -412,21 +452,20 @@ export default function Certifications({
                   type="button"
                   onClick={closeEdit}
                   disabled={busy}
-                  className="rt-btn-ghost text-xs uppercase tracking-widest"
+                  className="rt-btn-ghost"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={busy}
-                  className="rt-btn-primary text-xs uppercase tracking-widest"
+                  className="rt-btn-primary"
                 >
                   {busy ? "Saving…" : "Save"}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       <ConfirmDialog

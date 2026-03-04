@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import WebknotValueDirectory from "./WebknotValueDirectory";
 import Toast from "../shared/Toast.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
+import ModalOverlay from "../shared/ModalOverlay.jsx";
 import {
     fetchValues,
     addValue,
@@ -167,14 +168,14 @@ export default function WebknotValueDirectoryPage() {
             
             <div className="border-b border-[rgb(var(--border))] bg-[rgb(var(--surface))]/90 backdrop-blur">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
-                    <h1 className="text-xl font-black uppercase tracking-tighter">Webknot Values Management</h1>
+                    <h1 className="text-xl font-semibold uppercase tracking-tighter">Webknot Values Management</h1>
                 </div>
             </div>
 
             
             <div className="py-6 sm:py-8 px-4 sm:px-6">
                 {valuesError ? (
-                    <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300">
+                    <div className="max-w-7xl mx-auto mb-6 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300">
                         {valuesError}
                     </div>
                 ) : null}
@@ -197,36 +198,28 @@ export default function WebknotValueDirectoryPage() {
 
             
             {showValueModal ? (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-[60] overflow-y-auto">
-                    <div className="w-full max-w-lg rt-panel rounded-3xl p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <h3 className="font-black uppercase tracking-tight">
-                                    {valueModalMode === "edit" ? "Edit Value" : "Add Value"}
-                                </h3>
-                                <p className="text-gray-500 text-sm mt-1">
-                                    {valueModalMode === "edit" ? (
-                                        <span>
-                                            Updating <span className="font-mono">{String(editingValueId ?? "")}</span>
-                                        </span>
-                                    ) : (
-                                        "Creates a new Webknot value."
-                                    )}
-                                </p>
-                            </div>
-                            <button
-                                onClick={closeValueModal}
-                                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
-                                aria-label="Close"
-                                title="Close"
-                            >
-                                <X size={18} />
-                            </button>
-                        </div>
+                <ModalOverlay
+                  open={showValueModal}
+                  onClose={closeValueModal}
+                  maxWidth="max-w-lg"
+                  zIndex={60}
+                  header={
+                    <div>
+                      <h3 className="font-semibold uppercase tracking-tight">
+                        {valueModalMode === "edit" ? "Edit Value" : "Add Value"}
+                      </h3>
+                      <p className="text-gray-500 text-sm mt-1">
+                        {valueModalMode === "edit" ? (
+                          <span>Updating <span className="font-mono">{String(editingValueId ?? "")}</span></span>
+                        ) : "Creates a new Webknot value."}
+                      </p>
+                    </div>
+                  }
+                >
 
                         <form onSubmit={submitValue} className="mt-6 space-y-4">
                             <div>
-                                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                                     Value *
                                 </label>
                                 <input
@@ -238,7 +231,7 @@ export default function WebknotValueDirectoryPage() {
                             </div>
 
                             <div>
-                                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                                     Evaluation Criteria *
                                 </label>
                                 <input
@@ -254,21 +247,20 @@ export default function WebknotValueDirectoryPage() {
                                     type="button"
                                     onClick={closeValueModal}
                                     disabled={valueSaving}
-                                    className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest border border-[rgb(var(--border))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="rt-btn-ghost transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
                                     disabled={valueSaving}
-                                    className="rounded-2xl px-5 py-3 text-xs font-black uppercase tracking-widest bg-purple-600 text-white hover:bg-purple-500 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                                    className="rt-btn-primary transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
                                     {valueSaving ? "Saving…" : (valueModalMode === "edit" ? "Save Changes" : "Add Value")}
                                 </button>
                             </div>
                         </form>
-                    </div>
-                </div>
+                </ModalOverlay>
             ) : null}
 
             <ConfirmDialog

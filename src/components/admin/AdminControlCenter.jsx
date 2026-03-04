@@ -3,7 +3,7 @@ import { AnimatePresence, motion as Motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Settings, LogOut, ChevronLeft, ChevronRight,
   ClipboardCheck, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X, Layers3,
-  Bell, BellDot, CheckCheck
+  Bell, BellDot, CheckCheck, FileUp, Calendar, RefreshCw, KeyRound, Lock, FileBarChart2, ChevronDown
 } from "lucide-react";
 
 import AdminDashboard from "./AdminDashboard.jsx";
@@ -15,6 +15,7 @@ import KPIRegistry from "./KPIRegistry.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
 import WebknotValueDirectory from "./WebknotValueDirectory.jsx";
 import BandStreamDirectory from "./BandStreamDirectory.jsx";
+import CsvImportPanel from "./CsvImportPanel.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 import Toast from "../shared/Toast.jsx";
 import ThemeToggle from "../shared/ThemeToggle.jsx";
@@ -56,7 +57,7 @@ import {
   formatYearMonth,
   normalizeMonthlySubmission,
 } from "../../api/monthly-submissions.js";
-import { normalizeYearMonth } from "../../utils/reviewCycles.js";
+import { getCycleForMonth, normalizeYearMonth } from "../../utils/reviewCycles.js";
 import {
   fetchAdminNotifications,
   markAdminNotificationRead,
@@ -75,40 +76,41 @@ const ADMIN_SIDEBAR_PREF_KEY = "rt_tracking_admin_sidebar_open_v1";
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
   const isAdmin = String(account?.role || "").trim().toLowerCase() === "admin";
   const navItems = [
-    { id: "dashboard", icon: <LayoutDashboard size={20} />, label: "Dashboard" },
+    { id: "dashboard", icon: <LayoutDashboard size={20} />, label: "Overview" },
     { id: "submissions", icon: <ClipboardCheck size={20} />, label: "Monthly Submissions" },
     { id: "directory", icon: <Users size={20} />, label: "Employee Directory" },
     { id: "kpi", icon: <Target size={20} />, label: "KPI Directory" },
     { id: "band-streams", icon: <Layers3 size={20} />, label: "Bands & Streams" },
     { id: "certifications", icon: <Award size={20} />, label: "Certifications" },
     { id: "values", icon: <Sparkles size={20} />, label: "Webknot Values" },
-    ...(isAdmin ? [{ id: "agents", icon: <Bot size={20} />, label: "Configure AI Agents" }] : []),
+    { id: "csv-import", icon: <FileUp size={20} />, label: "CSV Import" },
+    ...(isAdmin ? [{ id: "agents", icon: <Bot size={20} />, label: "AI Agents" }] : []),
     { id: "settings", icon: <Settings size={20} />, label: "Settings" },
   ];
 
   return (
-    <aside className={`fixed left-0 top-0 h-full bg-[linear-gradient(180deg,_rgb(var(--surface))_0%,_rgb(var(--surface-2))_100%)] backdrop-blur-xl transition-all duration-300 z-50 md:translate-x-0 flex flex-col shadow-[0_14px_36px_rgba(8,22,45,0.18)] ${isOpen ? 'translate-x-0 w-72' : '-translate-x-full md:translate-x-0 md:w-24'}`}>
-      <div className="p-6 flex items-center justify-between">
+    <aside className={`rt-sidebar fixed left-0 top-0 h-full transition-all duration-300 z-50 md:translate-x-0 flex flex-col ${isOpen ? 'translate-x-0 w-64' : '-translate-x-full md:translate-x-0 md:w-[72px]'}`}>
+      <div className="px-5 py-5 flex items-center justify-between">
         {isOpen && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <img
               src="/unnamed.webp"
               alt="Webknot Technologies logo"
-              className="h-9 w-9 rounded-xl object-cover bg-white"
+              className="h-8 w-8 rounded-md object-cover bg-white"
             />
-            <span className="font-black tracking-tight uppercase text-[rgb(var(--text))]">Webknot</span>
+            <span className="font-semibold tracking-tight text-[rgb(var(--sidebar-text))] text-sm">Webknot</span>
           </div>
         )}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="p-2 hover:bg-[rgb(var(--surface-2))] rounded-xl text-slate-500 transition-colors"
+          className="p-1.5 hover:bg-[rgb(var(--sidebar-hover))] rounded-md text-[rgb(var(--sidebar-muted))] transition-colors"
           aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
-          {isOpen ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
+          {isOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
         </button>
       </div>
 
-      <nav className="mt-6 px-3 space-y-1.5 flex-1 overflow-y-auto pb-6">
+      <nav className="mt-2 px-3 space-y-0.5 flex-1 overflow-y-auto pb-4">
         {navItems.map((item) => {
           const isActive = activeTab === item.id
           return (
@@ -116,25 +118,17 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
               key={item.id}
               onClick={() => setActiveTab(item.id)}
               className={[
-                'w-full rounded-xl transition-all duration-150 group',
-                'px-4 py-3.5',
-                isOpen ? 'flex items-center justify-start gap-4' : 'flex items-center justify-center',
-                isActive
-                  ? 'bg-[rgb(var(--primary-soft))] text-[rgb(var(--text))] shadow-[0_10px_18px_rgba(46,103,220,0.16)]'
-                  : 'text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]',
+                'rt-sidebar-nav-item',
+                isOpen ? '' : 'justify-center px-0',
+                isActive ? 'rt-sidebar-nav-item--active' : '',
               ].join(' ')}
               title={!isOpen ? item.label : undefined}
             >
-              <span
-                className={[
-                  "w-6 grid place-items-center shrink-0 transition-colors",
-                  isActive ? "text-[rgb(var(--primary))]" : "text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))]",
-                ].join(" ")}
-              >
+              <span className="w-5 grid place-items-center shrink-0">
                 {item.icon}
               </span>
               {isOpen && (
-                <span className="text-sm font-bold tracking-tight truncate">
+                <span className="truncate">
                   {item.label}
                 </span>
               )}
@@ -143,28 +137,28 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         })}
       </nav>
 
-      <div className="mt-auto w-full px-3 pb-6 space-y-3">
+      <div className="mt-auto w-full px-3 pb-4 space-y-2 border-t border-[rgb(var(--sidebar-border))] pt-3">
         <div
           className={[
-            "rounded-xl bg-[rgb(var(--surface-2))] p-3 text-[rgb(var(--text))]",
+            "rounded-md bg-[rgb(var(--sidebar-hover))] p-2.5",
             isOpen ? "" : "hidden",
           ].join(" ")}
         >
-          <div className="font-bold tracking-tight text-[rgb(var(--text))] truncate">
+          <div className="font-medium text-sm text-[rgb(var(--sidebar-text))] truncate">
             {account?.name || account?.email || "Unknown"}
           </div>
-          <div className="mt-1 text-[10px] font-black uppercase tracking-[0.2em] text-[rgb(var(--muted))] truncate">
+          <div className="mt-0.5 text-[11px] font-medium text-[rgb(var(--sidebar-muted))] truncate">
             {account?.role || "Employee"}
           </div>
-          <div className="mt-1 text-xs text-slate-500 truncate">
+          <div className="mt-0.5 text-xs text-[rgb(var(--sidebar-muted))] truncate">
             {account?.subtitle || "—"}
           </div>
         </div>
 
         {!isOpen ? (
-          <div className="grid place-items-center text-slate-500">
+          <div className="grid place-items-center text-[rgb(var(--sidebar-muted))]">
             <div
-              className="h-10 w-10 rounded-xl bg-[rgb(var(--surface-2))] grid place-items-center"
+              className="h-10 w-10 rounded-md bg-[rgb(var(--sidebar-hover))] grid place-items-center"
               title={[
                 account?.name || account?.email || "Unknown",
                 account?.role || "Employee",
@@ -188,7 +182,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         <button
           onClick={onLogout}
           className={[
-            'w-full rounded-xl transition-all font-bold group',
+            'w-full rounded-md transition-all font-bold group',
             isOpen ? 'flex items-center justify-start gap-4 p-3' : 'flex items-center justify-center p-3',
             'hover:bg-red-500/10',
           ].join(' ')}
@@ -437,19 +431,7 @@ function computeSubmissionAbilityScore(submission) {
     (data?.managerEvaluation && typeof data.managerEvaluation === "object" ? data.managerEvaluation : null) ??
     (payload?.managerEvaluation && typeof payload.managerEvaluation === "object" ? payload.managerEvaluation : null) ??
     (source?.managerEvaluation && typeof source.managerEvaluation === "object" ? source.managerEvaluation : null);
-  const useManagerScoresOnly = submissionType !== "MANAGER_SELF_REVIEW";
-  if (useManagerScoresOnly && !managerEval) return null;
-
-  const kpis = useManagerScoresOnly
-    ? (managerEval?.kpiRatings ?? null)
-    : (data?.kpiRatings && typeof data.kpiRatings === "object"
-      ? data.kpiRatings
-      : payload?.kpiRatings);
-  const values = useManagerScoresOnly
-    ? (managerEval?.webknotValueRatings ?? managerEval?.webknotValues ?? null)
-    : (data?.webknotValueRatings && typeof data.webknotValueRatings === "object"
-      ? data.webknotValueRatings
-      : payload?.webknotValueRatings);
+  const isSelfReview = submissionType === "MANAGER_SELF_REVIEW";
 
   const toNumbers = (obj) => {
     if (!obj || typeof obj !== "object") return [];
@@ -466,6 +448,30 @@ function computeSubmissionAbilityScore(submission) {
       .map((v) => (typeof v === "number" ? v : Number.parseFloat(String(v ?? ""))))
       .filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
   };
+
+  /* Priority: manager evaluation → employee self-ratings → null */
+  const hasManager = managerEval && (
+    (managerEval.kpiRatings && Object.keys(managerEval.kpiRatings).length) ||
+    (managerEval.webknotValueRatings && Object.keys(managerEval.webknotValueRatings).length) ||
+    (managerEval.webknotValues && Object.keys(managerEval.webknotValues).length)
+  );
+
+  let kpis, values;
+  if (!isSelfReview && hasManager) {
+    /* Use manager ratings when available */
+    kpis = managerEval?.kpiRatings ?? null;
+    values = managerEval?.webknotValueRatings ?? managerEval?.webknotValues ?? null;
+  } else {
+    /* Fall back to employee self-ratings (or self-review) */
+    kpis = data?.kpiRatings && typeof data.kpiRatings === "object"
+      ? data.kpiRatings
+      : payload?.kpiRatings;
+    values = data?.webknotValueRatings && typeof data.webknotValueRatings === "object"
+      ? data.webknotValueRatings
+      : (data?.webknotValues && typeof data.webknotValues === "object"
+        ? data.webknotValues
+        : payload?.webknotValueRatings ?? payload?.webknotValues);
+  }
 
   const numbers = [...toNumbers(kpis), ...toNumbers(values)];
   if (!numbers.length) return null;
@@ -511,8 +517,39 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } catch { void 0; }
     return window.innerWidth >= 1024;
   });
-  const [activeTab, setActiveTab] = useState("dashboard");
+  /* ── Path-based routing: sync activeTab ↔ URL path ── */
+  const VALID_TABS = useMemo(() => new Set([
+    "dashboard", "submissions", "directory", "kpi", "band-streams",
+    "certifications", "values", "csv-import", "agents", "settings",
+  ]), []);
+
+  const getTabFromPath = useCallback(() => {
+    const raw = window.location.pathname.replace(/^\//, "").split("/")[0];
+    return VALID_TABS.has(raw) ? raw : "dashboard";
+  }, [VALID_TABS]);
+
+  const [activeTab, setActiveTabRaw] = useState(() => getTabFromPath());
+
+  const setActiveTab = useCallback((tab) => {
+    setActiveTabRaw(tab);
+    const path = tab === "dashboard" ? "/" : `/${tab}`;
+    if (window.location.pathname !== path) {
+      window.history.pushState(null, "", path);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPathChange = () => setActiveTabRaw(getTabFromPath());
+    window.addEventListener("popstate", onPathChange);
+    return () => {
+      window.removeEventListener("popstate", onPathChange);
+    };
+  }, [getTabFromPath]);
   const isAdmin = String(auth?.role || auth?.claims?.role || "").trim().toLowerCase() === "admin";
+  const currentCycleLabel = useMemo(() => {
+    const c = getCycleForMonth(new Date());
+    return c?.label || "—";
+  }, []);
   const [showKPIModal, setShowKPIModal] = useState(false);
   const [kpiModalMode, setKpiModalMode] = useState("add"); // "add" | "edit"
   const [searchQuery, setSearchQuery] = useState("");
@@ -575,6 +612,12 @@ export default function AdminControlCenter({ onLogout, auth }) {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }, []);
+
+  useEffect(() => { if (notificationsError) showToast({ title: "Notifications Error", message: notificationsError, tone: "error" }); }, [notificationsError, showToast]);
+  useEffect(() => { if (certificationsError) showToast({ title: "Certifications Error", message: certificationsError, tone: "error" }); }, [certificationsError, showToast]);
+  useEffect(() => { if (valuesError) showToast({ title: "Values Error", message: valuesError, tone: "error" }); }, [valuesError, showToast]);
+  useEffect(() => { if (kpisError) showToast({ title: "KPIs Error", message: kpisError, tone: "error" }); }, [kpisError, showToast]);
+  useEffect(() => { if (allKpisError) showToast({ title: "All KPIs Error", message: allKpisError, tone: "error" }); }, [allKpisError, showToast]);
 
   const unreadNotificationsCount = useMemo(
     () => notifications.reduce((count, item) => (item?.read ? count : count + 1), 0),
@@ -1242,14 +1285,13 @@ export default function AdminControlCenter({ onLogout, auth }) {
     reloadPortalWindow({ signal: controller.signal }).catch(() => {});
     return () => controller.abort();
   }, [reloadPortalWindow]);
-  const [employees, setEmployees] = useState([
-    { id: "EMP001", name: "Alice Johnson", role: "Admin", band: "B5L", submitted: true },
-    { id: "EMP002", name: "Bob Smith", role: "Manager", band: "B6H", submitted: true },
-    { id: "EMP003", name: "Charlie Davis", role: "Employee", band: "B8", submitted: false },
-    { id: "EMP004", name: "Dana Lee", role: "Manager", band: "B5H", submitted: false },
-  ])
+  const [employees, setEmployees] = useState([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [employeesError, setEmployeesError] = useState("");
+
+  useEffect(() => { if (portalWindowError) showToast({ title: "Portal Window Error", message: portalWindowError, tone: "error" }); }, [portalWindowError, showToast]);
+  useEffect(() => { if (employeesError) showToast({ title: "Employees Error", message: employeesError, tone: "error" }); }, [employeesError, showToast]);
+
   const [, setEmployeesCursor] = useState(null);
   const [employeesNextCursor, setEmployeesNextCursor] = useState(null);
   const [employeesCursorStack, setEmployeesCursorStack] = useState([]);
@@ -1387,6 +1429,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
       }
       const message = err?.message || "Failed to load employees.";
       setEmployeesError(message);
+      setEmployees([]);
       setEmployeesTotalCount(null);
       setEmployeesDirectoryTotals({
         managerCount: null,
@@ -1980,6 +2023,260 @@ export default function AdminControlCenter({ onLogout, auth }) {
   }
 
   return (
+    <>
+    {/* ─── Cycle label + Notification Panel (outside rt-shell to avoid overflow:hidden breaking fixed) ─── */}
+    <div className="fixed right-4 top-4 z-[65] flex items-center gap-3 md:right-6 md:top-5">
+      <span className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-[rgb(var(--border))]/60 bg-[rgb(var(--surface))]/80 backdrop-blur-md px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-[rgb(var(--muted))] shadow-sm">
+        <Calendar size={14} />
+        {currentCycleLabel}
+      </span>
+      <div className="flex flex-col items-end" ref={notificationsPanelRef}>
+        {/* Bell trigger */}
+        <button
+          type="button"
+          onClick={() => {
+            const nextOpen = !notificationsOpen;
+            setNotificationsOpen(nextOpen);
+            if (nextOpen) reloadNotifications({ silent: true }).catch(() => {});
+          }}
+            className={[
+              "group relative inline-flex h-10 w-10 items-center justify-center rounded-xl",
+              "border border-[rgb(var(--border))]/60 bg-[rgb(var(--surface))]/80 backdrop-blur-md",
+              "text-[rgb(var(--text))] shadow-sm",
+              "transition-all duration-200 hover:shadow-md hover:border-[rgb(var(--primary))]/40",
+              notificationsOpen ? "ring-2 ring-[rgb(var(--primary))]/20 border-[rgb(var(--primary))]/40" : "",
+            ].join(" ")}
+            aria-label="Admin notifications"
+            title="Admin notifications"
+          >
+            {unreadNotificationsCount > 0 ? (
+              <BellDot size={17} className="transition-transform duration-200 group-hover:scale-110" />
+            ) : (
+              <Bell size={17} className="transition-transform duration-200 group-hover:scale-110" />
+            )}
+            {unreadNotificationsCount > 0 ? (
+              <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-gradient-to-br from-red-500 to-rose-600 px-1 text-[10px] font-bold text-white shadow-sm shadow-red-500/30">
+                {unreadNotificationsCount > 99 ? "99+" : unreadNotificationsCount}
+              </span>
+            ) : null}
+          </button>
+
+          {/* Dropdown panel */}
+          <AnimatePresence mode="wait">
+            {notificationsOpen ? (
+              <Motion.div
+                initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                transition={{ type: "spring", stiffness: 420, damping: 32, mass: 0.7 }}
+                className="mt-2.5 w-[min(92vw,440px)] origin-top-right overflow-hidden rounded-2xl border border-[rgb(var(--border))]/60 bg-[rgb(var(--surface))]/95 backdrop-blur-xl shadow-xl shadow-black/8"
+              >
+                {/* Header */}
+                <div className="relative px-5 py-4">
+                  <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgb(var(--primary))]/20 to-transparent" />
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[rgb(var(--primary))]/10">
+                        <Bell size={16} className="text-[rgb(var(--primary))]" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-semibold text-[rgb(var(--text))]">Notifications</h3>
+                        <p className="text-[11px] text-[rgb(var(--muted))]">
+                          {unreadNotificationsCount > 0
+                            ? `${unreadNotificationsCount} unread`
+                            : "All caught up"}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setNotificationsOpen(false)}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[rgb(var(--muted))] transition-colors hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  {/* Action pills */}
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => reloadNotifications().catch(() => {})}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[rgb(var(--border))]/60 bg-[rgb(var(--surface-2))]/60 px-2.5 py-1.5 text-[11px] font-medium text-[rgb(var(--muted))] transition-all hover:border-[rgb(var(--border))] hover:text-[rgb(var(--text))] hover:shadow-sm"
+                    >
+                      <RefreshCw size={12} />
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => reloadNotifications({ types: ["FORGOT_PASSWORD_REQUESTED"] }).catch(() => {})}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[rgb(var(--primary))]/8 px-2.5 py-1.5 text-[11px] font-medium text-[rgb(var(--primary))] transition-all hover:bg-[rgb(var(--primary))]/15"
+                      title="Force-load password reset notifications"
+                    >
+                      <KeyRound size={12} />
+                      Password resets
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => markEveryNotificationRead().catch(() => {})}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[rgb(var(--border))]/60 bg-[rgb(var(--surface-2))]/60 px-2.5 py-1.5 text-[11px] font-medium text-[rgb(var(--muted))] transition-all hover:border-[rgb(var(--border))] hover:text-[rgb(var(--text))] hover:shadow-sm"
+                    >
+                      <CheckCheck size={12} />
+                      Mark all read
+                    </button>
+                  </div>
+                </div>
+
+                {/* Divider */}
+                <div className="h-px bg-gradient-to-r from-transparent via-[rgb(var(--border))]/60 to-transparent" />
+
+                {/* Notification list */}
+                <div className="max-h-[420px] overflow-y-auto overscroll-contain px-3 py-3">
+                  {/* Loading state */}
+                  {!notificationsError && notificationsLoading && notifications.length === 0 ? (
+                    <div className="flex flex-col items-center gap-3 py-8">
+                      <div className="h-8 w-8 animate-spin rounded-full border-2 border-[rgb(var(--border))] border-t-[rgb(var(--primary))]" />
+                      <p className="text-xs text-[rgb(var(--muted))]">Loading notifications…</p>
+                    </div>
+                  ) : null}
+
+                  {/* Empty state */}
+                  {!notificationsError && !notificationsLoading && notifications.length === 0 ? (
+                    <div className="flex flex-col items-center gap-2 py-10">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[rgb(var(--surface-2))]">
+                        <Bell size={20} className="text-[rgb(var(--muted))]" />
+                      </div>
+                      <p className="text-sm font-medium text-[rgb(var(--text))]">No notifications yet</p>
+                      <p className="text-xs text-[rgb(var(--muted))]">You&apos;re all caught up!</p>
+                    </div>
+                  ) : null}
+
+                  {/* Notification items */}
+                  <div className="space-y-2">
+                    {notifications.map((item, index) => {
+                      const payload = item?.payload && typeof item.payload === "object" ? item.payload : {};
+                      const adminCode = payload.adminCode || payload.verificationCode || payload.otp || payload.code || "";
+                      const requestId = payload.requestId || payload.resetRequestId || payload.resetId || "";
+                      const expiresAt = payload.expiresAt || payload.expiry || payload.expiresOn || "";
+                      const email = payload.email || payload.employeeEmail || payload.employeeId || item?.message || "";
+                      const expiryLabel = expiresAt ? formatNotificationTimestamp(expiresAt) : null;
+                      const typeUpper = String(item.type || "").toUpperCase();
+                      const isPasswordReset = typeUpper.includes("FORGOT") || Boolean(adminCode);
+
+                      return (
+                        <Motion.button
+                          key={String(item.id)}
+                          type="button"
+                          onClick={() => markNotificationRead(item.id)}
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94], delay: Math.min(index * 0.04, 0.28) }}
+                          whileHover={{ scale: 1.005 }}
+                          className={[
+                            "group/item w-full rounded-xl border px-3.5 py-3 text-left transition-all duration-200",
+                            item.read
+                              ? "border-[rgb(var(--border))]/40 bg-[rgb(var(--surface-2))]/50 hover:border-[rgb(var(--border))]/70 hover:bg-[rgb(var(--surface-2))]"
+                              : "border-[rgb(var(--primary))]/20 bg-[rgb(var(--primary))]/[0.04] hover:border-[rgb(var(--primary))]/30 hover:bg-[rgb(var(--primary))]/[0.07]",
+                          ].join(" ")}
+                        >
+                          <div className="flex items-start gap-3">
+                            {/* Type icon */}
+                            <div className={[
+                              "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+                              isPasswordReset
+                                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                : "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+                            ].join(" ")}>
+                              {isPasswordReset ? (
+                                <Lock size={14} />
+                              ) : (
+                                <FileBarChart2 size={14} />
+                              )}
+                            </div>
+
+                            {/* Content */}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <span className={[
+                                    "inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                                    isPasswordReset
+                                      ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                                      : "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+                                  ].join(" ")}>
+                                    {isPasswordReset ? "Password Reset" : "Submission"}
+                                  </span>
+                                  <div className="mt-1.5 text-[13px] font-medium leading-snug text-[rgb(var(--text))] break-words">{item.title}</div>
+                                  {item.message ? (
+                                    <div className="mt-1 text-xs leading-relaxed text-[rgb(var(--muted))] break-words">{item.message}</div>
+                                  ) : null}
+                                </div>
+                                <div className="shrink-0 pt-0.5">
+                                  <span className="text-[10px] tabular-nums text-[rgb(var(--muted))]">
+                                    {formatNotificationTimestamp(item.createdAt)}
+                                  </span>
+                                  {!item.read ? (
+                                    <div className="mx-auto mt-1.5 h-1.5 w-1.5 rounded-full bg-[rgb(var(--primary))]" />
+                                  ) : null}
+                                </div>
+                              </div>
+
+                              {/* Password reset metadata */}
+                              {isPasswordReset ? (
+                                <div className="mt-2.5 space-y-1.5">
+                                  {adminCode ? (
+                                    <div className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500/10 to-indigo-500/10 px-2.5 py-1.5">
+                                      <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-300">Code</span>
+                                      <span className="font-mono text-sm font-semibold tracking-widest text-blue-700 dark:text-blue-200">{adminCode}</span>
+                                    </div>
+                                  ) : null}
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {requestId ? (
+                                      <span className="inline-flex items-center gap-1.5 rounded-md bg-[rgb(var(--surface-2))] px-2 py-1 text-[10px] text-[rgb(var(--muted))]">
+                                        <span className="font-semibold uppercase tracking-wider">Req</span>
+                                        <span className="font-mono text-[rgb(var(--text))] break-all">{requestId}</span>
+                                      </span>
+                                    ) : null}
+                                    {email ? (
+                                      <span className="inline-flex items-center gap-1.5 rounded-md bg-[rgb(var(--surface-2))] px-2 py-1 text-[10px] text-[rgb(var(--muted))]">
+                                        <span className="font-semibold uppercase tracking-wider">User</span>
+                                        <span className="font-mono text-[rgb(var(--text))] break-all">{email}</span>
+                                      </span>
+                                    ) : null}
+                                    {expiryLabel ? (
+                                      <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-500/8 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">
+                                        <span className="font-semibold uppercase tracking-wider">Exp</span>
+                                        <span className="font-mono">{expiryLabel}</span>
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        </Motion.button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Load more */}
+                  {notificationsNextCursor ? (
+                    <button
+                      type="button"
+                      onClick={() => reloadNotifications({ cursor: notificationsNextCursor, append: true }).catch(() => {})}
+                      className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[rgb(var(--border))]/60 bg-[rgb(var(--surface-2))]/30 px-3 py-2.5 text-xs font-medium text-[rgb(var(--muted))] transition-all hover:border-[rgb(var(--border))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]"
+                    >
+                      <ChevronDown size={14} />
+                      Load more notifications
+                    </button>
+                  ) : null}
+                </div>
+              </Motion.div>
+            ) : null}
+          </AnimatePresence>
+        </div>
+      </div>
+
     <div className="rt-shell flex overflow-x-hidden bg-[rgb(var(--bg))]">
       {isSidebarOpen ? (
         <button
@@ -1992,7 +2289,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
       <button
         type="button"
-        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
+        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
         onClick={() => setIsSidebarOpen((prev) => !prev)}
         aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
       >
@@ -2008,191 +2305,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? 'md:ml-72' : 'md:ml-24'} p-4 pt-20 md:pt-6 lg:p-10`}>
-        <div className="pointer-events-none absolute inset-0 -z-10">
-          <div className="absolute -top-28 right-10 h-72 w-72 rounded-full bg-blue-500/10 blur-3xl" />
-          <div className="absolute bottom-6 left-1/3 h-64 w-64 rounded-full bg-cyan-400/10 blur-3xl" />
-        </div>
-        <div className="fixed right-4 top-4 z-[65] flex flex-col items-end md:right-8 md:top-5" ref={notificationsPanelRef}>
-          <button
-            type="button"
-            onClick={() => {
-              const nextOpen = !notificationsOpen;
-              setNotificationsOpen(nextOpen);
-              if (nextOpen) reloadNotifications({ silent: true }).catch(() => {});
-            }}
-            className={[
-              "relative inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[rgb(var(--border))]",
-              "bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-[0_12px_28px_rgba(8,22,45,0.15)]",
-              "transition-all duration-300 hover:bg-[rgb(var(--surface-2))] hover:shadow-[0_16px_30px_rgba(8,22,45,0.2)]",
-              unreadNotificationsCount > 0 ? "animate-[pulse_2.4s_ease-in-out_infinite]" : "",
-            ].join(" ")}
-            aria-label="Admin notifications"
-            title="Admin notifications"
-          >
-            {unreadNotificationsCount > 0 ? <BellDot size={18} /> : <Bell size={18} />}
-            {unreadNotificationsCount > 0 ? (
-              <span className="absolute -right-1.5 -top-1.5 min-w-[20px] rounded-full bg-red-600 px-1.5 py-0.5 text-center text-[10px] font-black text-white">
-                {unreadNotificationsCount > 99 ? "99+" : unreadNotificationsCount}
-              </span>
-            ) : null}
-          </button>
-
-          <AnimatePresence mode="wait">
-            {notificationsOpen ? (
-              <Motion.div
-                initial={{ opacity: 0, y: -12, scale: 0.96 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -10, scale: 0.97 }}
-                transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.8 }}
-                className="mt-3 w-[min(92vw,420px)] origin-top-right rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] shadow-[0_24px_52px_rgba(7,18,42,0.24)] backdrop-blur-xl"
-              >
-              <div className="flex items-center justify-between border-b border-[rgb(var(--border))] px-4 py-3">
-                <div>
-                  <div className="text-xs font-black uppercase tracking-[0.18em] text-[rgb(var(--muted))]">
-                    Admin Notifications
-                  </div>
-                  <div className="mt-1 text-sm font-bold text-[rgb(var(--text))]">
-                    {unreadNotificationsCount} unread
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => reloadNotifications().catch(() => {})}
-                    className="rounded-lg border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
-                  >
-                    Refresh
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => reloadNotifications({ types: ["FORGOT_PASSWORD_REQUESTED"] }).catch(() => {})}
-                    className="rounded-lg border border-indigo-400/60 bg-indigo-500/10 px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-indigo-700 hover:text-indigo-800 dark:border-indigo-500/60 dark:text-indigo-200"
-                    title="Force-load password reset notifications to surface admin codes"
-                  >
-                    Password resets
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => markEveryNotificationRead().catch(() => {})}
-                    className="inline-flex items-center gap-1 rounded-lg border border-[rgb(var(--border))] px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
-                  >
-                    <CheckCheck size={13} />
-                    Mark all
-                  </button>
-                </div>
-              </div>
-
-              <div className="max-h-[400px] overflow-y-auto p-3">
-                {notificationsError ? (
-                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-200">
-                    {notificationsError}
-                  </div>
-                ) : null}
-                {!notificationsError && notificationsLoading && notifications.length === 0 ? (
-                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
-                    Loading notifications...
-                  </div>
-                ) : null}
-                {!notificationsError && !notificationsLoading && notifications.length === 0 ? (
-                  <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
-                    No admin notifications yet.
-                  </div>
-                ) : null}
-                <div className="space-y-2">
-                  {notifications.map((item, index) => (
-                    <Motion.button
-                      key={String(item.id)}
-                      type="button"
-                      onClick={() => markNotificationRead(item.id)}
-                      initial={{ opacity: 0, x: 10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ duration: 0.2, ease: "easeOut", delay: Math.min(index * 0.03, 0.24) }}
-                      whileHover={{ y: -1 }}
-                      className={[
-                        "w-full rounded-xl border px-3 py-2.5 text-left transition",
-                        item.read
-                          ? "border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] opacity-90"
-                          : "border-blue-500/35 bg-blue-500/10",
-                      ].join(" ")}
-                    >
-                      {(() => {
-                        const payload = item?.payload && typeof item.payload === "object" ? item.payload : {};
-                        const adminCode =
-                          payload.adminCode ||
-                          payload.verificationCode ||
-                          payload.otp ||
-                          payload.code ||
-                          "";
-                        const requestId = payload.requestId || payload.resetRequestId || payload.resetId || "";
-                        const expiresAt = payload.expiresAt || payload.expiry || payload.expiresOn || "";
-                        const email = payload.email || payload.employeeEmail || payload.employeeId || item?.message || "";
-                        const expiryLabel = expiresAt ? formatNotificationTimestamp(expiresAt) : null;
-                        const typeUpper = String(item.type || "").toUpperCase();
-                        const showResetMeta = typeUpper.includes("FORGOT") || Boolean(adminCode);
-                        return (
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="text-[10px] font-black uppercase tracking-[0.16em] text-[rgb(var(--muted))]">
-                                {showResetMeta ? "Forgot Password" : "Submission Pair"}
-                              </div>
-                              <div className="mt-1 text-sm font-bold text-[rgb(var(--text))] break-words">{item.title}</div>
-                              {item.message ? (
-                                <div className="mt-1 text-xs text-[rgb(var(--muted))] break-words">{item.message}</div>
-                              ) : null}
-                              {showResetMeta ? (
-                                <div className="mt-2 grid grid-cols-1 gap-1 text-[11px] text-[rgb(var(--text))]">
-                                  {adminCode ? (
-                                    <div className="inline-flex items-center gap-2 rounded-lg bg-blue-500/10 px-2 py-1 font-semibold text-blue-700 dark:text-blue-200">
-                                      <span className="text-[10px] font-black uppercase tracking-[0.16em] text-blue-600 dark:text-blue-200">Admin Code</span>
-                                      <span className="font-mono text-sm">{adminCode}</span>
-                                    </div>
-                                  ) : null}
-                                  {requestId ? (
-                                    <div className="inline-flex items-center gap-2 rounded-lg bg-[rgb(var(--surface-2))] px-2 py-1 text-[rgb(var(--muted))]">
-                                      <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[rgb(var(--muted))]">Request</span>
-                                      <span className="font-mono text-[11px] text-[rgb(var(--text))] break-all">{requestId}</span>
-                                    </div>
-                                  ) : null}
-                                  {email ? (
-                                    <div className="inline-flex items-center gap-2 rounded-lg bg-[rgb(var(--surface-2))] px-2 py-1 text-[rgb(var(--muted))]">
-                                      <span className="text-[10px] font-black uppercase tracking-[0.14em] text-[rgb(var(--muted))]">Employee</span>
-                                      <span className="font-mono text-[11px] text-[rgb(var(--text))] break-all">{email}</span>
-                                    </div>
-                                  ) : null}
-                                  {expiryLabel ? (
-                                    <div className="inline-flex items-center gap-2 rounded-lg bg-amber-500/10 px-2 py-1 text-amber-700 dark:text-amber-200">
-                                      <span className="text-[10px] font-black uppercase tracking-[0.14em]">Expires</span>
-                                      <span className="font-mono text-[11px]">{expiryLabel}</span>
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </div>
-                            <div className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))]">
-                              {formatNotificationTimestamp(item.createdAt)}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </Motion.button>
-                  ))}
-                </div>
-
-                {notificationsNextCursor ? (
-                  <button
-                    type="button"
-                    onClick={() => reloadNotifications({ cursor: notificationsNextCursor, append: true }).catch(() => {})}
-                    className="mt-3 w-full rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2 text-xs font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
-                  >
-                    Load more
-                  </button>
-                ) : null}
-              </div>
-              </Motion.div>
-            ) : null}
-          </AnimatePresence>
-        </div>
+      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? 'md:ml-64' : 'md:ml-[72px]'} px-3 py-4 pt-16 sm:px-4 md:pt-6 lg:px-8 lg:py-8`}>
         {activeTab === "dashboard" && (
           <AdminDashboard
             portalWindow={portalWindow}
@@ -2216,16 +2329,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
         )}
 
         {activeTab === "submissions" && (
-          <AdminSubmissions onLogout={onLogout} />
+          <AdminSubmissions onLogout={onLogout} employees={employees} />
         )}
 
         {activeTab === "certifications" && (
           <>
-            {certificationsError ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-                Failed to load certifications: <span className="font-mono">{certificationsError}</span>
-              </div>
-            ) : null}
             {certificationsLoading ? (
               <div className="max-w-7xl mx-auto mb-6 rt-panel-subtle p-4 text-sm text-[rgb(var(--muted))]">
                 Loading certifications…
@@ -2285,11 +2393,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
         {activeTab === "values" && (
           <>
-            {valuesError ? (
-              <div className="max-w-7xl mx-auto mb-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-                Failed to load values: <span className="font-mono">{valuesError}</span>
-              </div>
-            ) : null}
             {valuesLoading ? (
               <div className="max-w-7xl mx-auto mb-6 rt-panel-subtle p-4 text-sm text-[rgb(var(--muted))]">
                 Loading values…
@@ -2309,6 +2412,15 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
         {activeTab === "band-streams" && <BandStreamDirectory />}
 
+        {activeTab === "csv-import" && (
+          <CsvImportPanel
+            onImportComplete={() => {
+              reloadEmployees?.();
+            }}
+            showToast={showToast}
+          />
+        )}
+
         {activeTab === "agents" && isAdmin ? <AIAgentsConfig /> : null}
 
         {activeTab === "settings" && <SettingsPanel />}
@@ -2320,7 +2432,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-black uppercase tracking-tight">
+                <h3 className="font-semibold uppercase tracking-tight">
                   {kpiModalMode === "edit" ? "Edit KPI" : "Add KPI"}
                 </h3>
                 <p className="text-gray-500 text-sm mt-1">
@@ -2335,7 +2447,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               </div>
               <button
                 onClick={closeKpiModal}
-                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
+                className="p-2 rounded-md hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
               >
                 <X size={18} />
@@ -2344,7 +2456,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
             <form onSubmit={submitKpi} className="mt-6 space-y-4">
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Objective *
                 </label>
                 <input
@@ -2357,7 +2469,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                     Stream *
                   </label>
                   <select
@@ -2374,7 +2486,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 </div>
 
                 <div>
-                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                     Band *
                   </label>
                   <select
@@ -2392,7 +2504,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               </div>
 
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Weight *
                 </label>
                 <input
@@ -2408,14 +2520,14 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   type="button"
                   onClick={closeKpiModal}
                   disabled={kpiSaving}
-                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-ghost disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={kpiSaving}
-                  className="rt-btn-primary text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {kpiSaving ? "Saving…" : (kpiModalMode === "edit" ? "Save Changes" : "Add KPI")}
                 </button>
@@ -2431,7 +2543,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
           <div className="w-full max-w-lg rt-panel p-4 sm:p-6 my-4 sm:my-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="font-black uppercase tracking-tight">
+                <h3 className="font-semibold uppercase tracking-tight">
                   {valueModalMode === "edit" ? "Edit Value" : "Add Value"}
                 </h3>
                 <p className="text-gray-500 text-sm mt-1">
@@ -2446,7 +2558,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               </div>
               <button
                 onClick={closeValueModal}
-                className="p-2 rounded-xl hover:bg-[rgb(var(--surface-2))]"
+                className="p-2 rounded-md hover:bg-[rgb(var(--surface-2))]"
                 aria-label="Close"
                 title="Close"
               >
@@ -2456,7 +2568,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
             <form onSubmit={submitValue} className="mt-6 space-y-4">
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Value *
                 </label>
                 <input
@@ -2468,7 +2580,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
               </div>
 
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
                   Evaluation Criteria *
                 </label>
                 <input
@@ -2484,14 +2596,14 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   type="button"
                   onClick={closeValueModal}
                   disabled={valueSaving}
-                  className="rt-btn-ghost text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-ghost disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={valueSaving}
-                  className="rt-btn-primary text-xs uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="rt-btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {valueSaving ? "Saving…" : (valueModalMode === "edit" ? "Save Changes" : "Add Value")}
                 </button>
@@ -2524,5 +2636,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
+    </>
   );
 }

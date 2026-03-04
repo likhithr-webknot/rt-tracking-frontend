@@ -83,11 +83,11 @@ export default function CursorPagination({
         onClick={onPrev}
         disabled={!canPrev || loading}
         className={[
-          "rt-btn-ghost inline-flex items-center gap-2 px-4 py-2 text-[11px] uppercase tracking-widest transition-all",
+          "rt-btn-ghost transition-all",
           !canPrev || loading
             ? "opacity-50 cursor-not-allowed"
             : "",
-        ].join(" ")}
+        ].join("")}
         title="Previous"
       >
         <ChevronLeft size={16} /> Prev
@@ -97,11 +97,11 @@ export default function CursorPagination({
         onClick={onNext}
         disabled={!canNext || loading}
         className={[
-          "rt-btn-primary inline-flex items-center gap-2 px-4 py-2 text-[11px] uppercase tracking-widest transition-all",
+          "rt-btn-primary transition-all",
           !canNext || loading
             ? "opacity-50 cursor-not-allowed"
             : "",
-        ].join(" ")}
+        ].join("")}
         title="Next"
       >
         Next <ChevronRight size={16} />
