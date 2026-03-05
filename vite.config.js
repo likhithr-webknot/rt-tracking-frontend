@@ -1,91 +1,82 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    proxy: {
-      '/submission-window': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/employees': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/kpi-definitions': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/kpi-definition': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/bands': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/streams': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/auth': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/portal': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/certifications': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-        // Avoid proxying SPA page-load requests that collide with this API prefix
-        bypass(req) {
-          if (req.headers.accept && req.headers.accept.includes('text/html')) {
-            return req.url;
-          }
-        },
-      },
-      '/monthly-submissions': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/notifications': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/admin': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/employee-portal': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/webknot-values': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/ui': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        secure: false,
+/**
+ * Rewrite the Origin header so Spring Boot's CORS filter sees the
+ * backend's own origin instead of Vite's dev-server origin.
+ * (changeOrigin only rewrites Host, not Origin.)
+ */
+function rewriteOrigin(proxy, apiTarget) {
+  proxy.on('proxyReq', (proxyReq) => {
+    if (proxyReq.getHeader('origin')) {
+      proxyReq.setHeader('origin', apiTarget)
+    }
+  })
+}
+
+/** Bypass function for routes that collide with SPA page paths */
+function spaBypass(req) {
+  if (req.headers.accept && req.headers.accept.includes('text/html')) {
+    return req.url
+  }
+}
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const API_TARGET = env.VITE_API_DEV_PROXY || 'http://localhost:8080'
+
+  /** Base proxy options shared by every route */
+  const base = {
+    target: API_TARGET,
+    changeOrigin: true,
+    secure: false,
+    configure: (proxy) => rewriteOrigin(proxy, API_TARGET),
+  }
+
+  return {
+    plugins: [react(), tailwindcss()],
+
+    /* ── Development server ─────────────────────────── */
+    server: {
+      proxy: {
+        '/submission-window':   { ...base },
+        '/employees':           { ...base },
+        '/kpi-definitions':     { ...base },
+        '/kpi-definition':      { ...base },
+        '/bands':               { ...base },
+        '/streams':             { ...base },
+        '/auth':                { ...base },
+        '/portal':              { ...base },
+        '/certifications':      { ...base, bypass: spaBypass },
+        '/monthly-submissions': { ...base },
+        '/notifications':       { ...base },
+        '/admin':               { ...base },
+        '/employee-portal':     { ...base },
+        '/webknot-values':      { ...base },
+        '/ui':                  { ...base },
+        '/projects':            { ...base, bypass: spaBypass },
+        '/ai-agents':           { ...base },
       },
     },
-  },
+
+    /* ── Production build ───────────────────────────── */
+    build: {
+      target: 'es2020',
+      sourcemap: false,
+      cssCodeSplit: true,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/react-dom')) return 'vendor-react';
+            if (id.includes('node_modules/react'))     return 'vendor-react';
+            if (id.includes('node_modules/recharts') || id.includes('node_modules/d3'))  return 'vendor-charts';
+            if (id.includes('node_modules/framer-motion')) return 'vendor-motion';
+            if (id.includes('node_modules/lucide-react'))  return 'vendor-icons';
+          },
+        },
+      },
+      chunkSizeWarningLimit: 600,
+    },
+  }
 })

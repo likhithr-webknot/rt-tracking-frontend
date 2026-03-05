@@ -217,6 +217,7 @@ function toRequestPayload(payload) {
   copyIfPresent(source, next, "adminEvaluation");
   copyIfPresent(source, next, "adminComments");
   copyIfPresent(source, next, "adminNotes");
+  copyIfPresent(source, next, "techShowcase", { asString: true });
 
   return next;
 }
@@ -260,6 +261,9 @@ export function normalizeMonthlySubmission(data) {
       : Number.parseInt(String(recognitionsCountRaw || "0"), 10) || 0;
   const certifications = Array.isArray(payload.certifications) ? payload.certifications : [];
   const kpiRatings = normalizeKpiRatings(payload.kpiRatings);
+  const techShowcase = String(
+    payload?.techShowcase ?? payload?.techShowcaseNotes ?? obj?.techShowcase ?? ""
+  ).trim();
 
   const submittedAt = obj.submittedAt ?? obj.submittedOn ?? null;
   const updatedAt = obj.updatedAt ?? obj.lastUpdatedAt ?? null;
@@ -350,18 +354,46 @@ export function normalizeMonthlySubmission(data) {
     ).trim() || null;
   const subjectEmployeeId =
     String(payload?.subjectEmployeeId ?? obj?.subjectEmployeeId ?? payload?.employeeId ?? obj?.employeeId ?? "").trim() || null;
-  const managerAction = String(managerReview?.action ?? "").trim().toUpperCase();
-  const adminAction = String(adminReview?.action ?? "").trim().toUpperCase();
+  /* ── clear stale rejection data after employee resubmits ──
+     When the employee resubmits, reviewStatus becomes "SUBMITTED" but the
+     server may still return the old managerReview/adminReview objects with
+     action:"REJECT".  We treat those as stale and null them out so the
+     employee no longer sees old rejection comments, and admin/manager
+     portals don't show a stale "REJECTED" badge.                         */
+  const statusUpper = String(status || "").toUpperCase();
+  const reviewStatusUpper = String(reviewStatus || "").toUpperCase();
+  const isResubmittedStatus =
+    (reviewStatusUpper === "SUBMITTED") ||
+    (statusUpper === "SUBMITTED" && (reviewStatusUpper.includes("REJECT") || reviewStatusUpper.includes("NEEDS_REVIEW")));
+  /* Override stale reviewStatus when the submission itself is SUBMITTED */
+  const effectiveReviewStatus = isResubmittedStatus ? "SUBMITTED" : reviewStatus;
+  const effectiveManagerReview =
+    isResubmittedStatus &&
+    managerReview &&
+    String(managerReview.action ?? "").trim().toUpperCase() === "REJECT"
+      ? null
+      : managerReview;
+  const effectiveAdminReview =
+    isResubmittedStatus &&
+    adminReview &&
+    String(adminReview.action ?? "").trim().toUpperCase() === "REJECT"
+      ? null
+      : adminReview;
+
+  const managerAction = String(effectiveManagerReview?.action ?? "").trim().toUpperCase();
+  const adminAction = String(effectiveAdminReview?.action ?? "").trim().toUpperCase();
   const reopenedForResubmission = Boolean(
-    payload?.reopenedForResubmission ??
-    obj?.reopenedForResubmission ??
-    reviewStatus?.toUpperCase().includes("NEEDS_REVIEW") ??
-    false
+    isResubmittedStatus
+      ? false
+      : (payload?.reopenedForResubmission ??
+         obj?.reopenedForResubmission ??
+         effectiveReviewStatus?.toUpperCase().includes("NEEDS_REVIEW") ??
+         false)
   );
   const resubmissionRequested = Boolean(
     reopenedForResubmission ||
-    reviewStatus?.toUpperCase().includes("NEEDS_REVIEW") ||
-    reviewStatus?.toUpperCase().includes("REJECT") ||
+    effectiveReviewStatus?.toUpperCase().includes("NEEDS_REVIEW") ||
+    effectiveReviewStatus?.toUpperCase().includes("REJECT") ||
     managerAction === "REJECT" ||
     adminAction === "REJECT"
   );
@@ -378,11 +410,11 @@ export function normalizeMonthlySubmission(data) {
     cycleShortLabel: String(payload?.cycleShortLabel ?? obj?.cycleShortLabel ?? cycleMeta.cycleShortLabel ?? "").trim() || null,
     cycleStartMonth: normalizeYearMonth(payload?.cycleStartMonth ?? obj?.cycleStartMonth) || cycleMeta.cycleStartMonth || null,
     cycleEndMonth: normalizeYearMonth(payload?.cycleEndMonth ?? obj?.cycleEndMonth) || cycleMeta.cycleEndMonth || null,
-    reviewStatus,
-    managerReview,
+    reviewStatus: effectiveReviewStatus,
+    managerReview: effectiveManagerReview,
     managerEvaluation,
     managerSubmittedAt: managerSubmittedAt ? String(managerSubmittedAt) : null,
-    adminReview,
+    adminReview: effectiveAdminReview,
     adminEvaluation,
     adminSubmittedAt: adminSubmittedAt ? String(adminSubmittedAt) : null,
     reopenedForResubmission,
@@ -393,6 +425,7 @@ export function normalizeMonthlySubmission(data) {
     webknotValues,
     webknotValueRatings,
     recognitionsCount,
+    techShowcase,
     submittedAt: submittedAt ? String(submittedAt) : null,
     updatedAt: updatedAt ? String(updatedAt) : null,
     raw: obj,
@@ -550,6 +583,21 @@ export async function deleteAdminMonthlySubmission(submissionId, { signal } = {}
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json().catch(() => ({}));
   return res.text().catch(() => "");
+}
+
+/**
+ * GET /monthly-submissions/cycles
+ * Fetches available review cycles from the server.
+ */
+export async function fetchSubmissionCycles({ signal } = {}) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl("/monthly-submissions/cycles"), {
+    signal,
+    credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+  if (!res.ok) throw await toHttpError(res);
+  return res.json();
 }
 
 export async function submitAdminReviewDecision(payload, { signal } = {}) {

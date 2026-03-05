@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, RefreshCw, User, X, XCircle } from "lucide-react";
 import {
   fetchAdminAllSubmissions,
+  fetchSubmissionCycles,
   formatYearMonth,
   normalizeMonthlySubmission,
   submitAdminReviewDecision,
@@ -86,24 +87,39 @@ function normalizeAdminSubmissions(data, employeeLookup) {
         obj?.submissionType ??
         ""
       ).trim().toUpperCase();
+      const rawReviewStatus = String(submission?.reviewStatus ?? payload?.reviewStatus ?? obj?.reviewStatus ?? status).trim().toUpperCase() || "—";
+      /* After resubmission, stale rejection managerReview / adminReview
+         objects may still be present in the server response.  We ignore
+         them when reviewStatus has been reset to SUBMITTED.               */
+      const isResubmitted = status === "SUBMITTED" && (rawReviewStatus.includes("REJECT") || rawReviewStatus.includes("NEEDS_REVIEW"));
+      /* Show "SUBMITTED" instead of stale rejection status after resubmission */
+      const reviewStatus = isResubmitted ? "SUBMITTED" : rawReviewStatus;
+      const rawManagerReviewAction = String(
+        submission?.managerReview?.action || obj?.managerReview?.action || payload?.managerReview?.action || ""
+      ).trim().toUpperCase();
+      const staleManagerReject = isResubmitted && rawManagerReviewAction === "REJECT";
       const hasManagerEvaluation = Boolean(
         submission?.managerEvaluation ||
         obj?.managerEvaluation ||
         payload?.managerEvaluation
       );
-      const managerReady = Boolean(
-        hasManagerEvaluation ||
-        submission?.managerSubmittedAt ||
-        obj?.managerSubmittedAt ||
-        obj?.managerReviewedAt ||
-        obj?.reviewedByManager ||
-        obj?.managerReview ||
-        payload?.managerSubmittedAt ||
-        payload?.managerReviewedAt ||
-        payload?.managerReview
-      );
-      const adminAction = String(submission?.adminReview?.action || payload?.adminReview?.action || "").trim().toUpperCase() || null;
-      const reviewStatus = String(submission?.reviewStatus ?? payload?.reviewStatus ?? obj?.reviewStatus ?? status).trim().toUpperCase() || "—";
+      const managerReady = staleManagerReject
+        ? false
+        : Boolean(
+            hasManagerEvaluation ||
+            submission?.managerSubmittedAt ||
+            obj?.managerSubmittedAt ||
+            obj?.managerReviewedAt ||
+            obj?.reviewedByManager ||
+            obj?.managerReview ||
+            payload?.managerSubmittedAt ||
+            payload?.managerReviewedAt ||
+            payload?.managerReview
+          );
+      const rawAdminAction = String(submission?.adminReview?.action || payload?.adminReview?.action || "").trim().toUpperCase() || null;
+      /* After resubmission the reviewStatus becomes "SUBMITTED" but the
+         server may still carry the old adminReview.  Clear the stale badge. */
+      const adminAction = (isResubmitted && rawAdminAction === "REJECT") ? null : rawAdminAction;
       const isManagerSelf = submissionType === "MANAGER_SELF_REVIEW";
       const entryType = isManagerSelf
         ? "Manager Self Review"
@@ -147,8 +163,20 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
   const [rejectModal, setRejectModal] = useState({ open: false, item: null, comment: "", target: "employee" });
   const [rejectBusy, setRejectBusy] = useState(false);
   const [rejectError, setRejectError] = useState("");
+  const [techShowcaseText, setTechShowcaseText] = useState("");
+  const [approveBusy, setApproveBusy] = useState(false);
   const [kpiIndex, setKpiIndex] = useState({});
   const [valueIndex, setValueIndex] = useState({});
+  const [serverCycles, setServerCycles] = useState(null);
+
+  /* Fetch available cycles from server */
+  useEffect(() => {
+    let cancelled = false;
+    fetchSubmissionCycles()
+      .then((data) => { if (!cancelled) setServerCycles(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   /* Build lookup map: employeeId (lowercase) → { name, email } */
   const employeeLookup = useMemo(() => {
@@ -166,8 +194,20 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
     return map;
   }, [employeesProp]);
 
-  const cycleInfo = useMemo(() => getCycleForMonth(month || new Date()), [month]);
-  const cycleMonthOptions = useMemo(() => buildCycleMonthOptions(month || new Date()), [month]);
+  const cycleInfo = useMemo(() => {
+    if (serverCycles?.currentCycle) return serverCycles.currentCycle;
+    return getCycleForMonth(month || new Date());
+  }, [month, serverCycles]);
+
+  const cycleMonthOptions = useMemo(() => {
+    if (Array.isArray(serverCycles?.months) && serverCycles.months.length) {
+      return serverCycles.months.map((m) => ({
+        value: normalizeYearMonth(m) || m,
+        label: formatMonthLabel(m),
+      }));
+    }
+    return buildCycleMonthOptions(month || new Date());
+  }, [month, serverCycles]);
 
   useEffect(() => {
     if (!cycleMonthOptions.length) return;
@@ -266,11 +306,13 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
   );
 
   function openReview(item) {
+    setTechShowcaseText(String(item?.submission?.techShowcase ?? "").trim());
     setReviewModal({ open: true, item });
   }
 
   function closeReview() {
     setReviewModal({ open: false, item: null });
+    setTechShowcaseText("");
   }
 
   return (
@@ -502,17 +544,14 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                           <div key={kpiId} className="flex items-center justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <div className="text-sm truncate">{kpiLabel(kpiId)}</div>
-                              {kpiLabel(kpiId) !== String(kpiId) ? (
-                                <div className="text-[10px] text-[rgb(var(--muted))] font-mono truncate">{String(kpiId)}</div>
-                              ) : null}
                             </div>
-                            <span className="font-mono text-sm">{String(rating)}</span>
+                            <span className="font-mono text-sm">{Number(rating).toFixed(1)}</span>
                           </div>
                         ))
                       ) : (
                         <div className="flex items-center justify-between gap-2 text-sm text-[rgb(var(--text))]">
                           <span className="truncate">Defaulted (no self rating)</span>
-                          <span className="font-mono">2</span>
+                          <span className="font-mono">2.0</span>
                         </div>
                       )}
                     </div>
@@ -523,17 +562,14 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                           <div key={valueId} className="flex items-center justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <div className="text-sm truncate">{valueLabel(valueId)}</div>
-                              {valueLabel(valueId) !== String(valueId) ? (
-                                <div className="text-[10px] text-[rgb(var(--muted))] font-mono truncate">{String(valueId)}</div>
-                              ) : null}
                             </div>
-                            <span className="font-mono text-sm">{String(rating)}</span>
+                            <span className="font-mono text-sm">{Number(rating).toFixed(1)}</span>
                           </div>
                         ))
                       ) : (
                         <div className="flex items-center justify-between gap-2 text-sm text-[rgb(var(--text))]">
                           <span className="truncate">Defaulted (no self rating)</span>
-                          <span className="font-mono">2</span>
+                          <span className="font-mono">2.0</span>
                         </div>
                       )}
                     </div>
@@ -567,6 +603,12 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                       <div className="text-lg font-semibold">{Number(reviewModal.item.submission?.recognitionsCount || 0)}</div>
                     </div>
                   </div>
+                  {String(reviewModal.item.submission?.techShowcase || "").trim() ? (
+                    <div className="rt-panel-subtle rounded-md p-3 space-y-2">
+                      <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Tech Showcase</div>
+                      <div className="text-sm whitespace-pre-wrap">{String(reviewModal.item.submission?.techShowcase || "")}</div>
+                    </div>
+                  ) : null}
                   {String(reviewModal.item.submission?.adminReview?.comments || "").trim() ? (
                     <div>
                       <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Latest Admin Comments</div>
@@ -589,11 +631,8 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                               <div key={kpiId} className="flex items-center justify-between gap-2">
                                 <div className="flex-1 min-w-0">
                                   <div className="truncate">{kpiLabel(kpiId)}</div>
-                                  {kpiLabel(kpiId) !== String(kpiId) ? (
-                                    <div className="text-[10px] text-[rgb(var(--muted))] font-mono truncate">{String(kpiId)}</div>
-                                  ) : null}
                                 </div>
-                                <span className="font-mono">{String(rating)}</span>
+                                <span className="font-mono">{Number(rating).toFixed(1)}</span>
                               </div>
                             ))
                           ) : (
@@ -609,11 +648,8 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                               <div key={valueId} className="flex items-center justify-between gap-2">
                                 <div className="flex-1 min-w-0">
                                   <div className="truncate">{valueLabel(valueId)}</div>
-                                  {valueLabel(valueId) !== String(valueId) ? (
-                                    <div className="text-[10px] text-[rgb(var(--muted))] font-mono truncate">{String(valueId)}</div>
-                                  ) : null}
                                 </div>
-                                <span className="font-mono">{String(rating)}</span>
+                                <span className="font-mono">{Number(rating).toFixed(1)}</span>
                               </div>
                             ))
                           ) : (
@@ -630,6 +666,123 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                     </div>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* Scoring Breakdown */}
+            {(() => {
+              const toAvg = (obj) => {
+                if (!obj || typeof obj !== "object") return null;
+                const nums = Object.values(obj)
+                  .map((v) => (typeof v === "number" ? v : Number.parseFloat(String(v ?? ""))))
+                  .filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
+                return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null;
+              };
+              const mgrKpiAvg = toAvg(reviewModal.item.submission?.managerEvaluation?.kpiRatings);
+              const mgrValueAvg = toAvg(reviewModal.item.submission?.managerEvaluation?.webknotValueRatings);
+              const certCount = Array.isArray(reviewModal.item.submission?.certifications) ? reviewModal.item.submission.certifications.length : 0;
+              const recognitions = Number(reviewModal.item.submission?.recognitionsCount || 0) || 0;
+              const existingTechShowcase = String(reviewModal.item.submission?.techShowcase || "").trim();
+              const brownie = certCount + recognitions + (existingTechShowcase ? 1 : 0);
+              let weighted = null;
+              if (mgrKpiAvg != null && mgrValueAvg != null) weighted = 0.85 * mgrKpiAvg + 0.15 * mgrValueAvg;
+              else if (mgrKpiAvg != null) weighted = mgrKpiAvg;
+              else if (mgrValueAvg != null) weighted = mgrValueAvg;
+              if (weighted != null) weighted = Math.round(Math.min(5, Math.max(1, weighted)) * 10) / 10;
+              return (
+                <div className="mt-4 rt-panel-subtle rounded-lg p-5 space-y-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Scoring Breakdown</div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                    <div className="rt-panel-subtle rounded-md p-3">
+                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Avg</div>
+                      <div className="text-xl font-bold mt-1">{mgrKpiAvg != null ? mgrKpiAvg.toFixed(1) : "—"}</div>
+                      <div className="text-[10px] text-[rgb(var(--muted))]">85% weight</div>
+                    </div>
+                    <div className="rt-panel-subtle rounded-md p-3">
+                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Values Avg</div>
+                      <div className="text-xl font-bold mt-1">{mgrValueAvg != null ? mgrValueAvg.toFixed(1) : "—"}</div>
+                      <div className="text-[10px] text-[rgb(var(--muted))]">15% weight</div>
+                    </div>
+                    <div className="rt-panel-subtle rounded-md p-3">
+                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Weighted Score</div>
+                      <div className="text-xl font-bold mt-1 rt-stat-value">{weighted != null ? weighted.toFixed(1) : "—"}</div>
+                      <div className="text-[10px] text-[rgb(var(--muted))]">out of 5</div>
+                    </div>
+                    <div className="rt-panel-subtle rounded-md p-3">
+                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Brownie Points</div>
+                      <div className="text-xl font-bold mt-1 text-amber-500">{brownie}</div>
+                      <div className="text-[10px] text-[rgb(var(--muted))]">{certCount} cert · {recognitions} rec{existingTechShowcase ? " · 1 tech" : ""}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Tech Showcase + Approve */}
+            <div className="mt-6 rt-panel-subtle rounded-lg p-6 space-y-4">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Admin Evaluation</div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">
+                  Tech Showcase (Brownie Points)
+                </label>
+                <textarea
+                  value={techShowcaseText}
+                  onChange={(e) => setTechShowcaseText(e.target.value)}
+                  className="rt-input w-full min-h-[80px] text-sm"
+                  placeholder="Describe employee's tech showcase contribution (leave empty if none)…"
+                  disabled={approveBusy}
+                />
+                <p className="text-[10px] text-[rgb(var(--muted))]">
+                  If the employee presented a tech showcase, describe it here. This contributes to brownie points.
+                </p>
+              </div>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeReview}
+                  className="rt-btn-ghost transition-all"
+                  disabled={approveBusy}
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (approveBusy) return;
+                    setApproveBusy(true);
+                    try {
+                      await submitAdminReviewDecision({
+                        submissionId: reviewModal.item.id,
+                        id: reviewModal.item.id,
+                        month: reviewModal.item.month,
+                        subjectEmployeeId: reviewModal.item.employee.id,
+                        employeeId: reviewModal.item.employee.id,
+                        submissionType: reviewModal.item.submission?.submissionType ?? reviewModal.item.submissionType,
+                        techShowcase: techShowcaseText.trim(),
+                        adminReview: {
+                          action: "APPROVE",
+                          comments: "",
+                          reviewedAt: new Date().toISOString(),
+                        },
+                        reviewStatus: "APPROVED",
+                      });
+                      closeReview();
+                      await reload();
+                    } catch (err) {
+                      if (err?.status === 401) {
+                        onLogout?.();
+                        return;
+                      }
+                      // show inline error via showToast if available
+                    } finally {
+                      setApproveBusy(false);
+                    }
+                  }}
+                  className="bg-emerald-600 text-white hover:bg-emerald-500 rounded-md px-5 py-2.5 text-xs font-semibold uppercase tracking-wider transition-all disabled:opacity-70"
+                  disabled={approveBusy}
+                >
+                  {approveBusy ? "Approving…" : "Approve"}
+                </button>
               </div>
             </div>
         </ModalOverlay>

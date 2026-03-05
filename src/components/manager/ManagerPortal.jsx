@@ -1,20 +1,32 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
+  ArrowLeft,
   Bell,
   BellDot,
   Calendar,
   CheckCheck,
+  CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  Clock,
   Clock3,
+  Eye,
+  FolderKanban,
   LogOut,
   RefreshCw,
+  Search,
+  Shield,
   Sparkles,
+  Star,
+  Target,
   TrendingUp,
   UserCircle2,
   Users,
-  X
+  X,
+  XCircle
 } from "lucide-react";
 
 import { fetchMe } from "../../api/auth.js";
@@ -32,6 +44,11 @@ import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-defi
 import { fetchManagerReportees, normalizeEmployees } from "../../api/employees.js";
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
 import { enhanceReviewText, fetchActiveAiAgent } from "../../api/ai-agents.js";
+import {
+  fetchProjects,
+  normalizeProjects,
+  submitProjectRating,
+} from "../../api/projects.js";
 import { getAppSettings } from "../../utils/appSettings.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
 import { playNotificationSound } from "../../utils/notificationSound.js";
@@ -129,17 +146,33 @@ function normalizeTeamSubmissions(data) {
               recognitionsCount: 0,
               raw: obj,
             };
-      const managerSubmitted = Boolean(
-        obj?.managerSubmittedAt ||
-        obj?.managerReviewedAt ||
-        obj?.reviewedByManager ||
-        obj?.managerReview ||
-        obj?.managerEvaluation ||
-        obj?.payload?.managerSubmittedAt ||
-        obj?.payload?.managerReviewedAt ||
-        obj?.payload?.managerReview ||
-        obj?.payload?.managerEvaluation
-      );
+      /* After employee resubmission the status becomes "SUBMITTED" but the
+         server may still carry the old managerReview with action:"REJECT".
+         Treat that as stale so the row shows as "Pending" again.            */
+      const currentStatus = String(
+        submission?.status ?? obj?.status ?? ""
+      ).trim().toUpperCase();
+      const rawManagerAction = String(
+        obj?.managerReview?.action ||
+        obj?.payload?.managerReview?.action ||
+        ""
+      ).trim().toUpperCase();
+      const staleManagerReject =
+        currentStatus === "SUBMITTED" && rawManagerAction === "REJECT";
+
+      const managerSubmitted = staleManagerReject
+        ? false
+        : Boolean(
+            obj?.managerSubmittedAt ||
+            obj?.managerReviewedAt ||
+            obj?.reviewedByManager ||
+            obj?.managerReview ||
+            obj?.managerEvaluation ||
+            obj?.payload?.managerSubmittedAt ||
+            obj?.payload?.managerReviewedAt ||
+            obj?.payload?.managerReview ||
+            obj?.payload?.managerEvaluation
+          );
       const managerSubmittedAt = String(
         obj?.managerSubmittedAt ??
         obj?.managerReviewedAt ??
@@ -503,6 +536,20 @@ function preventWheelInputChange(e) {
   e.currentTarget.blur();
 }
 
+function formatSubmittedAt(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "—") return "—";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+}
+
 function formatNotificationTimestamp(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return "Now";
@@ -534,6 +581,7 @@ function mergeNotifications(existing, incoming) {
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
   const navItems = [
     { id: "team", icon: <Users size={20} />, label: "Team Submissions" },
+    { id: "project-ratings", icon: <FolderKanban size={20} />, label: "Project Ratings" },
     { id: "self-review", icon: <ClipboardCheck size={20} />, label: "Self Review" },
   ];
 
@@ -670,7 +718,7 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [filter, setFilter] = useState("PENDING_MANAGER_REVIEW"); // SUBMITTED | ALL | PENDING_MANAGER_REVIEW
   const [teamSearch, setTeamSearch] = useState("");
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
-  const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review"]), []);
+  const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review", "project-ratings"]), []);
 
   const getMgrTabFromPath = useCallback(() => {
     const raw = window.location.pathname.replace(/^\//, "").split("/")[0];
@@ -720,6 +768,28 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [aiEnhancingManagerNotes, setAiEnhancingManagerNotes] = useState(false);
 
   const [reviewModal, setReviewModal] = useState({ open: false, row: null });
+
+  /* ── quick reject dialog state ── */
+  const [quickRejectModal, setQuickRejectModal] = useState({ open: false, row: null });
+  const [quickRejectComment, setQuickRejectComment] = useState("");
+  const [quickRejectBusy, setQuickRejectBusy] = useState(false);
+
+  /* ── review queue page state ── */
+  const [queueView, setQueueView] = useState(null); // "reportees" | "submitted" | "pending" | null
+  const [queueSearch, setQueueSearch] = useState("");
+
+  /* ── project ratings state ── */
+  const [mgrProjects, setMgrProjects] = useState([]);
+  const [mgrProjectsLoading, setMgrProjectsLoading] = useState(false);
+  const [mgrProjectsError, setMgrProjectsError] = useState("");
+  const [prSelectedProject, setPrSelectedProject] = useState(null);
+  const [prSelectedEmployee, setPrSelectedEmployee] = useState(null);
+  const [prRating, setPrRating] = useState(0);
+  const [prComments, setPrComments] = useState("");
+  const [prSubmitting, setPrSubmitting] = useState(false);
+  const [prSuccess, setPrSuccess] = useState("");
+  const [prError, setPrError] = useState("");
+  const [prSearch, setPrSearch] = useState("");
 
   const [kpiIndex, setKpiIndex] = useState({}); // { [id]: { title, weight } }
   const [selfKpis, setSelfKpis] = useState([]);
@@ -812,6 +882,73 @@ export default function ManagerPortal({ onLogout, auth }) {
   useEffect(() => { if (teamError) showToast({ title: "Team Load Failed", message: teamError, tone: "error" }); }, [teamError, showToast]);
   useEffect(() => { if (managerDraftError) showToast({ title: "Draft Error", message: managerDraftError, tone: "error" }); }, [managerDraftError, showToast]);
   useEffect(() => { if (selfRatingValidationError) showToast({ title: "Validation", message: selfRatingValidationError, tone: "error" }); }, [selfRatingValidationError, showToast]);
+
+  /* ── load projects for manager project rating tab ── */
+  const loadMgrProjects = useCallback(async (opts = {}) => {
+    setMgrProjectsLoading(true);
+    setMgrProjectsError("");
+    try {
+      const raw = await fetchProjects(opts);
+      const all = normalizeProjects(raw).filter((p) => p.active !== false);
+      setMgrProjects(all);
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+      setMgrProjectsError(err?.message || "Failed to load projects.");
+    } finally {
+      setMgrProjectsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== "project-ratings") return;
+    const controller = new AbortController();
+    loadMgrProjects({ signal: controller.signal });
+    return () => controller.abort();
+  }, [activeTab, loadMgrProjects]);
+
+  /* projects assigned to this manager */
+  const myManagedProjects = useMemo(() => {
+    if (!managerId) return mgrProjects;
+    const managed = mgrProjects.filter(
+      (p) => p.managerId === managerId || !p.managerId,
+    );
+    /* if no projects explicitly assigned to this manager, show all so they can still rate */
+    return managed.length > 0 ? managed : mgrProjects;
+  }, [mgrProjects, managerId]);
+
+  /* filtered for search */
+  const filteredMgrProjects = useMemo(() => {
+    const q = prSearch.trim().toLowerCase();
+    if (!q) return myManagedProjects;
+    return myManagedProjects.filter(
+      (p) => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q),
+    );
+  }, [myManagedProjects, prSearch]);
+
+  /* submit a project rating */
+  async function handleSubmitProjectRating() {
+    if (!prSelectedProject || !prSelectedEmployee || !prRating) return;
+    setPrSubmitting(true);
+    setPrError("");
+    setPrSuccess("");
+    try {
+      await submitProjectRating(prSelectedProject, {
+        employeeId: prSelectedEmployee,
+        rating: prRating,
+        comments: prComments.trim(),
+      });
+      setPrSuccess("Rating submitted successfully!");
+      setPrRating(0);
+      setPrComments("");
+      setPrSelectedEmployee(null);
+      showToast({ title: "Rating Submitted", message: "Project rating saved.", tone: "success" });
+    } catch (err) {
+      setPrError(err?.message || "Failed to submit rating.");
+      showToast({ title: "Rating Failed", message: err?.message || "Please try again.", tone: "error" });
+    } finally {
+      setPrSubmitting(false);
+    }
+  }
 
   const unreadNotificationsCount = useMemo(
     () => notifications.reduce((count, item) => (item?.read ? count : count + 1), 0),
@@ -1080,6 +1217,113 @@ export default function ManagerPortal({ onLogout, auth }) {
     setManagerValueRatings({});
     setManagerNotes("");
     setSavingReview(false);
+  }
+
+  /* ── quick reject (from table action button) ── */
+  async function submitQuickReject() {
+    const row = quickRejectModal.row;
+    if (!row) return;
+    const comment = String(quickRejectComment || "").trim();
+    if (comment.length < 10) {
+      showToast({ title: "Too short", message: "Rejection comments must be at least 10 characters." });
+      return;
+    }
+    const empId = String(row.employee?.id || "").trim();
+    const m = String(row.month || month || "").trim();
+    if (!empId || !m) {
+      showToast({ title: "Missing data", message: "Employee id or month is missing." });
+      return;
+    }
+    setQuickRejectBusy(true);
+    try {
+      const employeePayload = row.payload || {};
+      const reviewedAt = new Date().toISOString();
+      const cycleMeta = buildCycleMeta(m);
+      const employeeKpiRatings = normalizeSelfKpiRatings(employeePayload.kpiRatings || {});
+      const employeeValueRatings = normalizeSelfValueRatings(
+        employeePayload.webknotValueRatings ?? employeePayload.webknotValues
+      );
+      const employeeValueEntries = Object.entries(employeeValueRatings);
+      const employeeCertifications = normalizeCertificationsForState(employeePayload.certifications);
+      const payload = {
+        month: m,
+        monthKey: m,
+        cycleKey: cycleMeta.cycleKey,
+        cycleLabel: cycleMeta.cycleLabel,
+        cycleShortLabel: cycleMeta.cycleShortLabel,
+        cycleStartMonth: cycleMeta.cycleStartMonth,
+        cycleEndMonth: cycleMeta.cycleEndMonth,
+        cycleMonth: cycleMeta.month,
+        submissionType: row?.submissionType || "EMPLOYEE_MONTHLY_SUBMISSION",
+        actorRole: "MANAGER",
+        targetRole: "EMPLOYEE",
+        workflowStage: "MANAGER_REVIEW",
+        subjectEmployeeId: empId,
+        profileVerified: true,
+        employeeId: empId,
+        selfReviewText: String(employeePayload.selfReviewText || ""),
+        certifications: employeeCertifications,
+        webknotValues: employeeValueEntries.map(([valueId]) => String(valueId || "").trim()),
+        webknotValueRatings: Object.fromEntries(employeeValueEntries),
+        webknotValueResponses: employeeValueEntries.map(([valueId, rating]) => ({
+          valueId: String(valueId || "").trim(),
+          rating,
+        })),
+        recognitionsCount: Number(employeePayload.recognitionsCount || 0) || 0,
+        kpiRatings: Object.entries(employeeKpiRatings || {}).map(([kpiId, rating]) => ({
+          kpiId: String(kpiId || "").trim(),
+          rating,
+        })),
+        managerEvaluation: {
+          kpiRatings: {},
+          webknotValueRatings: {},
+          comments: comment,
+          reviewedAt,
+          reviewedBy: managerId || null,
+        },
+        managerReview: {
+          action: "REJECT",
+          comments: comment,
+          reviewedAt,
+          reviewedBy: managerId || null,
+        },
+        managerSubmittedAt: null,
+        managerComments: comment,
+        managerNotes: comment,
+        reviewStatus: "NEEDS_REVIEW",
+        reopenedForResubmission: true,
+      };
+      await submitMonthlySubmission(payload);
+      showToast({ title: "Rejected", message: "Sent back with comments for resubmission." });
+      setTeamSubs((prev) =>
+        prev.map((s) => {
+          const sameEmp = String(s?.employee?.id || "") === empId;
+          const sameMonth = String(s?.month || "") === m;
+          if (!sameEmp || !sameMonth) return s;
+          return {
+            ...s,
+            status: "NEEDS_REVIEW",
+            updatedAt: reviewedAt,
+            managerSubmitted: false,
+            raw: {
+              ...(s.raw && typeof s.raw === "object" ? s.raw : {}),
+              managerReview: payload.managerReview,
+              managerEvaluation: payload.managerEvaluation,
+              reviewStatus: "NEEDS_REVIEW",
+              reopenedForResubmission: true,
+            },
+          };
+        })
+      );
+      setQuickRejectModal({ open: false, row: null });
+      setQuickRejectComment("");
+      await reloadTeam();
+      await reloadTeamInsights();
+    } catch (err) {
+      showToast({ title: "Reject failed", message: err?.message || "Please try again." });
+    } finally {
+      setQuickRejectBusy(false);
+    }
   }
 
   const selectedRow = reviewModal.open ? reviewModal.row : null;
@@ -1579,6 +1823,39 @@ export default function ManagerPortal({ onLogout, auth }) {
     if (Number.isFinite(teamTotals.pendingManagerReviewCount)) return Number(teamTotals.pendingManagerReviewCount);
     return teamInsightSourceRows.filter((s) => isSubmittedStatus(s.status) && !s.managerSubmitted).length;
   }, [hasFullInsights, teamInsightSourceRows, teamInsightsRows, teamTotals.pendingManagerReviewCount]);
+
+  /* ── employee list for review queue popover ── */
+  const queueEmployeeList = useMemo(() => {
+    const rows = teamInsightSourceRows.length ? teamInsightSourceRows : teamSubs;
+    const seen = new Map();
+    for (const s of rows) {
+      const empId = String(s?.employee?.id || "").trim();
+      if (!empId || empId === "—") continue;
+      if (seen.has(empId)) continue;
+      const status = String(s.status || "").trim().toUpperCase();
+      const submitted = isSubmittedStatus(status);
+      const pendingReview = submitted && !s.managerSubmitted;
+      seen.set(empId, {
+        id: empId,
+        name: s.employee?.name || s.employee?.email || empId,
+        email: s.employee?.email || "—",
+        submitted,
+        pendingReview,
+        managerSubmitted: Boolean(s.managerSubmitted),
+        status,
+      });
+    }
+    return Array.from(seen.values());
+  }, [teamInsightSourceRows, teamSubs]);
+
+  const filteredQueueEmployees = useMemo(() => {
+    const q = String(queueSearch || "").trim().toLowerCase();
+    let list = queueEmployeeList;
+    if (queueView === "submitted") list = list.filter((e) => e.submitted);
+    else if (queueView === "pending") list = list.filter((e) => e.pendingReview);
+    if (!q) return list;
+    return list.filter((e) => e.name.toLowerCase().includes(q) || e.email.toLowerCase().includes(q) || e.id.toLowerCase().includes(q));
+  }, [queueEmployeeList, queueView, queueSearch]);
 
   const filteredTeamSubs = useMemo(() => {
     const mode = String(filter || "").toUpperCase();
@@ -2219,76 +2496,76 @@ export default function ManagerPortal({ onLogout, auth }) {
       />
 
       <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-64" : "md:ml-[72px]"} p-4 pt-20 md:pt-6 lg:p-8`}>
-        <header className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-end md:justify-between gap-6">
-          <div className="rt-page-header">
-            <div className="rt-kicker">Manager Portal</div>
-            <h1 className="rt-page-title">
-              {activeTab === "team" ? "Team Submissions Workspace" : "Manager Self Review Workspace"}
+        <header className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-8">
+          <div>
+            <div className="flex items-center gap-3 mb-2">
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">
+              {activeTab === "team" ? "Team Submissions Workspace" : activeTab === "project-ratings" ? "Project Ratings" : "Manager Self Review Workspace"}
             </h1>
-            <p className="rt-page-subtitle">
+            <p className="text-sm text-[rgb(var(--muted))] mt-1.5">
               Monitor submission health, review reportees, and complete your monthly manager self review.
             </p>
-            <div className="mt-2 flex items-center gap-3 flex-wrap text-xs text-[rgb(var(--muted))]">
-              <span className="inline-flex items-center gap-2">
-                <Users size={16} /> Reportees: <span className="font-mono text-[rgb(var(--text))]">{reporteeCount}</span>
+            <div className="mt-3 flex items-center gap-3 flex-wrap">
+              <span className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-xs font-medium text-[rgb(var(--text))]">
+                <Users size={14} className="text-[rgb(var(--muted))]" /> {reporteeCount} Reportees
               </span>
-              <span className="inline-flex items-center gap-2">
-                Submitted: <span className="font-mono text-[rgb(var(--text))]">{submittedCount}</span>
+              <span className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                <CheckCircle2 size={14} /> {submittedCount} Submitted
               </span>
-              <span className="inline-flex items-center gap-2">
-                Pending Review: <span className="font-mono text-[rgb(var(--text))]">{pendingManagerReviewCount}</span>
+              <span className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-xs font-medium text-amber-700 dark:text-amber-300">
+                <Clock size={14} /> {pendingManagerReviewCount} Pending
               </span>
-              {managerId ? (
-                <span className="text-gray-500 font-mono">Manager ID: {managerId}</span>
-              ) : null}
             </div>
           </div>
 
           <div className="flex items-end md:items-end gap-3 flex-wrap md:justify-end">
-            <div className="space-y-1">
-              <div className="rt-kicker">Month</div>
-              <select
-                value={month}
-                onChange={(e) => {
-                  const next = normalizeYearMonth(e.target.value);
-                  if (!next) return;
-                  setMonth(next);
-                }}
-                className="rt-input text-sm"
-                title="Select month"
-              >
-                {cycleMonthOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <div className="text-[10px] text-slate-600 dark:text-slate-400">
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Month</label>
+              <div className="relative">
+                <select
+                  value={month}
+                  disabled
+                  className="rt-input appearance-none py-2.5 px-4 pr-9 text-sm rounded-xl cursor-not-allowed opacity-75"
+                  title="Month is locked to the current period"
+                >
+                  {cycleMonthOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
+              </div>
+              <div className="text-[10px] text-[rgb(var(--muted))]">
                 Cycle: {cycleInfo?.label || "May-Oct / Nov-Apr"}
               </div>
             </div>
 
             {activeTab === "team" ? (
               <div className="flex flex-col gap-3 md:flex-row md:items-end">
-                <div className="space-y-1">
-                  <div className="rt-kicker">Filter</div>
-                  <select
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    className="rt-input text-sm"
-                    title="Filter"
-                  >
-                    <option value="PENDING_MANAGER_REVIEW">Pending manager review</option>
-                    <option value="SUBMITTED">Submitted</option>
-                    <option value="ALL">All</option>
-                  </select>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Filter</label>
+                  <div className="relative">
+                    <select
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      className="rt-input appearance-none py-2.5 px-4 pr-9 text-sm rounded-xl"
+                      title="Filter"
+                    >
+                      <option value="PENDING_MANAGER_REVIEW">Pending manager review</option>
+                      <option value="SUBMITTED">Submitted</option>
+                      <option value="ALL">All</option>
+                    </select>
+                    <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
+                  </div>
                 </div>
-                <div className="space-y-1 w-full md:w-56">
-                  <div className="rt-kicker">Search</div>
+                <div className="space-y-1.5 w-full md:w-56">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Search</label>
                   <input
                     value={teamSearch}
                     onChange={(e) => setTeamSearch(e.target.value)}
-                    className="rt-input text-sm"
+                    className="rt-input py-2.5 px-4 text-sm rounded-xl"
                     placeholder="Search name, email, or ID"
                     aria-label="Search team submissions"
                   />
@@ -2313,38 +2590,139 @@ export default function ManagerPortal({ onLogout, auth }) {
           </div>
         </header>
 
-      {activeTab === "team" ? (
-        <section className="max-w-7xl mx-auto mt-10 grid grid-cols-1 xl:grid-cols-3 gap-8">
+      <AnimatePresence mode="wait">
+      {activeTab === "team" && queueView ? (
+        <motion.section
+          key={`queue-${queueView}`}
+          initial={{ opacity: 0, x: 30 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -30 }}
+          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          className="max-w-5xl mx-auto mt-10"
+        >
+          <button
+            type="button"
+            onClick={() => { setQueueView(null); setQueueSearch(""); }}
+            className="rt-btn-ghost text-sm gap-2 mb-6"
+          >
+            <ArrowLeft size={16} /> Back to Team Submissions
+          </button>
+
+          <div className="rt-panel rounded-2xl overflow-hidden">
+            <div className="p-6 sm:p-8 border-b border-[rgb(var(--border))]">
+              <div className="flex items-center gap-3 mb-1">
+                {queueView === "reportees" ? <Users size={20} className="text-blue-500" /> : queueView === "submitted" ? <CheckCircle2 size={20} className="text-emerald-500" /> : <Clock size={20} className="text-amber-500" />}
+                <h2 className="text-xl font-bold tracking-tight text-[rgb(var(--text))]">
+                  {queueView === "reportees" ? "All Reportees" : queueView === "submitted" ? "Submitted" : "Pending Manager Review"}
+                </h2>
+                <span className="ml-auto text-sm font-mono text-[rgb(var(--muted))]">
+                  {filteredQueueEmployees.length} {filteredQueueEmployees.length === 1 ? "employee" : "employees"}
+                </span>
+              </div>
+              <p className="text-sm text-[rgb(var(--muted))]">
+                {queueView === "reportees"
+                  ? "All employees reporting to you in the current cycle."
+                  : queueView === "submitted"
+                    ? "Employees who have submitted their self-review."
+                    : "Submissions awaiting your review."}
+              </p>
+              <div className="relative mt-5">
+                <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
+                <input
+                  type="text"
+                  value={queueSearch}
+                  onChange={(e) => setQueueSearch(e.target.value)}
+                  placeholder="Search by name, email, or ID…"
+                  className="w-full rt-input py-2.5 pl-10 pr-4 text-sm rounded-xl"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="divide-y divide-[rgb(var(--border))]">
+              {filteredQueueEmployees.length > 0 ? filteredQueueEmployees.map((emp) => (
+                <button
+                  key={emp.id}
+                  type="button"
+                  onClick={() => {
+                    const matchRow = teamSubs.find((s) => String(s?.employee?.id || "") === emp.id);
+                    if (matchRow) setReviewModal({ open: true, row: matchRow });
+                  }}
+                  className="w-full text-left px-6 sm:px-8 py-4 hover:bg-[rgb(var(--surface-2)/.4)] transition-colors group flex items-center justify-between gap-4"
+                >
+                  <div className="flex items-center gap-4 min-w-0 flex-1">
+                    <div className="h-10 w-10 rounded-full bg-[rgb(var(--surface-2))] flex items-center justify-center flex-shrink-0">
+                      <UserCircle2 size={20} className="text-[rgb(var(--muted))]" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-[rgb(var(--text))] truncate group-hover:text-blue-500 transition-colors">{emp.name}</div>
+                      <div className="text-xs text-[rgb(var(--muted))] truncate mt-0.5">
+                        <span className="font-mono">{emp.id}</span> · {emp.email}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <span className={[
+                      "text-[10px] font-semibold uppercase px-2.5 py-1 rounded-full border",
+                      emp.managerSubmitted
+                        ? "bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20"
+                        : emp.submitted
+                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
+                          : "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20",
+                    ].join(" ")}>
+                      {emp.managerSubmitted ? "Reviewed" : emp.submitted ? "Submitted" : "Pending"}
+                    </span>
+                    <ChevronRight size={14} className="text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))] transition-colors" />
+                  </div>
+                </button>
+              )) : (
+                <div className="text-sm text-[rgb(var(--muted))] text-center py-12">No employees found.</div>
+              )}
+            </div>
+          </div>
+        </motion.section>
+      ) : activeTab === "team" ? (
+        <motion.section
+          key="team-tab"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          className="max-w-7xl mx-auto mt-10 grid grid-cols-1 xl:grid-cols-3 gap-8"
+        >
           {(teamLoading && teamSubs.length === 0) || (teamInsightsLoading && teamInsightSourceRows.length === 0) ? (
             <div className="xl:col-span-3 rt-panel-subtle rounded-lg p-6 text-sm text-[rgb(var(--muted))] animate-pulse">
               Loading team submissions and manager insights…
             </div>
           ) : null}
           <section className="xl:col-span-3 rt-panel p-6 sm:p-7">
-            <div className="rt-section-header">
-              <h2 className="rt-section-title">Manager Insights</h2>
-              <p className="rt-section-subtitle">Queue health, review velocity, and actionable pending load.</p>
+            <div className="flex items-center gap-3 mb-5">
+              <div className="rounded-lg p-2 bg-emerald-500/10 text-emerald-500"><Target size={16} /></div>
+              <div>
+                <h2 className="font-bold tracking-tight text-[rgb(var(--text))]">Manager Insights</h2>
+                <p className="text-xs text-[rgb(var(--muted))] mt-0.5">Queue health, review velocity, and actionable pending load.</p>
+              </div>
             </div>
-            <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-              <div className="rt-panel-subtle p-4 rounded-lg">
-                <div className="rt-kicker">Review Coverage</div>
-                <div className="mt-2 text-2xl rt-stat-value">{managerInsights.reviewedCoverage}%</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Review Coverage</div>
+                <div className="mt-2 text-2xl font-bold text-[rgb(var(--text))]">{managerInsights.reviewedCoverage}%</div>
               </div>
-              <div className="rt-panel-subtle p-4 rounded-lg">
-                <div className="rt-kicker">Pending Queue</div>
-                <div className="mt-2 text-2xl rt-stat-value">{managerInsights.pendingCoverage}%</div>
+              <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Pending Queue</div>
+                <div className="mt-2 text-2xl font-bold text-[rgb(var(--text))]">{managerInsights.pendingCoverage}%</div>
               </div>
-              <div className="rt-panel-subtle p-4 rounded-lg">
-                <div className="rt-kicker">Avg Review Time</div>
-                <div className="mt-2 flex items-center gap-2 text-2xl rt-stat-value">
-                  <Clock3 size={18} />
+              <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Avg Review Time</div>
+                <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-[rgb(var(--text))]">
+                  <Clock3 size={16} className="text-[rgb(var(--muted))]" />
                   {managerInsights.avgTurnaroundHours}h
                 </div>
               </div>
-              <div className="rt-panel-subtle p-4 rounded-lg">
-                <div className="rt-kicker">Reject Signals</div>
-                <div className="mt-2 flex items-center gap-2 text-2xl rt-stat-value">
-                  <TrendingUp size={18} />
+              <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Reject Signals</div>
+                <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-[rgb(var(--text))]">
+                  <TrendingUp size={16} className="text-[rgb(var(--muted))]" />
                   {managerInsights.rejectedCount}
                 </div>
               </div>
@@ -2463,7 +2841,7 @@ export default function ManagerPortal({ onLogout, auth }) {
 
             <div className="overflow-x-auto">
               <table className="w-full text-left">
-                <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-slate-500 border-t border-b border-[rgb(var(--border))]">
+                <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-t border-b border-[rgb(var(--border))]">
                   <tr>
                     <th className="p-6 font-semibold">Employee</th>
                     <th className="p-6 font-semibold">Status</th>
@@ -2478,7 +2856,13 @@ export default function ManagerPortal({ onLogout, auth }) {
                     const isSubmitted = isSubmittedStatus(status);
                     const submittedWhen = s.submittedAt || s.updatedAt || "—";
                     return (
-                      <tr key={`${s.employee.email || s.employee.name}:${s.submissionId || submittedWhen}`} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
+                      <motion.tr
+                        key={`${s.employee.email || s.employee.name}:${s.submissionId || submittedWhen}`}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ duration: 0.25 }}
+                        className="hover:bg-[rgb(var(--surface-2))] transition-colors group"
+                      >
                         <td className="p-6">
                           <button
                             type="button"
@@ -2488,8 +2872,8 @@ export default function ManagerPortal({ onLogout, auth }) {
                           >
                             {s.employee.name}
                           </button>
-                          <div className="text-xs text-gray-500 mt-1 break-all">
-                            {s.employee.email || "—"}
+                          <div className="text-xs text-[rgb(var(--muted))] mt-1 font-mono">
+                            {s.employee.id || "—"}
                           </div>
                         </td>
                         <td className="p-6">
@@ -2504,8 +2888,8 @@ export default function ManagerPortal({ onLogout, auth }) {
                             {status}
                           </span>
                         </td>
-                        <td className="p-6 text-xs text-[rgb(var(--muted))] font-mono">
-                          {submittedWhen}
+                        <td className="p-6 text-xs text-[rgb(var(--muted))]">
+                          {formatSubmittedAt(submittedWhen)}
                         </td>
                         <td className="p-6">
                           {s.managerSubmitted ? (
@@ -2519,22 +2903,32 @@ export default function ManagerPortal({ onLogout, auth }) {
                           )}
                         </td>
                         <td className="p-6 text-right px-8">
-                          <button
-                            type="button"
-                            onClick={() => setReviewModal({ open: true, row: s })}
-                            className="rt-btn-ghost transition-all"
-                            title="Review"
-                          >
-                            Open Review
-                          </button>
+                          <div className="inline-flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setReviewModal({ open: true, row: s })}
+                              className="rt-btn-ghost transition-all text-xs gap-1.5"
+                              title="Review submission"
+                            >
+                              <Eye size={13} /> Review
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setQuickRejectModal({ open: true, row: s }); setQuickRejectComment(""); }}
+                              className="rt-btn-danger transition-all text-xs gap-1.5"
+                              title="Reject with comments"
+                            >
+                              <XCircle size={13} /> Reject
+                            </button>
+                          </div>
                         </td>
-                      </tr>
+                      </motion.tr>
                     );
                   })}
 
                   {!teamLoading && filteredTeamSubs.length === 0 ? (
                     <tr>
-                      <td className="p-10 text-center text-gray-500" colSpan={5}>
+                      <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={5}>
                         No submissions to show.
                       </td>
                     </tr>
@@ -2570,28 +2964,273 @@ export default function ManagerPortal({ onLogout, auth }) {
           <section className="rt-panel p-8">
             <h2 className="rt-section-title">Review Queue</h2>
             <p className="rt-section-subtitle mt-1">
-              Click an employee name in the table to open their submitted content and review inputs.
+              Click a card to view employee details.
             </p>
             <div className="mt-5 space-y-3">
-              <div className="rt-panel-subtle rounded-lg px-4 py-3">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Reportees</div>
-                <div className="mt-1 text-xl font-semibold text-[rgb(var(--text))]">{reporteeCount}</div>
-              </div>
-              <div className="rt-panel-subtle rounded-lg px-4 py-3">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Submitted</div>
-                <div className="mt-1 text-xl font-semibold text-[rgb(var(--text))]">{submittedCount}</div>
-              </div>
-              <div className="rt-panel-subtle rounded-lg px-4 py-3">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Pending Manager Review</div>
-                <div className="mt-1 text-xl font-semibold text-[rgb(var(--text))]">{pendingManagerReviewCount}</div>
-              </div>
+              {[
+                { key: "reportees", label: "Reportees", count: reporteeCount, color: "blue", icon: <Users size={16} /> },
+                { key: "submitted", label: "Submitted", count: submittedCount, color: "emerald", icon: <CheckCircle2 size={16} /> },
+                { key: "pending", label: "Pending Manager Review", count: pendingManagerReviewCount, color: "amber", icon: <Clock size={16} /> },
+              ].map((card) => (
+                <button
+                  key={card.key}
+                  type="button"
+                  onClick={() => { setQueueView(card.key); setQueueSearch(""); }}
+                  className="w-full text-left rt-panel-subtle rounded-xl px-5 py-4 hover:bg-[rgb(var(--surface-2)/.5)] transition-all group"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`h-8 w-8 rounded-lg flex items-center justify-center bg-${card.color}-500/10 text-${card.color}-600 dark:text-${card.color}-400`}>
+                        {card.icon}
+                      </div>
+                      <div>
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">{card.label}</div>
+                        <div className="text-xl font-semibold text-[rgb(var(--text))]">{card.count}</div>
+                      </div>
+                    </div>
+                    <ChevronRight size={16} className="text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))] transition-colors" />
+                  </div>
+                </button>
+              ))}
             </div>
           </section>
-        </section>
+        </motion.section>
+      ) : null}
+
+      {/* ── Project Ratings Tab ── */}
+      {activeTab === "project-ratings" ? (
+        <motion.section
+          key="project-ratings-tab"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          className="max-w-5xl mx-auto mt-10 space-y-6"
+        >
+          {/* projects header */}
+          <section className="rt-panel p-6 sm:p-8">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="h-9 w-9 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center">
+                <FolderKanban size={18} strokeWidth={1.8} />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-xl font-bold tracking-tight text-[rgb(var(--text))]">
+                  Rate Employee on Project
+                </h2>
+                <p className="text-sm text-[rgb(var(--muted))] mt-0.5">
+                  Select a project and an employee to submit a project performance rating.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => loadMgrProjects()}
+                disabled={mgrProjectsLoading}
+                className="rt-btn-ghost text-xs"
+              >
+                <RefreshCw size={14} className={mgrProjectsLoading ? "animate-spin" : ""} /> Refresh
+              </button>
+            </div>
+            {/* search */}
+            {myManagedProjects.length > 3 && (
+              <div className="relative mt-3">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
+                <input
+                  type="text"
+                  value={prSearch}
+                  onChange={(e) => setPrSearch(e.target.value)}
+                  placeholder="Search projects…"
+                  className="rt-input pl-9 py-2 text-sm w-full"
+                />
+              </div>
+            )}
+          </section>
+
+          {mgrProjectsError && (
+            <div className="rt-panel p-4 border-l-4 border-red-500 bg-red-500/5 text-sm text-red-600 dark:text-red-400">
+              {mgrProjectsError}
+            </div>
+          )}
+
+          {mgrProjectsLoading && !mgrProjects.length ? (
+            <div className="rt-panel p-12 text-center text-[rgb(var(--muted))]">
+              <RefreshCw size={20} className="animate-spin inline-block mr-2" />
+              Loading projects…
+            </div>
+          ) : !myManagedProjects.length ? (
+            <div className="rt-panel p-12 text-center text-[rgb(var(--muted))]">
+              <FolderKanban size={32} className="inline-block mb-2 opacity-40" />
+              <div className="text-sm">No projects assigned to you yet.</div>
+            </div>
+          ) : (
+            <section className="rt-panel overflow-hidden">
+              <div className="p-6 sm:p-8 space-y-5">
+                {/* select project */}
+                <div>
+                  <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-1.5">Project *</label>
+                  <select
+                    value={prSelectedProject || ""}
+                    onChange={(e) => {
+                      setPrSelectedProject(e.target.value || null);
+                      setPrSuccess("");
+                      setPrError("");
+                    }}
+                    className="rt-input w-full"
+                  >
+                    <option value="">Select a project…</option>
+                    {myManagedProjects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* select employee */}
+                <div>
+                  <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-1.5">Employee *</label>
+                  <select
+                    value={prSelectedEmployee || ""}
+                    onChange={(e) => {
+                      setPrSelectedEmployee(e.target.value || null);
+                      setPrSuccess("");
+                      setPrError("");
+                    }}
+                    className="rt-input w-full"
+                  >
+                    <option value="">Select an employee…</option>
+                    {queueEmployeeList.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.name || emp.email || emp.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* star rating */}
+                <div>
+                  <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-2">Rating *</label>
+                  <div className="flex items-center gap-1.5">
+                    {[1, 2, 3, 4, 5].map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => { setPrRating(v); setPrSuccess(""); setPrError(""); }}
+                        className="p-1 transition-transform hover:scale-110"
+                        title={`${v} star${v !== 1 ? "s" : ""}`}
+                      >
+                        <Star
+                          size={28}
+                          fill={v <= prRating ? "rgb(var(--primary))" : "none"}
+                          className={v <= prRating ? "text-[rgb(var(--primary))]" : "text-[rgb(var(--muted)/.3)]"}
+                          strokeWidth={1.5}
+                        />
+                      </button>
+                    ))}
+                    {prRating > 0 && (
+                      <span className="ml-3 text-sm font-semibold text-[rgb(var(--text))]">
+                        {prRating}/5
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* comments */}
+                <div>
+                  <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-1.5">Comments</label>
+                  <textarea
+                    value={prComments}
+                    onChange={(e) => setPrComments(e.target.value)}
+                    placeholder="Optional feedback on the employee's project contribution…"
+                    rows={3}
+                    className="rt-input w-full resize-none"
+                  />
+                </div>
+
+                {prError && (
+                  <div className="text-sm text-red-600 dark:text-red-400 bg-red-500/5 rounded-lg px-3 py-2 border border-red-500/20">
+                    {prError}
+                  </div>
+                )}
+                {prSuccess && (
+                  <div className="text-sm text-emerald-700 dark:text-emerald-300 bg-emerald-500/5 rounded-lg px-3 py-2 border border-emerald-500/20 flex items-center gap-2">
+                    <CheckCircle2 size={14} /> {prSuccess}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={handleSubmitProjectRating}
+                    disabled={prSubmitting || !prSelectedProject || !prSelectedEmployee || !prRating}
+                    className={[
+                      "rt-btn-primary transition-all",
+                      prSubmitting || !prSelectedProject || !prSelectedEmployee || !prRating
+                        ? "opacity-50 cursor-not-allowed"
+                        : "",
+                    ].join(" ")}
+                  >
+                    {prSubmitting ? (
+                      <><RefreshCw size={14} className="animate-spin" /> Submitting…</>
+                    ) : (
+                      <><Star size={14} /> Submit Rating</>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* managed projects list */}
+              <div className="border-t border-[rgb(var(--border))]">
+                <div className="px-6 sm:px-8 py-4 bg-[rgb(var(--surface-2)/.3)]">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                    Your Projects ({myManagedProjects.length})
+                  </h3>
+                </div>
+                <div className="divide-y divide-[rgb(var(--border))]">
+                  {filteredMgrProjects.map((p) => (
+                    <div
+                      key={p.id}
+                      className={[
+                        "px-6 sm:px-8 py-3.5 flex items-center justify-between transition-colors cursor-pointer",
+                        prSelectedProject === p.id
+                          ? "bg-[rgb(var(--primary)/.06)]"
+                          : "hover:bg-[rgb(var(--surface-2)/.4)]",
+                      ].join(" ")}
+                      onClick={() => { setPrSelectedProject(p.id); setPrSuccess(""); setPrError(""); }}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center flex-shrink-0">
+                          <FolderKanban size={16} />
+                        </div>
+                        <div>
+                          <div className="text-sm font-semibold text-[rgb(var(--text))]">{p.name}</div>
+                          {p.description && (
+                            <div className="text-xs text-[rgb(var(--muted))] mt-0.5 truncate max-w-xs">{p.description}</div>
+                          )}
+                        </div>
+                      </div>
+                      {prSelectedProject === p.id && (
+                        <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-[rgb(var(--primary)/.1)] text-[rgb(var(--primary))] border border-[rgb(var(--primary)/.2)]">
+                          Selected
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
+        </motion.section>
       ) : null}
 
       {activeTab === "self-review" ? (
-        <section className="max-w-7xl mx-auto mt-10">
+        <motion.section
+          key="self-review-tab"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          className="max-w-7xl mx-auto mt-10"
+        >
           <section className="rt-panel p-8 max-w-4xl">
             <h2 className="rt-section-title">Manager Self Review</h2>
             <p className="rt-section-subtitle mt-1">Write your monthly self review, rate KPIs and Webknot values, then submit.</p>
@@ -2659,7 +3298,7 @@ export default function ManagerPortal({ onLogout, auth }) {
               </div>
 
               <div className="rt-panel-subtle rounded-lg p-4">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">KPI Ratings (1-5)</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">KPI Ratings (1-5)</div>
                 <div className="mt-3 space-y-3 max-h-[260px] overflow-y-auto pr-1">
                   {filteredSelfKpis.map((k) => {
                     const id = String(k?.id || "").trim();
@@ -2698,7 +3337,7 @@ export default function ManagerPortal({ onLogout, auth }) {
               </div>
 
               <div className="rt-panel-subtle rounded-lg p-4">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Webknot Values Ratings (1-5)</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Webknot Values Ratings (1-5)</div>
                 <div className="mt-3 space-y-3 max-h-[260px] overflow-y-auto pr-1">
                   {selfValues.map((valueItem) => {
                     const id = String(valueItem?.id || "").trim();
@@ -2758,8 +3397,9 @@ export default function ManagerPortal({ onLogout, auth }) {
               </div>
             </div>
           </section>
-        </section>
+        </motion.section>
       ) : null}
+      </AnimatePresence>
 
       </main>
 
@@ -2771,13 +3411,13 @@ export default function ManagerPortal({ onLogout, auth }) {
           zIndex={70}
           header={
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
                 Manager Review
               </div>
               <div className="mt-2 text-2xl font-semibold tracking-tight text-[rgb(var(--text))]">
                 {selectedRow.employee.name}
               </div>
-              <div className="mt-1 text-xs text-gray-500">
+              <div className="mt-1 text-xs text-[rgb(var(--muted))]">
                 {String(selectedRow.month || month)}
               </div>
             </div>
@@ -2785,8 +3425,8 @@ export default function ManagerPortal({ onLogout, auth }) {
         >
 
             <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="rt-panel-subtle rounded-[2.5rem] p-6">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+              <div className="rt-panel-subtle rounded-2xl p-6">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
                   Employee Submitted
                 </div>
                 <div className="mt-4 space-y-5">
@@ -2806,14 +3446,14 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Self Review</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Self Review</div>
                     <div className="mt-2 text-sm text-[rgb(var(--text))] whitespace-pre-wrap">
                       {String(selectedRow.payload?.selfReviewText || "—")}
                     </div>
                   </div>
 
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">KPI Ratings (Employee)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">KPI Ratings (Employee)</div>
                     <div className="mt-2 space-y-2">
                       {Object.keys(selectedRow.payload?.kpiRatings || {}).length ? (
                         Object.entries(selectedRow.payload.kpiRatings).map(([id, v]) => (
@@ -2824,7 +3464,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                                 <div className="text-[10px] text-[rgb(var(--muted))] font-mono">Weight: {kpiIndex[id].weight}</div>
                               ) : null}
                             </div>
-                            <div className="text-sm font-mono text-purple-200">{String(v)}</div>
+                            <div className="text-sm font-mono text-purple-200">{Number(v).toFixed(1)}</div>
                           </div>
                         ))
                       ) : (
@@ -2837,7 +3477,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Webknot Values (Employee)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Webknot Values (Employee)</div>
                     <div className="mt-2 space-y-2">
                       {selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object" && Object.keys(selectedRow.payload.webknotValueRatings).length ? (
                         Object.entries(selectedRow.payload.webknotValueRatings)
@@ -2845,7 +3485,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                           .map(([id, rating]) => (
                             <div key={String(id || "")} className="flex items-center justify-between gap-4">
                               <div className="text-sm text-[rgb(var(--text))] truncate">{valueLabelIndex[String(id)] || String(id || "")}</div>
-                              <div className="text-sm font-mono text-purple-200">{String(rating ?? "—")}</div>
+                              <div className="text-sm font-mono text-purple-200">{rating != null ? Number(rating).toFixed(1) : "—"}</div>
                             </div>
                           ))
                       ) : Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
@@ -2857,14 +3497,14 @@ export default function ManagerPortal({ onLogout, auth }) {
                       ) : (
                         <div className="flex items-center justify-between gap-3 text-sm text-[rgb(var(--text))]">
                           <span className="truncate">Defaulted (no self rating)</span>
-                          <span className="font-mono text-purple-200">2</span>
+                          <span className="font-mono text-purple-200">2.0</span>
                         </div>
                       )}
                     </div>
                   </div>
 
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Certifications</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Certifications</div>
                     <div className="mt-2 space-y-2">
                       {normalizeCertificationsForState(selectedRow.payload?.certifications).length ? (
                         normalizeCertificationsForState(selectedRow.payload?.certifications).map((cert, idx) => (
@@ -2874,7 +3514,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                           </div>
                         ))
                       ) : (
-                        <div className="text-sm text-gray-500">No certifications added.</div>
+                        <div className="text-sm text-[rgb(var(--muted))]">No certifications added.</div>
                       )}
                     </div>
                   </div>
@@ -2896,13 +3536,13 @@ export default function ManagerPortal({ onLogout, auth }) {
                 </div>
               </div>
 
-              <div className="rt-panel-subtle rounded-[2.5rem] p-6">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+              <div className="rt-panel-subtle rounded-2xl p-6">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
                   Manager Evaluation
                 </div>
                 <div className="mt-4 space-y-5">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Webknot Values (Employee Reference)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Webknot Values (Employee Reference)</div>
                     <div className="mt-2 space-y-2">
                       {selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object" && Object.keys(selectedRow.payload.webknotValueRatings).length ? (
                         Object.entries(selectedRow.payload.webknotValueRatings)
@@ -2910,7 +3550,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                           .map(([id, rating]) => (
                             <div key={`emp-ref-${String(id || "")}`} className="flex items-center justify-between gap-4 text-[13px]">
                               <div className="text-[rgb(var(--muted))] truncate">{valueLabelIndex[String(id)] || String(id || "")}</div>
-                              <div className="font-mono text-[rgb(var(--text))]">{String(rating ?? "—")}</div>
+                              <div className="font-mono text-[rgb(var(--text))]">{rating != null ? Number(rating).toFixed(1) : "—"}</div>
                             </div>
                           ))
                       ) : Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
@@ -2921,13 +3561,13 @@ export default function ManagerPortal({ onLogout, auth }) {
                           </div>
                         ))
                       ) : (
-                        <div className="text-sm text-gray-500">No values provided by employee.</div>
+                        <div className="text-sm text-[rgb(var(--muted))]">No values provided by employee.</div>
                       )}
                     </div>
                   </div>
 
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">KPI Ratings (Manager)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">KPI Ratings (Manager)</div>
                     <div className="mt-2 space-y-3">
                       {Object.keys(selectedRow.payload?.kpiRatings || {}).length ? (
                         Object.entries(selectedRow.payload.kpiRatings).map(([id]) => {
@@ -2965,13 +3605,13 @@ export default function ManagerPortal({ onLogout, auth }) {
                           );
                         })
                       ) : (
-                        <div className="text-sm text-gray-500">No KPIs.</div>
+                        <div className="text-sm text-[rgb(var(--muted))]">No KPIs.</div>
                       )}
                     </div>
                   </div>
 
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Webknot Value Ratings (Manager)</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Webknot Value Ratings (Manager)</div>
                     <div className="mt-2 space-y-3">
                       {Array.from(
                         new Set([
@@ -3032,13 +3672,13 @@ export default function ManagerPortal({ onLogout, auth }) {
                             );
                           })
                       ) : (
-                        <div className="text-sm text-gray-500">No Webknot values.</div>
+                        <div className="text-sm text-[rgb(var(--muted))]">No Webknot values.</div>
                       )}
                     </div>
                   </div>
 
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Manager Comments</div>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Manager Comments</div>
                     <textarea
                       value={managerNotes}
                       onChange={(e) => setManagerNotes(e.target.value)}
@@ -3087,19 +3727,6 @@ export default function ManagerPortal({ onLogout, auth }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => submitManagerReviewDecision("REJECT")}
-                      disabled={savingReview}
-                      className={[
-                        "rt-btn-danger transition-all",
-                        savingReview
-                          ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
-                          : "",
-                      ].join(" ")}
-                    >
-                      {savingReview ? "Working…" : "Reject with comments"}
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => submitManagerReviewDecision("SUBMIT")}
                       disabled={savingReview}
                       className={[
@@ -3112,11 +3739,11 @@ export default function ManagerPortal({ onLogout, auth }) {
                       {savingReview ? "Submitting…" : "Submit review"}
                     </button>
                   </div>
-                  <div className="text-[10px] text-gray-500">
-                    Validation: submit requires KPI/value ratings (1-5). Reject requires at least 10 characters of comments.
+                  <div className="text-[10px] text-[rgb(var(--muted))]">
+                    Validation: submit requires KPI/value ratings (1-5).
                   </div>
                   <div className="text-[11px] text-[rgb(var(--muted))]">
-                    Manager ratings and comments are the scores forwarded to admins. Rejection comments will be visible to the employee for resubmission.
+                    Manager ratings and comments are the scores forwarded to admins.
                   </div>
                 </div>
               </div>
@@ -3124,7 +3751,76 @@ export default function ManagerPortal({ onLogout, auth }) {
         </ModalOverlay>
       ) : null}
 
-      <Toast toast={toast} onDismiss={() => setToast(null)} />
+      {/* ── Quick Reject Dialog ── */}
+      {quickRejectModal.open && quickRejectModal.row ? (
+        <ModalOverlay
+          isOpen
+          onClose={() => { setQuickRejectModal({ open: false, row: null }); setQuickRejectComment(""); }}
+          title="Reject Submission"
+          maxWidth="max-w-lg"
+          zIndex={80}
+        >
+          <div className="p-6 space-y-5">
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <XCircle size={16} className="text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                <span className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+                  Rejecting submission from {quickRejectModal.row?.employee?.name || "employee"}
+                </span>
+              </div>
+              <div className="text-xs text-amber-700 dark:text-amber-300">
+                The employee will see your comments below and can update &amp; resubmit.
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                Manager Comments <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={quickRejectComment}
+                onChange={(e) => setQuickRejectComment(e.target.value)}
+                rows={4}
+                className="w-full rt-input py-3 px-4 text-sm rounded-xl resize-none"
+                placeholder="Provide feedback for the employee — what needs to be changed or improved (min 10 characters)..."
+                autoFocus
+              />
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] text-[rgb(var(--muted))] flex items-center gap-1">
+                  <Eye size={10} /> Visible to employee
+                </div>
+                <div className="text-[10px] text-[rgb(var(--muted))]">
+                  {quickRejectComment.length} / 10 min
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 pt-1">
+              <button
+                type="button"
+                onClick={() => { setQuickRejectModal({ open: false, row: null }); setQuickRejectComment(""); }}
+                className="rt-btn-ghost"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitQuickReject}
+                disabled={quickRejectBusy || quickRejectComment.trim().length < 10}
+                className={[
+                  "rt-btn-danger transition-all",
+                  quickRejectBusy || quickRejectComment.trim().length < 10
+                    ? "opacity-50 cursor-not-allowed"
+                    : "",
+                ].join(" ")}
+              >
+                <XCircle size={14} />
+                {quickRejectBusy ? "Rejecting…" : "Reject"}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      ) : null}
+
+      <Toast toast={toast} onDismiss={() => setToast(null)} durationMs={2800} />
     </div>
     </>
   );

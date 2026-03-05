@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import AdminControlCenter from "./components/admin/AdminControlCenter.jsx";
-import EmployeePortal from "./components/employee/EmployeePortal.jsx";
-import ManagerPortal from "./components/manager/ManagerPortal.jsx";
-import LoginPage from "./components/auth/LoginPage.jsx";
-import SubmissionWindowClosed from "./components/employee/SubmissionWindowClosed.jsx";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+
+/* ── Lazy-loaded portals (code-split per role) ─────────────── */
+const AdminControlCenter = lazy(() => import("./components/admin/AdminControlCenter.jsx"));
+const EmployeePortal = lazy(() => import("./components/employee/EmployeePortal.jsx"));
+const ManagerPortal = lazy(() => import("./components/manager/ManagerPortal.jsx"));
+const LoginPage = lazy(() => import("./components/auth/LoginPage.jsx"));
+const SubmissionWindowClosed = lazy(() => import("./components/employee/SubmissionWindowClosed.jsx"));
+
 import { fetchManagerReportees, normalizeEmployees } from "./api/employees.js";
 import {
   clearAuth,
@@ -15,6 +18,19 @@ import {
   setAuth,
 } from "./api/auth.js";
 import { fetchSubmissionWindowCurrent, fetchRoleSubmissionWindow } from "./api/submission-window.js";
+
+/** Shared loading fallback for Suspense boundaries */
+function PortalLoader() {
+  return (
+    <div className="rt-shell grid place-items-center px-6">
+      <div className="rt-panel text-center px-8 py-10 w-full max-w-xl">
+        <div className="rt-kicker">Loading</div>
+        <div className="mt-2 rt-title">Loading Portal</div>
+        <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">Please wait…</div>
+      </div>
+    </div>
+  );
+}
 
 function withWindowSource(data, source) {
   const obj = data && typeof data === "object" ? data : {};
@@ -225,18 +241,20 @@ export default function App() {
 
   if (!auth) {
     return (
-      <LoginPage
-        onLoginSuccess={(nextAuth) => {
-          clearManualLogoutMark();
-          setAuthState(nextAuth);
-          setWindowRefreshNonce((n) => n + 1);
-        }}
-      />
+      <Suspense fallback={<PortalLoader />}>
+        <LoginPage
+          onLoginSuccess={(nextAuth) => {
+            clearManualLogoutMark();
+            setAuthState(nextAuth);
+            setWindowRefreshNonce((n) => n + 1);
+          }}
+        />
+      </Suspense>
     );
   }
 
   if (roleLabel === "Admin") {
-    return <AdminControlCenter onLogout={logout} auth={auth} />;
+    return <Suspense fallback={<PortalLoader />}><AdminControlCenter onLogout={logout} auth={auth} /></Suspense>;
   }
 
   if (roleProbeLoading) {
@@ -265,28 +283,32 @@ export default function App() {
 
   if (!windowData) {
     return (
-      <SubmissionWindowClosed
-        portalWindow={null}
-        error={windowError || "Unable to determine whether submissions are open."}
-        onRetry={() => setWindowRefreshNonce((n) => n + 1)}
-        onLogout={logout}
-      />
+      <Suspense fallback={<PortalLoader />}>
+        <SubmissionWindowClosed
+          portalWindow={null}
+          error={windowError || "Unable to determine whether submissions are open."}
+          onRetry={() => setWindowRefreshNonce((n) => n + 1)}
+          onLogout={logout}
+        />
+      </Suspense>
     );
   }
 
   if (!windowData.isOpen) {
     return (
-      <SubmissionWindowClosed
-        portalWindow={windowData}
-        onRetry={() => setWindowRefreshNonce((n) => n + 1)}
-        onLogout={logout}
-      />
+      <Suspense fallback={<PortalLoader />}>
+        <SubmissionWindowClosed
+          portalWindow={windowData}
+          onRetry={() => setWindowRefreshNonce((n) => n + 1)}
+          onLogout={logout}
+        />
+      </Suspense>
     );
   }
 
   if (effectivePortalRole === "Manager") {
-    return <ManagerPortal onLogout={logout} auth={auth} />;
+    return <Suspense fallback={<PortalLoader />}><ManagerPortal onLogout={logout} auth={auth} /></Suspense>;
   }
 
-  return <EmployeePortal onLogout={logout} auth={auth} />;
+  return <Suspense fallback={<PortalLoader />}><EmployeePortal onLogout={logout} auth={auth} /></Suspense>;
 }

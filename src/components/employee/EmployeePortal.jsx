@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Calendar,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -12,7 +14,12 @@ import {
   Target,
   Clock,
   ShieldAlert,
+  Lock,
   X,
+  FolderKanban,
+  Star,
+  RefreshCw,
+  Search,
 } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import ThemeToggle from "../shared/ThemeToggle.jsx";
@@ -37,6 +44,18 @@ import {
 } from "../../api/employee-portal.js";
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
 import { enhanceReviewText, fetchActiveAiAgent } from "../../api/ai-agents.js";
+import {
+  fetchProjects,
+  normalizeProjects,
+  fetchMyProjects,
+  updateMyProjects,
+  fetchMyProjectRatings,
+  normalizeProjectRatings,
+  fetchAvailableProjects,
+  fetchSelectedProjects,
+  updateSelectedProjects,
+  fetchSelectedProjectRatings,
+} from "../../api/projects.js";
 import { getAppSettings } from "../../utils/appSettings.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
 
@@ -333,6 +352,9 @@ function buildMonthlySubmissionPayload({
 function isFinalSubmissionStatus(status, meta) {
   const s = String(status || "").trim().toUpperCase();
   if (s === "SUBMITTED" || s === "APPROVED" || s === "COMPLETED" || s === "FINAL") return true;
+  // Also check reviewStatus which the server may use instead of top-level status
+  const rs = String(meta?.reviewStatus || "").trim().toUpperCase();
+  if (rs === "SUBMITTED" || rs === "APPROVED" || rs === "COMPLETED" || rs === "FINAL") return true;
   if (meta?.submittedAt) return true;
   return false;
 }
@@ -475,39 +497,63 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
 
 function InfoRow({ label, value }) {
   return (
-    <div className="flex items-start justify-between gap-6 py-3 border-b border-[rgb(var(--border))] last:border-b-0">
-      <div className="text-[10px] font-medium text-[rgb(var(--muted))] uppercase tracking-wider">
+    <div className="flex items-center justify-between gap-6 py-3.5 border-b border-[rgb(var(--border)/.5)] last:border-b-0 group hover:bg-[rgb(var(--surface-2)/.3)] -mx-4 px-4 rounded-lg transition-colors">
+      <div className="text-xs font-medium text-[rgb(var(--muted))] uppercase tracking-wider">
         {label}
       </div>
-      <div className="text-sm text-[rgb(var(--text))] font-mono text-right break-all">{value}</div>
+      <div className="text-sm text-[rgb(var(--text))] font-medium text-right break-all">{value}</div>
     </div>
   );
 }
 
 function SubmissionStepper({ activeTab, steps, onNavigate }) {
   const list = Array.isArray(steps) ? steps : [];
+  const activeIdx = list.findIndex((s) => s.id === activeTab);
   return (
-    <div className="rt-stepper max-w-4xl mx-auto mb-6">
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+    <div className="max-w-4xl mx-auto mb-8">
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-2 px-1">
         {list.map((step, idx) => {
           const status = step?.status || "pending";
           const active = activeTab === step.id;
+          const done = status === "done";
+          const isPast = idx < activeIdx;
           return (
-            <button
-              key={step.id}
-              type="button"
-              onClick={() => onNavigate?.(step.id)}
-              className={[
-                "rt-step-chip transition-all",
-                active ? "rt-step-chip--active" : "",
-                status === "done" ? "rt-step-chip--done" : "",
-              ].join(" ")}
-              title={String(step?.label || "")}
-            >
-              <span className="font-mono">{String(idx + 1).padStart(2, "0")}</span>
-              <span>{step?.label}</span>
-              {status === "done" ? <CheckCircle2 size={13} /> : null}
-            </button>
+            <React.Fragment key={step.id}>
+              {idx > 0 ? (
+                <div className={`hidden sm:block h-[2px] w-6 flex-shrink-0 rounded-full transition-colors duration-300 ${done || isPast ? "bg-emerald-500/60" : "bg-[rgb(var(--border))]"}`} />
+              ) : null}
+              <motion.button
+                type="button"
+                onClick={() => onNavigate?.(step.id)}
+                layout
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                className={[
+                  "flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap border",
+                  active
+                    ? "bg-[rgb(var(--primary))] text-white border-[rgb(var(--primary))] shadow-md shadow-[rgb(var(--primary)/.2)]"
+                    : done
+                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+                      : "bg-[rgb(var(--surface))] text-[rgb(var(--muted))] border-[rgb(var(--border))] hover:bg-[rgb(var(--surface-2))]",
+                ].join(" ")}
+                title={String(step?.label || "")}
+              >
+                <span className={`h-5 w-5 rounded-full text-[10px] font-bold flex items-center justify-center ${active ? "bg-white/20" : done ? "bg-emerald-500/20" : "bg-[rgb(var(--surface-2))]"}`}>
+                  {done ? (
+                    <motion.span
+                      initial={{ scale: 0, rotate: -90 }}
+                      animate={{ scale: 1, rotate: 0 }}
+                      transition={{ type: "spring", stiffness: 400, damping: 18 }}
+                    >
+                      <CheckCircle2 size={12} />
+                    </motion.span>
+                  ) : (
+                    <span>{idx + 1}</span>
+                  )}
+                </span>
+                <span className="hidden sm:inline">{step?.label}</span>
+              </motion.button>
+            </React.Fragment>
           );
         })}
       </div>
@@ -519,40 +565,287 @@ function ProfileTab({ employee, authEmail }) {
   const display = employee || null;
   const email = authEmail || display?.email || "—";
 
+  /* ── project selection state ── */
+  const [allProjects, setAllProjects] = useState([]);
+  const [selectedProjectIds, setSelectedProjectIds] = useState(new Set());
+  const [originalProjectIds, setOriginalProjectIds] = useState(new Set());
+  const [projectRatings, setProjectRatings] = useState([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsSaving, setProjectsSaving] = useState(false);
+  const [projectsError, setProjectsError] = useState("");
+  const [projectsSuccess, setProjectsSuccess] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        /* prefer employee-portal profile aliases, fall back to legacy endpoints */
+        const [allRaw, myRaw, ratingsRaw] = await Promise.all([
+          fetchAvailableProjects().catch(() => fetchProjects().catch(() => ({}))),
+          fetchSelectedProjects().catch(() => fetchMyProjects().catch(() => ({}))),
+          fetchSelectedProjectRatings().catch(() => fetchMyProjectRatings().catch(() => ({}))),
+        ]);
+        if (!alive) return;
+        const all = normalizeProjects(allRaw).filter((p) => p.active !== false);
+        setAllProjects(all);
+
+        const myData = myRaw && typeof myRaw === "object" ? myRaw : {};
+        const myArr =
+          (Array.isArray(myRaw) && myRaw) ||
+          (Array.isArray(myData?.data) && myData.data) ||
+          (Array.isArray(myData?.projectIds) && myData.projectIds) ||
+          (Array.isArray(myData?.projects) && myData.projects) ||
+          [];
+        const myIds = new Set(myArr.map((x) => String(typeof x === "object" ? (x?.id ?? x?.projectId ?? "") : x).trim()).filter(Boolean));
+        setSelectedProjectIds(myIds);
+        setOriginalProjectIds(myIds);
+
+        setProjectRatings(normalizeProjectRatings(ratingsRaw));
+      } catch {
+        /* silent */
+      } finally {
+        if (alive) setProjectsLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  function toggleProject(projectId) {
+    setSelectedProjectIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+    setProjectsSuccess("");
+  }
+
+  const projectsDirty = useMemo(() => {
+    if (selectedProjectIds.size !== originalProjectIds.size) return true;
+    for (const id of selectedProjectIds) {
+      if (!originalProjectIds.has(id)) return true;
+    }
+    return false;
+  }, [selectedProjectIds, originalProjectIds]);
+
+  async function saveProjects() {
+    setProjectsSaving(true);
+    setProjectsError("");
+    setProjectsSuccess("");
+    try {
+      /* prefer employee-portal profile alias, fall back to legacy */
+      await updateSelectedProjects([...selectedProjectIds]).catch(() =>
+        updateMyProjects([...selectedProjectIds]),
+      );
+      setOriginalProjectIds(new Set(selectedProjectIds));
+      setProjectsSuccess("Projects updated! Project managers have been notified.");
+      /* refresh ratings */
+      try {
+        const ratingsRaw = await fetchSelectedProjectRatings().catch(() => fetchMyProjectRatings());
+        setProjectRatings(normalizeProjectRatings(ratingsRaw));
+      } catch { /* ignore */ }
+    } catch (err) {
+      setProjectsError(err?.message || "Failed to save projects.");
+    } finally {
+      setProjectsSaving(false);
+    }
+  }
+
+  const ratingsMap = useMemo(() => {
+    const m = new Map();
+    for (const r of projectRatings) m.set(r.projectId, r);
+    return m;
+  }, [projectRatings]);
+
+  const filteredAllProjects = useMemo(() => {
+    const q = projectSearch.trim().toLowerCase();
+    if (!q) return allProjects;
+    return allProjects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q) ||
+        (p.managerName || "").toLowerCase().includes(q),
+    );
+  }, [allProjects, projectSearch]);
+
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="rt-page-header">
-        <h2 className="rt-page-title">Profile</h2>
-        <p className="rt-page-subtitle">
+        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Profile</h2>
+        <p className="text-sm text-[rgb(var(--muted))] mt-1">
           If anything looks wrong, please contact support.
         </p>
       </header>
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
-        <div className="flex items-start justify-between gap-6 flex-wrap">
-          <div>
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-              Employee Details
+      <section className="rt-panel rounded-2xl overflow-hidden">
+        {/* Profile hero */}
+        <div className="relative px-6 sm:px-8 pt-8 pb-6 bg-[rgb(var(--primary)/.05)]">
+          <div className="flex items-start justify-between gap-6 flex-wrap">
+            <div className="flex items-center gap-4">
+              <div className="h-14 w-14 rounded-2xl bg-[rgb(var(--primary))] flex items-center justify-center text-white text-lg font-bold shadow-lg shadow-[rgb(var(--primary)/.15)]">
+                {(display?.name || email || "?")[0]?.toUpperCase()}
+              </div>
+              <div>
+                <div className="text-xl font-bold tracking-tight text-[rgb(var(--text))]">
+                  {display?.name || email}
+                </div>
+                <div className="mt-0.5 text-xs text-[rgb(var(--muted))] font-mono">{display?.id || "—"}</div>
+                <div className="mt-1 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[rgb(var(--primary)/.1)] border border-[rgb(var(--primary)/.2)] text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--primary))]">
+                  {display?.role || "Employee"}
+                </div>
+              </div>
             </div>
-            <div className="mt-3 text-2xl font-semibold tracking-tight text-[rgb(var(--text))]">
-              {display?.name || email}
+            <div className="rounded-xl bg-[rgb(var(--surface))] border border-[rgb(var(--border))] px-4 py-3 shadow-sm">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                Support
+              </div>
+              <div className="mt-1 text-sm text-[rgb(var(--text))] font-mono">hr@webknot.in</div>
             </div>
-            <div className="mt-1 text-sm text-slate-600 dark:text-slate-300 font-mono">{display?.id || "—"}</div>
-          </div>
-          <div className="rt-panel-subtle rounded-lg px-4 py-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-              Support
-            </div>
-            <div className="mt-1 text-sm text-[rgb(var(--text))] font-mono">hr@webknot.in</div>
           </div>
         </div>
 
-        <div className="mt-6">
+        <div className="px-6 sm:px-8 py-6">
           <InfoRow label="Email" value={email} />
           <InfoRow label="Role" value={display?.role || "Employee"} />
           <InfoRow label="Designation" value={display?.designation || "—"} />
           <InfoRow label="Stream" value={display?.stream || "—"} />
           <InfoRow label="Band" value={display?.band || "—"} />
+        </div>
+      </section>
+
+      {/* ── Project Selection ── */}
+      <section className="rt-panel rounded-2xl overflow-hidden">
+        <div className="px-6 sm:px-8 pt-6 pb-4 border-b border-[rgb(var(--border)/.5)]">
+          <div className="flex items-center gap-3 mb-1">
+            <div className="h-8 w-8 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center">
+              <FolderKanban size={16} />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-base font-bold text-[rgb(var(--text))]">My Projects</h3>
+              <p className="text-xs text-[rgb(var(--muted))]">Select the projects you have worked on. Respective project managers will be notified.</p>
+            </div>
+            {selectedProjectIds.size > 0 && (
+              <span className="text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-[rgb(var(--primary)/.1)] text-[rgb(var(--primary))] border border-[rgb(var(--primary)/.2)]">
+                {selectedProjectIds.size} selected
+              </span>
+            )}
+          </div>
+          {/* search */}
+          {allProjects.length > 4 && (
+            <div className="relative mt-3">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
+              <input
+                type="text"
+                value={projectSearch}
+                onChange={(e) => setProjectSearch(e.target.value)}
+                placeholder="Search projects…"
+                className="rt-input pl-9 py-2 text-sm w-full"
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 sm:px-8 py-5">
+          {projectsLoading ? (
+            <div className="flex items-center gap-2 text-sm text-[rgb(var(--muted))] py-4">
+              <RefreshCw size={14} className="animate-spin" /> Loading projects…
+            </div>
+          ) : !allProjects.length ? (
+            <div className="text-sm text-[rgb(var(--muted))] py-4">
+              No projects available yet. Projects will appear here once created by an admin.
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {filteredAllProjects.map((project) => {
+                const isSelected = selectedProjectIds.has(project.id);
+                const rating = ratingsMap.get(project.id);
+                return (
+                  <div
+                    key={project.id}
+                    onClick={() => toggleProject(project.id)}
+                    className={[
+                      "group relative flex items-center gap-4 p-4 rounded-xl border cursor-pointer transition-all duration-200",
+                      isSelected
+                        ? "border-[rgb(var(--primary)/.4)] bg-[rgb(var(--primary)/.05)] shadow-sm"
+                        : "border-[rgb(var(--border))] hover:border-[rgb(var(--primary)/.2)] hover:bg-[rgb(var(--surface-2)/.3)]",
+                    ].join(" ")}
+                  >
+                    {/* checkbox */}
+                    <div className={[
+                      "h-5 w-5 rounded-md border-2 flex-shrink-0 flex items-center justify-center transition-all",
+                      isSelected
+                        ? "bg-[rgb(var(--primary))] border-[rgb(var(--primary))]"
+                        : "border-[rgb(var(--border))] group-hover:border-[rgb(var(--primary)/.4)]",
+                    ].join(" ")}>
+                      {isSelected && <CheckCircle2 size={13} className="text-white" strokeWidth={3} />}
+                    </div>
+
+                    {/* project info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-sm text-[rgb(var(--text))]">{project.name}</div>
+                      {project.description && (
+                        <div className="mt-0.5 text-xs text-[rgb(var(--muted))] line-clamp-1">{project.description}</div>
+                      )}
+                      <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">
+                        Manager: <span className="font-medium text-[rgb(var(--text))]">{project.managerName || "—"}</span>
+                      </div>
+                    </div>
+
+                    {/* avg rating */}
+                    {rating && rating.averageRating > 0 && (
+                      <div className="flex-shrink-0 text-right">
+                        <div className="flex items-center gap-1.5">
+                          <Star size={14} className="text-amber-500 fill-amber-500" />
+                          <span className="text-lg font-bold text-[rgb(var(--text))]">{rating.averageRating.toFixed(1)}</span>
+                        </div>
+                        <div className="text-[10px] text-[rgb(var(--muted))]">
+                          avg from {rating.ratingsCount} manager{rating.ratingsCount !== 1 ? "s" : ""}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* feedback messages */}
+          {projectsError && (
+            <div className="mt-3 text-sm text-red-600 dark:text-red-400 bg-red-500/5 rounded-lg px-3 py-2 border border-red-500/20">
+              {projectsError}
+            </div>
+          )}
+          {projectsSuccess && (
+            <div className="mt-3 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 rounded-lg px-3 py-2 border border-emerald-500/20 flex items-center gap-2">
+              <CheckCircle2 size={14} /> {projectsSuccess}
+            </div>
+          )}
+
+          {/* save button */}
+          {allProjects.length > 0 && (
+            <div className="mt-5 flex items-center justify-between">
+              <div className="text-xs text-[rgb(var(--muted))]">
+                {selectedProjectIds.size} project{selectedProjectIds.size !== 1 ? "s" : ""} selected
+              </div>
+              <button
+                onClick={saveProjects}
+                disabled={!projectsDirty || projectsSaving}
+                className={[
+                  "rt-btn-primary transition-all",
+                  (!projectsDirty || projectsSaving)
+                    ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+                    : "",
+                ].join(" ")}
+              >
+                {projectsSaving ? (
+                  <><RefreshCw size={14} className="animate-spin" /> Saving…</>
+                ) : (
+                  "Save Projects"
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -563,12 +856,12 @@ function Placeholder({ title, note }) {
   return (
     <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="rt-page-header">
-        <h2 className="rt-page-title">{title}</h2>
-        <p className="rt-page-subtitle">{note}</p>
+        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">{title}</h2>
+        <p className="text-sm text-[rgb(var(--muted))] mt-1">{note}</p>
       </header>
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
-        <div className="text-[rgb(var(--text))]">
+      <section className="rt-panel rounded-2xl p-6 sm:p-8">
+        <div className="text-[rgb(var(--muted))] text-sm">
           Coming soon.
         </div>
       </section>
@@ -600,7 +893,7 @@ function SelfReviewEditor({
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
             Self Review
           </div>
           <div className="mt-2 text-sm text-[rgb(var(--muted))]">
@@ -683,7 +976,7 @@ function SelfReviewEditor({
         ].join(" ")}
         placeholder="Write your self review here..."
       />
-      <div className="text-xs text-gray-500">
+      <div className="text-xs text-[rgb(var(--muted))]">
         Tip: include accomplishments, impact, collaboration, and next goals.
       </div>
 
@@ -733,36 +1026,45 @@ function KpisTab({
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="rt-page-header">
-        <h2 className="rt-page-title">KPIs</h2>
-        <p className="rt-page-subtitle">
+        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">KPIs</h2>
+        <p className="text-sm text-[rgb(var(--muted))] mt-1">
           Rate yourself from 1.0 to 5.0 (1 decimal allowed). Weightage is out of 100%.
         </p>
       </header>
 
       {loading ? (
-        <div className="rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))]">
+        <div className="rt-panel-subtle rounded-xl p-4 text-sm text-[rgb(var(--muted))] animate-pulse">
           Loading KPIs…
         </div>
       ) : null}
       {!fullyLoaded && (prefetching || loading) ? (
-        <div className="rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))]">
+        <div className="rt-panel-subtle rounded-xl p-4 text-sm text-[rgb(var(--muted))] animate-pulse">
           Loading full KPI list for this month…
         </div>
       ) : null}
 
-      <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
-        <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
-          <div className="rt-section-header">
-            <h3 className="rt-section-title">KPI Ratings</h3>
-            <p className="rt-section-subtitle">
-              Total weightage: <span className="font-mono">{Math.round(totalWeight * 10) / 10}%</span>
+      <section className="rt-panel rounded-2xl overflow-hidden">
+        <div className="px-6 sm:px-8 py-6 flex items-center justify-between gap-4 flex-wrap border-b border-[rgb(var(--border))]">
+          <div>
+            <h3 className="font-bold text-[rgb(var(--text))] tracking-tight">KPI Ratings</h3>
+            <p className="text-xs text-[rgb(var(--muted))] mt-0.5">
+              Total weightage: <span className="font-mono font-semibold">{Math.round(totalWeight * 10) / 10}%</span>
+              {all.length > 0 ? <span className="ml-3">{ratedCount}/{all.length} rated</span> : null}
             </p>
           </div>
+          {all.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-24 rounded-full bg-[rgb(var(--surface-2))] overflow-hidden">
+                <div className="h-full rounded-full bg-emerald-500 transition-all duration-500" style={{ width: `${all.length ? (ratedCount / all.length) * 100 : 0}%` }} />
+              </div>
+              <span className="text-[10px] font-mono text-[rgb(var(--muted))]">{all.length ? Math.round((ratedCount / all.length) * 100) : 0}%</span>
+            </div>
+          ) : null}
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-gray-500 border-t border-b border-[rgb(var(--border))]">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-4 font-medium">KPI</th>
                 <th className="p-4 font-medium">Weightage</th>
@@ -781,7 +1083,7 @@ function KpisTab({
                     <td className="p-6">
                       <div className="font-bold text-[rgb(var(--text))] tracking-tight">{title || id}</div>
                       {k?.stream ? (
-                        <div className="text-xs text-gray-500 mt-1">{String(k.stream)}</div>
+                        <div className="text-xs text-[rgb(var(--muted))] mt-1">{String(k.stream)}</div>
                       ) : null}
                     </td>
                     <td className="p-6">
@@ -824,7 +1126,7 @@ function KpisTab({
 
               {!loading && items.length === 0 ? (
                 <tr>
-                  <td className="p-10 text-center text-gray-500" colSpan={3}>
+                  <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={3}>
                     No KPIs to show.
                   </td>
                 </tr>
@@ -834,7 +1136,7 @@ function KpisTab({
         </div>
       </section>
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
+      <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm">
         <SelfReviewEditor
           aiAgent={aiAgent}
           text={selfReviewText}
@@ -845,7 +1147,7 @@ function KpisTab({
       </section>
 
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="text-sm text-gray-500">
+        <div className="text-sm text-[rgb(var(--muted))]">
           Rated: <span className="font-mono text-[rgb(var(--text))]">{ratedCount}</span>
           /<span className="font-mono text-[rgb(var(--text))]">{all.length}</span>
           {locked ? " (locked)" : null}
@@ -907,8 +1209,8 @@ function ValuesTab({
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="rt-page-header">
-        <h2 className="rt-page-title">Webknot Values</h2>
-        <p className="rt-page-subtitle">
+        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Webknot Values</h2>
+        <p className="text-sm text-[rgb(var(--muted))] mt-1">
           Select the values you feel you demonstrated this cycle.
         </p>
       </header>
@@ -919,7 +1221,7 @@ function ValuesTab({
         </div>
       ) : null}
 
-      <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel rounded-2xl overflow-hidden shadow-sm">
         <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
           <div className="rt-section-header">
             <h3 className="rt-section-title">Values</h3>
@@ -931,7 +1233,7 @@ function ValuesTab({
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-gray-500 border-t border-b border-[rgb(var(--border))]">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-4 font-medium">Value</th>
                 <th className="p-4 font-medium">Evaluation Criteria</th>
@@ -949,7 +1251,6 @@ function ValuesTab({
                   <tr key={id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                     <td className="p-6">
                       <div className="font-bold text-[rgb(var(--text))] tracking-tight">{String(v?.title || id)}</div>
-                      <div className="text-[10px] text-gray-500 font-bold uppercase mt-1 font-mono">{id}</div>
                     </td>
                     <td className="p-6">
                       <span
@@ -1006,7 +1307,7 @@ function ValuesTab({
 
               {!loading && list.length === 0 ? (
                 <tr>
-                  <td className="p-10 text-center text-gray-500" colSpan={3}>
+                  <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={3}>
                     No values to show.
                   </td>
                 </tr>
@@ -1077,8 +1378,8 @@ function CertificationsTab({
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="rt-page-header">
-        <h2 className="rt-page-title">Certifications</h2>
-        <p className="rt-page-subtitle">
+        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Certifications</h2>
+        <p className="text-sm text-[rgb(var(--muted))] mt-1">
           Certifications listed by Admin appear here. If something looks wrong, please contact support.
         </p>
       </header>
@@ -1089,10 +1390,10 @@ function CertificationsTab({
         </div>
       ) : null}
 
-      <section className="rt-panel rounded-[2.5rem] overflow-hidden shadow-2xl">
+      <section className="rt-panel rounded-2xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-gray-500 border-t border-b border-[rgb(var(--border))]">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-t border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="p-4 font-medium">Certification</th>
                 <th className="p-4 font-medium">Completed</th>
@@ -1107,7 +1408,7 @@ function CertificationsTab({
                 <tr key={key} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                   <td className="p-6">
                     <div className="font-bold text-[rgb(var(--text))] tracking-tight">{name}</div>
-                    <div className="text-xs text-gray-500 mt-1">
+                    <div className="text-xs text-[rgb(var(--muted))] mt-1">
                       Select the certifications you have completed.
                     </div>
                   </td>
@@ -1139,7 +1440,7 @@ function CertificationsTab({
 
               {sorted.length === 0 ? (
                 <tr>
-                  <td className="p-10 text-center text-gray-500" colSpan={2}>
+                  <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={2}>
                     No certifications to show.
                   </td>
                 </tr>
@@ -1149,7 +1450,7 @@ function CertificationsTab({
         </div>
 
         <div className="p-6 border-t border-[rgb(var(--border))] flex items-center justify-between gap-4 flex-wrap">
-          <div className="text-sm text-gray-400">
+          <div className="text-sm text-[rgb(var(--muted))]">
             Selected: <span className="font-mono text-purple-200">{selectedKeySet.size}</span>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -1185,7 +1486,7 @@ function CertificationsTab({
           header={
             <div>
               <h3 className="font-semibold uppercase tracking-tight">Proof of Certification</h3>
-              <p className="text-gray-500 text-sm mt-1">{proofModal.name}</p>
+              <p className="text-[rgb(var(--muted))] text-sm mt-1">{proofModal.name}</p>
             </div>
           }
         >
@@ -1224,7 +1525,7 @@ function CertificationsTab({
               className="mt-6 space-y-4"
             >
               <div>
-                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                <label className="text-[10px] font-semibold text-[rgb(var(--muted))] uppercase tracking-wider">
                   Proof *
                 </label>
                 <input
@@ -1241,7 +1542,7 @@ function CertificationsTab({
                   ].join(" ")}
                   placeholder="Paste certificate URL / credential ID"
                 />
-                <div className="mt-2 text-xs text-gray-500">
+                <div className="mt-2 text-xs text-[rgb(var(--muted))]">
                   Mandatory. We will validate this later.
                 </div>
               </div>
@@ -1276,14 +1577,14 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
   return (
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="rt-page-header">
-        <h2 className="rt-page-title">Recognitions</h2>
-        <p className="rt-page-subtitle">
+        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Recognitions</h2>
+        <p className="text-sm text-[rgb(var(--muted))] mt-1">
           Report the number of awards received at All Hands.
         </p>
       </header>
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+      <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
           Awards Received
         </div>
         <div className="mt-4 flex items-center gap-4 flex-wrap">
@@ -1304,7 +1605,7 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
               locked ? "opacity-75 cursor-not-allowed" : "focus:border-purple-500",
             ].join(" ")}
           />
-          <div className="text-sm text-gray-400">
+          <div className="text-sm text-[rgb(var(--muted))]">
             Enter 0 if none.
           </div>
         </div>
@@ -1378,6 +1679,8 @@ function ReviewTab({
     return out;
   }, [selectedValues, valuesIndex]);
 
+  const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false);
+
   const reviewFeedback = useMemo(() => {
     const manager = submissionMeta?.managerReview && typeof submissionMeta.managerReview === "object"
       ? submissionMeta.managerReview
@@ -1417,8 +1720,8 @@ function ReviewTab({
     <div className="space-y-8 max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="rt-page-header">
         <div>
-          <h2 className="rt-page-title">Review</h2>
-          <p className="rt-page-subtitle">
+          <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Review</h2>
+          <p className="text-sm text-[rgb(var(--muted))] mt-1">
             Review everything before final submit.
           </p>
         </div>
@@ -1460,19 +1763,19 @@ function ReviewTab({
         </section>
       ) : null}
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-4">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+      <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm space-y-4">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
           Employee
         </div>
         <div className="text-sm text-[rgb(var(--text))]">
           {employee?.name || authEmail || "Unknown"}{" "}
-          <span className="text-gray-500 font-mono">({employee?.id || "—"})</span>
+          <span className="text-[rgb(var(--muted))] font-mono">({employee?.id || "—"})</span>
         </div>
-        <div className="text-xs text-gray-500 font-mono">{authEmail || "—"} • {role}</div>
+        <div className="text-xs text-[rgb(var(--muted))] font-mono">{authEmail || "—"} • {role}</div>
       </section>
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+      <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm space-y-3">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
           KPI Ratings
         </div>
         {Array.isArray(kpis) && kpis.length ? (
@@ -1487,19 +1790,19 @@ function ReviewTab({
             ))}
           </div>
         ) : (
-          <div className="text-sm text-gray-500">No KPIs.</div>
+          <div className="text-sm text-[rgb(var(--muted))]">No KPIs.</div>
         )}
       </section>
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+      <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm space-y-3">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
           Self Review
         </div>
         <div className="text-sm text-[rgb(var(--text))] whitespace-pre-wrap">{String(selfReviewText || "")}</div>
       </section>
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+      <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm space-y-3">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
           Webknot Values
         </div>
         {valueRatings.length ? (
@@ -1512,12 +1815,12 @@ function ReviewTab({
             ))}
           </div>
         ) : (
-          <div className="text-sm text-gray-500">No value ratings.</div>
+          <div className="text-sm text-[rgb(var(--muted))]">No value ratings.</div>
         )}
       </section>
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+      <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm space-y-3">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
           Certifications
         </div>
         {Array.isArray(selectedCertifications) && selectedCertifications.length ? (
@@ -1525,17 +1828,17 @@ function ReviewTab({
             {selectedCertifications.map((c) => (
               <div key={String(c?.name || "")} className="flex items-start justify-between gap-4">
                 <div className="text-sm text-[rgb(var(--text))]">{String(c?.name || "")}</div>
-                <div className="text-xs text-gray-500 font-mono break-all">{String(c?.proof || "")}</div>
+                <div className="text-xs text-[rgb(var(--muted))] font-mono break-all">{String(c?.proof || "")}</div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="text-sm text-gray-500">None selected.</div>
+          <div className="text-sm text-[rgb(var(--muted))]">None selected.</div>
         )}
       </section>
 
-      <section className="rt-panel rounded-[2.5rem] p-6 sm:p-8 shadow-2xl space-y-3">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+      <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm space-y-3">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
           Recognitions
         </div>
         <div className="text-sm text-[rgb(var(--text))]">
@@ -1562,14 +1865,9 @@ function ReviewTab({
         </button>
         <button
           type="button"
-          onClick={async () => {
-            if (locked) return;
-            try {
-              await onFinalSubmit?.();
-              showToast({ title: "Submitted", message: "Saved for manager review." });
-            } catch (err) {
-              showToast({ title: "Submit failed", message: err?.message || "Please try again." });
-            }
+          onClick={() => {
+            if (locked || !canFinalSubmit) return;
+            setConfirmSubmitOpen(true);
           }}
           disabled={locked || !canFinalSubmit}
           className={[
@@ -1583,6 +1881,64 @@ function ReviewTab({
           <CheckCircle2 size={18} /> Final submit
         </button>
       </div>
+
+      {/* ── Final submit confirmation ── */}
+      {confirmSubmitOpen ? (
+        <ModalOverlay
+          open={confirmSubmitOpen}
+          onClose={() => setConfirmSubmitOpen(false)}
+          maxWidth="max-w-md"
+          zIndex={60}
+          header={
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-[rgb(var(--primary))]/10 flex items-center justify-center">
+                <Lock size={18} className="text-[rgb(var(--primary))]" />
+              </div>
+              <div>
+                <h3 className="font-semibold tracking-tight">Confirm Final Submission</h3>
+                <p className="text-xs text-[rgb(var(--muted))] mt-0.5">This action cannot be undone</p>
+              </div>
+            </div>
+          }
+        >
+          <div className="mt-4 space-y-4">
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+              <div className="flex items-start gap-3">
+                <ShieldAlert size={18} className="text-amber-700 dark:text-amber-300 mt-0.5 shrink-0" />
+                <div className="text-sm text-amber-800 dark:text-amber-200 leading-relaxed">
+                  Once submitted, your self-review form will be <strong>locked for this month</strong>. 
+                  You will not be able to edit your ratings, self-review text, or any other responses unless an admin reopens it for you.
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmSubmitOpen(false)}
+                className="rt-btn-ghost"
+              >
+                Go back
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setConfirmSubmitOpen(false);
+                  try {
+                    await onFinalSubmit?.();
+                    showToast({ title: "Submitted", message: "Locked for manager review.", tone: "success" });
+                  } catch (err) {
+                    showToast({ title: "Submit failed", message: err?.message || "Please try again.", tone: "error" });
+                  }
+                }}
+                className="rt-btn-primary bg-[rgb(var(--success))] text-white hover:opacity-90"
+              >
+                <Lock size={16} /> Yes, submit & lock
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      ) : null}
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>
@@ -1631,6 +1987,10 @@ function AlreadyRespondedScreen({
   );
 
   const mgrKpiRatings = mgrEval?.kpiRatings && typeof mgrEval.kpiRatings === "object" ? mgrEval.kpiRatings : {};
+  const kpiLabel = (id) => {
+    const match = Array.isArray(kpis) ? kpis.find((k) => String(k?.id) === String(id)) : null;
+    return match?.title || String(id);
+  };
   const mgrValueRatings = mgrEval?.webknotValueRatings && typeof mgrEval.webknotValueRatings === "object" ? mgrEval.webknotValueRatings : {};
   const mgrComments = String(mgrReview?.comments || mgrEval?.comments || "").trim();
 
@@ -1647,20 +2007,33 @@ function AlreadyRespondedScreen({
     <div className="rt-shell font-sans overflow-x-hidden">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-12 py-8 sm:py-12">
         {/* ── Header ── */}
-        <div className="rt-panel relative overflow-hidden rounded-lg mb-8">
-          <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: "radial-gradient(circle at 20% 20%, #3b82f6 0, transparent 55%), radial-gradient(circle at 90% 30%, #22c55e 0, transparent 60%)" }} />
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          className="rt-panel relative overflow-hidden rounded-lg mb-8"
+        >
+          <div className="absolute inset-0 opacity-[0.06] bg-blue-500/10" />
           <div className="relative p-6 sm:p-8">
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div>
-                <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-200">
-                  <CheckCircle2 size={14} /> Submitted
-                </div>
+                <motion.div
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ delay: 0.15, type: "spring", stiffness: 400, damping: 20 }}
+                  className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-200"
+                >
+                  <CheckCircle2 size={14} /> Submitted & Locked
+                </motion.div>
                 <h1 className="mt-3 text-2xl sm:text-3xl font-semibold tracking-tight text-[rgb(var(--text))]">
                   {monthLabel} — Submission Review
                 </h1>
                 <p className="mt-1.5 text-sm text-[rgb(var(--muted))]">
                   {employee?.name || authEmail || "—"} &middot; Submitted {submittedLabel}
                 </p>
+                <div className="mt-2 inline-flex items-center gap-1.5 text-[10px] font-semibold text-[rgb(var(--muted))] uppercase tracking-wider">
+                  <Lock size={11} /> Your form is locked for this month
+                </div>
               </div>
               {typeof onLogout === "function" ? (
                 <button type="button" onClick={onLogout} className="rt-btn-ghost" title="Logout">
@@ -1669,10 +2042,15 @@ function AlreadyRespondedScreen({
               ) : null}
             </div>
           </div>
-        </div>
+        </motion.div>
 
         {/* ── Side-by-side content ── */}
-        <div className={`grid grid-cols-1 ${hasManagerData ? "lg:grid-cols-2" : ""} gap-6`}>
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.15, ease: [0.22, 1, 0.36, 1] }}
+          className={`grid grid-cols-1 ${hasManagerData ? "lg:grid-cols-2" : ""} gap-6`}
+        >
 
           {/* ═══ LEFT: Employee Self Review ═══ */}
           <div className="space-y-5">
@@ -1682,13 +2060,13 @@ function AlreadyRespondedScreen({
 
             {/* Self Review Text */}
             <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Self Review</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Self Review</div>
               <div className="text-sm text-[rgb(var(--text))] whitespace-pre-wrap">{String(selfReviewText || "—")}</div>
             </div>
 
             {/* Employee KPI Ratings */}
             <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Your KPI Ratings</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Your KPI Ratings</div>
               {Array.isArray(kpis) && kpis.length ? (
                 <div className="space-y-1.5">
                   {kpis.map((k) => (
@@ -1705,7 +2083,7 @@ function AlreadyRespondedScreen({
 
             {/* Employee Value Ratings */}
             <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Your Value Ratings</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Your Value Ratings</div>
               {valueRatings.length ? (
                 <div className="space-y-1.5">
                   {valueRatings.map((row) => (
@@ -1722,7 +2100,7 @@ function AlreadyRespondedScreen({
 
             {/* Certifications */}
             <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Certifications</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Certifications</div>
               {Array.isArray(selectedCertifications) && selectedCertifications.length ? (
                 <div className="space-y-2">
                   {selectedCertifications.map((c, idx) => (
@@ -1741,7 +2119,7 @@ function AlreadyRespondedScreen({
 
             {/* Recognitions */}
             <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Recognitions</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Recognitions</div>
               <div className="text-lg font-semibold">{Number(recognitionsCount || 0)}</div>
             </div>
           </div>
@@ -1756,7 +2134,7 @@ function AlreadyRespondedScreen({
               {/* Manager Comments */}
               {mgrComments ? (
                 <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Comments</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Manager Comments</div>
                   <div className="text-sm text-[rgb(var(--text))] whitespace-pre-wrap">{mgrComments}</div>
                   {submissionMeta?.managerSubmittedAt ? (
                     <div className="text-[10px] text-[rgb(var(--muted))] font-mono mt-2">
@@ -1768,7 +2146,7 @@ function AlreadyRespondedScreen({
 
               {/* Manager KPI Ratings */}
               <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager KPI Ratings</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Ratings</div>
                 {Object.entries(mgrKpiRatings).length ? (
                   <div className="space-y-1.5">
                     {Array.isArray(kpis) && kpis.length ? (
@@ -1777,15 +2155,15 @@ function AlreadyRespondedScreen({
                         return (
                           <div key={k.id} className="flex items-center justify-between gap-3">
                             <span className="text-sm text-[rgb(var(--text))] truncate">{k.title}</span>
-                            <span className="font-mono text-sm">{mgrRating != null ? String(mgrRating) : "—"}</span>
+                            <span className="font-mono text-sm">{mgrRating != null ? Number(mgrRating).toFixed(1) : "—"}</span>
                           </div>
                         );
                       })
                     ) : (
                       Object.entries(mgrKpiRatings).map(([kpiId, rating]) => (
                         <div key={kpiId} className="flex items-center justify-between gap-3">
-                          <span className="text-sm text-[rgb(var(--text))] truncate">{kpiId}</span>
-                          <span className="font-mono text-sm">{String(rating)}</span>
+                          <span className="text-sm text-[rgb(var(--text))] truncate">{kpiLabel(kpiId)}</span>
+                          <span className="font-mono text-sm">{Number(rating).toFixed(1)}</span>
                         </div>
                       ))
                     )}
@@ -1797,7 +2175,7 @@ function AlreadyRespondedScreen({
 
               {/* Manager Value Ratings */}
               <div className="rt-panel-subtle rounded-lg p-5 space-y-2">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Value Ratings</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Manager Value Ratings</div>
                 {mgrValueRows.length ? (
                   <div className="space-y-1.5">
                     {mgrValueRows.map((row) => (
@@ -1826,17 +2204,22 @@ function AlreadyRespondedScreen({
               </div>
             </div>
           )}
-        </div>
+        </motion.div>
 
         {/* ── Need correction info ── */}
-        <div className="mt-8 rounded-lg border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-5">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.3, duration: 0.4 }}
+          className="mt-8 rounded-lg border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-5"
+        >
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-200">
             <ShieldAlert size={14} /> Need Corrections?
           </div>
           <div className="mt-2 text-sm text-amber-800 dark:text-amber-100">
             If you find any mistake in your response, contact HR at <span className="font-mono">hr@webknot.in</span> to request reopening.
           </div>
-        </div>
+        </motion.div>
       </div>
     </div>
   );
@@ -2572,18 +2955,18 @@ export default function EmployeePortal({ onLogout, auth }) {
       setSubmissionMeta({
         id: normalized?.id ?? submissionMeta?.id ?? null,
         month: normalized?.month ?? submissionMonth,
-        status: normalized?.status ?? submissionMeta?.status ?? null,
+        status: normalized?.status ?? "SUBMITTED",
         submissionType: normalized?.submissionType ?? "EMPLOYEE_MONTHLY_SUBMISSION",
         cycleKey: normalized?.cycleKey ?? buildCycleMeta(submissionMonth).cycleKey,
         cycleLabel: normalized?.cycleLabel ?? buildCycleMeta(submissionMonth).cycleLabel,
         reviewStatus: normalized?.reviewStatus ?? "SUBMITTED",
-        managerReview: normalized?.managerReview ?? null,
+        managerReview: null,
         managerEvaluation: normalized?.managerEvaluation ?? null,
         managerSubmittedAt: normalized?.managerSubmittedAt ?? null,
-        adminReview: normalized?.adminReview ?? null,
+        adminReview: null,
         adminSubmittedAt: normalized?.adminSubmittedAt ?? null,
-        reopenedForResubmission: Boolean(normalized?.reopenedForResubmission),
-        resubmissionRequested: Boolean(normalized?.resubmissionRequested),
+        reopenedForResubmission: false,
+        resubmissionRequested: false,
         submittedAt: normalized?.submittedAt ?? submissionMeta?.submittedAt ?? payload.submittedAt ?? now,
         updatedAt: normalized?.updatedAt ?? now,
       });
@@ -2921,56 +3304,63 @@ export default function EmployeePortal({ onLogout, auth }) {
       />
 
       <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-64" : "md:ml-[72px]"} p-4 pt-20 md:pt-6 lg:p-8`}>
-        <div className="max-w-4xl mx-auto mb-6 rt-page-header">
-          <div className="rt-kicker">Employee Portal</div>
-          <h1 className="rt-page-title">Monthly Performance Workspace</h1>
-          <p className="rt-page-subtitle">
+        <div className="max-w-4xl mx-auto mb-8">
+          <div className="flex items-center gap-3 mb-2">
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Monthly Performance Workspace</h1>
+          <p className="text-sm text-[rgb(var(--muted))] mt-1.5">
             Complete each step, then submit your final review for manager evaluation.
           </p>
         </div>
 
         {!locked && needsResubmission ? (
-          <div className="max-w-4xl mx-auto mb-6 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
-            Changes requested on your submission. Please update and resubmit this month.
+          <div className="max-w-4xl mx-auto mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5 space-y-3">
+            <div className="flex items-start gap-3">
+              <ShieldAlert size={18} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="text-sm font-semibold text-amber-800 dark:text-amber-200">Changes Requested by Manager</div>
+                <div className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">Your manager has reviewed your submission and returned it with feedback. Please address the comments below and resubmit.</div>
+              </div>
+            </div>
             {latestReviewComment ? (
-              <div className="mt-2 text-xs font-mono text-amber-900 dark:text-amber-100 break-words">
-                Feedback: {latestReviewComment}
+              <div className="rounded-lg border border-amber-400/30 bg-white/40 dark:bg-black/20 p-3 sm:p-4 space-y-1.5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-200">Manager Comments</div>
+                <div className="text-sm text-amber-950 dark:text-amber-50 whitespace-pre-wrap break-words">
+                  {latestReviewComment}
+                </div>
               </div>
             ) : null}
           </div>
         ) : null}
         <div className="max-w-4xl mx-auto mb-6 flex items-end justify-between gap-4 flex-wrap">
-          <div className="space-y-1">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
               Month
+            </label>
+            <div className="relative">
+              <select
+                value={submissionMonth}
+                disabled
+                className="rt-input appearance-none py-2.5 px-4 pr-9 text-sm rounded-xl cursor-not-allowed opacity-75"
+                aria-label="Submission month"
+                title="Month is locked to the current period"
+              >
+                {cycleMonthOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
             </div>
-            <select
-              value={submissionMonth}
-              onChange={(e) => {
-                const next = normalizeYearMonth(e.target.value);
-                if (!next) return;
-                setSubmissionMonth(next);
-              }}
-              className="rt-input py-3 px-4 text-sm"
-              aria-label="Select submission month"
-              title="Select submission month"
-            >
-              {cycleMonthOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            <div className="text-[10px] text-slate-600 dark:text-slate-400">
+            <div className="text-[10px] text-[rgb(var(--muted))]">
               Cycle: {cycleInfo?.label || "May-Oct / Nov-Apr"}
             </div>
           </div>
 
-          <div className="text-right">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-              Draft
-            </div>
-            <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))]">
+            <span className={`h-2 w-2 rounded-full ${locked ? "bg-red-500" : draftSaving ? "bg-amber-500 animate-pulse" : draftSaveError ? "bg-red-500" : "bg-emerald-500"}`} />
+            <span className="text-xs font-medium text-[rgb(var(--text))]">
               {locked
                 ? "Locked"
                 : hydratingSubmission
@@ -2979,16 +3369,26 @@ export default function EmployeePortal({ onLogout, auth }) {
                   ? "Saving…"
                   : draftSaveError
                     ? "Not saved"
-                    : "Saved"}
-            </div>
+                    : "Draft saved"}
+            </span>
           </div>
         </div>
 
         <SubmissionStepper activeTab={activeTab} steps={stepItems} onNavigate={goToTab} />
 
-        {main}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          >
+            {main}
+          </motion.div>
+        </AnimatePresence>
       </main>
-      <Toast toast={toast} onDismiss={() => setToast(null)} />
+      <Toast toast={toast} onDismiss={() => setToast(null)} durationMs={2800} />
     </div>
     </>
   );

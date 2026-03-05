@@ -3,7 +3,7 @@ import { AnimatePresence, motion as Motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Settings, LogOut, ChevronLeft, ChevronRight,
   ClipboardCheck, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X, Layers3,
-  Bell, BellDot, CheckCheck, FileUp, Calendar, RefreshCw, KeyRound, Lock, FileBarChart2, ChevronDown
+  Bell, BellDot, CheckCheck, FileUp, Calendar, RefreshCw, KeyRound, Lock, FileBarChart2, ChevronDown, FolderKanban
 } from "lucide-react";
 
 import AdminDashboard from "./AdminDashboard.jsx";
@@ -16,6 +16,7 @@ import SettingsPanel from "./SettingsPanel.jsx";
 import WebknotValueDirectory from "./WebknotValueDirectory.jsx";
 import BandStreamDirectory from "./BandStreamDirectory.jsx";
 import CsvImportPanel from "./CsvImportPanel.jsx";
+import ProjectsDirectory from "./ProjectsDirectory.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 import Toast from "../shared/Toast.jsx";
 import ThemeToggle from "../shared/ThemeToggle.jsx";
@@ -54,6 +55,7 @@ import { fetchEmployeePortalWebknotValues, normalizeWebknotValues } from "../../
 import { fetchBands, fetchStreams, normalizeDirectoryPage } from "../../api/band-stream-directory.js";
 import {
   fetchAdminAllSubmissions,
+  fetchSubmissionCycles,
   formatYearMonth,
   normalizeMonthlySubmission,
 } from "../../api/monthly-submissions.js";
@@ -82,6 +84,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
     { id: "kpi", icon: <Target size={20} />, label: "KPI Directory" },
     { id: "band-streams", icon: <Layers3 size={20} />, label: "Bands & Streams" },
     { id: "certifications", icon: <Award size={20} />, label: "Certifications" },
+    { id: "projects", icon: <FolderKanban size={20} />, label: "Projects" },
     { id: "values", icon: <Sparkles size={20} />, label: "Webknot Values" },
     { id: "csv-import", icon: <FileUp size={20} />, label: "CSV Import" },
     ...(isAdmin ? [{ id: "agents", icon: <Bot size={20} />, label: "AI Agents" }] : []),
@@ -520,7 +523,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
   const VALID_TABS = useMemo(() => new Set([
     "dashboard", "submissions", "directory", "kpi", "band-streams",
-    "certifications", "values", "csv-import", "agents", "settings",
+    "certifications", "projects", "values", "csv-import", "agents", "settings",
   ]), []);
 
   const getTabFromPath = useCallback(() => {
@@ -546,10 +549,32 @@ export default function AdminControlCenter({ onLogout, auth }) {
     };
   }, [getTabFromPath]);
   const isAdmin = String(auth?.role || auth?.claims?.role || "").trim().toLowerCase() === "admin";
+
+  /* ── Server-side cycles ── */
+  const [serverCycles, setServerCycles] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const data = await fetchSubmissionCycles({ signal: controller.signal });
+        if (!alive) return;
+        setServerCycles(Array.isArray(data) ? data : data?.cycles ?? data?.data ?? null);
+      } catch {
+        /* non-critical — fallback to client-side cycles */
+      }
+    })();
+    return () => { alive = false; controller.abort(); };
+  }, []);
+
   const currentCycleLabel = useMemo(() => {
+    if (Array.isArray(serverCycles) && serverCycles.length) {
+      const current = serverCycles.find((c) => c.current || c.isCurrent);
+      if (current?.label) return current.label;
+    }
     const c = getCycleForMonth(new Date());
     return c?.label || "—";
-  }, []);
+  }, [serverCycles]);
   const [showKPIModal, setShowKPIModal] = useState(false);
   const [kpiModalMode, setKpiModalMode] = useState("add"); // "add" | "edit"
   const [searchQuery, setSearchQuery] = useState("");
@@ -1613,7 +1638,15 @@ export default function AdminControlCenter({ onLogout, auth }) {
               const createdAt = normalized?.createdAt || normalized?.raw?.createdAt || raw?.createdAt || 0;
               const prevExtra = submissionExtras[id];
               if (!prevExtra || Number(prevExtra.createdAt || 0) <= Number(createdAt || 0)) {
-                submissionExtras[id] = { recognitions, certifications: certsList, createdAt, abilityScore: Number.isFinite(score) ? score : null };
+                const mgrEval = normalized?.managerEvaluation ?? normalized?.raw?.managerEvaluation ?? raw?.managerEvaluation ?? raw?.payload?.managerEvaluation ?? null;
+                const managerKpiRatings = (mgrEval?.kpiRatings && typeof mgrEval.kpiRatings === "object") ? mgrEval.kpiRatings : null;
+                const managerWebknotValueRatings = (mgrEval?.webknotValueRatings && typeof mgrEval.webknotValueRatings === "object") ? mgrEval.webknotValueRatings : null;
+                const techShowcase = String(normalized?.techShowcase ?? normalized?.raw?.techShowcase ?? raw?.techShowcase ?? raw?.payload?.techShowcase ?? "").trim();
+                submissionExtras[id] = {
+                  recognitions, certifications: certsList, createdAt,
+                  abilityScore: Number.isFinite(score) ? score : null,
+                  managerKpiRatings, managerWebknotValueRatings, techShowcase,
+                };
               }
             }
           }
@@ -2411,6 +2444,10 @@ export default function AdminControlCenter({ onLogout, auth }) {
         )}
 
         {activeTab === "band-streams" && <BandStreamDirectory />}
+
+        {activeTab === "projects" && (
+          <ProjectsDirectory employees={employees} />
+        )}
 
         {activeTab === "csv-import" && (
           <CsvImportPanel

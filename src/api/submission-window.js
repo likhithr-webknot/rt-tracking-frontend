@@ -72,11 +72,15 @@ export async function scheduleRoleSubmissionWindow(role, { startAt, endAt }, { s
 
 export async function openRoleSubmissionWindowNow(role, { signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(roleWindowEndpoint(role, "open-now")), {
+  const res = await fetch(buildApiUrl(roleWindowEndpoint(role, "current/open-now")), {
     method: "POST",
     signal,
     credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
+    body: JSON.stringify({}),
   });
   if (res.status === 404) return openSubmissionWindowNow({ signal });
   if (!res.ok) throw await toHttpError(res);
@@ -85,11 +89,15 @@ export async function openRoleSubmissionWindowNow(role, { signal } = {}) {
 
 export async function closeRoleSubmissionWindowNow(role, { signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(roleWindowEndpoint(role, "close-now")), {
+  const res = await fetch(buildApiUrl(roleWindowEndpoint(role, "current/close-now")), {
     method: "POST",
     signal,
     credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
+    body: JSON.stringify({}),
   });
   if (res.status === 404) return closeSubmissionWindowNow({ signal });
   if (!res.ok) throw await toHttpError(res);
@@ -118,7 +126,11 @@ export async function openSubmissionWindowNow({ signal } = {}) {
     method: "POST",
     signal,
     credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
+    body: JSON.stringify({}),
   });
   if (!res.ok) throw await toHttpError(res);
   return res.json();
@@ -130,7 +142,11 @@ export async function closeSubmissionWindowNow({ signal } = {}) {
     method: "POST",
     signal,
     credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
+    body: JSON.stringify({}),
   });
   if (!res.ok) throw await toHttpError(res);
   return res.json();
@@ -165,7 +181,11 @@ export async function closeSubmissionWindowForEmployeeNow(employeeId, { signal }
     method: "POST",
     signal,
     credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
+    body: JSON.stringify({}),
   });
   if (!res.ok) throw await toHttpError(res);
   return res.json();

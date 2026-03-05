@@ -15,7 +15,9 @@ function applyInitialTheme() {
 applyInitialTheme();
 
 ReactDOM.createRoot(document.getElementById("root")).render(
-    <AppErrorBoundary>
-        <App />
-    </AppErrorBoundary>
+    <React.StrictMode>
+        <AppErrorBoundary>
+            <App />
+        </AppErrorBoundary>
+    </React.StrictMode>
 );

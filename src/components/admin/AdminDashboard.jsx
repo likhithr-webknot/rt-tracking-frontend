@@ -58,6 +58,7 @@ import {
   closeRoleSubmissionWindowNow,
   openRoleSubmissionWindowNow,
   scheduleRoleSubmissionWindow,
+  fetchRoleSubmissionWindow,
 } from "../../api/submission-window.js";
 
 /* ───── helpers ───── */
@@ -101,12 +102,54 @@ function getProjectLabel(emp) {
   return String(emp?.project || emp?.projectName || emp?.account || emp?.client || "Unassigned").trim() || "Unassigned";
 }
 
+/**
+ * Weighted performance score:
+ *   85 % = average of manager KPI ratings for the employee
+ *   15 % = average of manager Webknot-value ratings for the employee
+ * Returns a 1-5 scale number (rounded to 1 decimal), or null when data is
+ * missing.  Falls back to the old ability-score if no manager eval exists.
+ */
 function computeEmployeePerformanceScore(emp) {
+  const toAvg = (obj) => {
+    if (!obj || typeof obj !== "object") return null;
+    const nums = Object.values(obj)
+      .map((v) => (typeof v === "number" ? v : Number.parseFloat(String(v ?? ""))))
+      .filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
+    return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null;
+  };
+
+  const mgrKpiAvg = toAvg(emp?.managerKpiRatings);
+  const mgrValueAvg = toAvg(emp?.managerWebknotValueRatings);
+
+  if (mgrKpiAvg != null || mgrValueAvg != null) {
+    let weighted;
+    if (mgrKpiAvg != null && mgrValueAvg != null) {
+      weighted = 0.85 * mgrKpiAvg + 0.15 * mgrValueAvg;
+    } else if (mgrKpiAvg != null) {
+      weighted = mgrKpiAvg; // only KPI available
+    } else {
+      weighted = mgrValueAvg; // only values available
+    }
+    return Math.round(Math.min(5, Math.max(1, weighted)) * 10) / 10;
+  }
+
+  /* Fallback: direct ability score from backend */
   const directRaw = Number(emp?.submissionAbility ?? emp?.abilityScore ?? emp?.avgScore ?? emp?.ability ?? NaN);
   if (Number.isFinite(directRaw)) return Math.round(Math.min(5, Math.max(1, directRaw)) * 10) / 10;
   const ratingAvg = Number(emp?.abilityScoreFromRatings ?? emp?.abilityFromRatings ?? emp?.abilityScore ?? NaN);
   if (Number.isFinite(ratingAvg)) return Math.round(Math.min(5, Math.max(1, ratingAvg)) * 10) / 10;
   return null;
+}
+
+/**
+ * Compute brownie points for an employee:
+ *   certifications count + recognitions count + 1 if tech showcase provided
+ */
+function computeBrowniePoints(emp) {
+  const certs = Number(emp?.certCount ?? 0) || 0;
+  const recognitions = Number(emp?.recognitions ?? 0) || 0;
+  const techShowcase = String(emp?.techShowcase ?? "").trim() ? 1 : 0;
+  return certs + recognitions + techShowcase;
 }
 
 function buildBreakdownRows({ employees, ability6m, keySelector }) {
@@ -167,14 +210,17 @@ function useChartTooltipStyle() {
 function StatCard({ label, value, subtitle, icon: Icon, iconColor = "text-blue-500", trend, trendLabel }) {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-40px" });
+  const colorBase = iconColor.replace("text-", "").replace("-500", "");
   return (
     <motion.div
       ref={ref}
-      className="rt-panel p-5 relative overflow-hidden group hover:shadow-md transition-shadow"
-      initial={{ opacity: 0, y: 16 }}
+      className="rt-panel p-5 relative overflow-hidden group hover:shadow-lg hover:shadow-[rgb(var(--primary)/.05)] transition-all duration-300"
+      initial={{ opacity: 0, y: 20 }}
       animate={inView ? { opacity: 1, y: 0 } : {}}
-      transition={{ duration: 0.45, ease: "easeOut" }}
+      transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
     >
+      {/* solid accent at top */}
+      <div className={`absolute top-0 left-0 right-0 h-[2px] bg-${colorBase}-500/50`} />
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
           <p className="rt-kicker mb-2">{label}</p>
@@ -183,7 +229,7 @@ function StatCard({ label, value, subtitle, icon: Icon, iconColor = "text-blue-5
               <AnimatedCounter value={value} decimals={Number.isInteger(value) ? 0 : 1} />
             ) : value}
           </p>
-          {subtitle ? <p className="mt-1 text-xs text-[rgb(var(--muted))]">{subtitle}</p> : null}
+          {subtitle ? <p className="mt-1.5 text-xs text-[rgb(var(--muted))]">{subtitle}</p> : null}
           {trend !== undefined && trend !== null ? (
             <div className="mt-2 inline-flex items-center gap-1 text-xs font-medium">
               {trend > 0 ? <ArrowUp size={12} className="text-emerald-500" /> : trend < 0 ? <ArrowDown size={12} className="text-red-500" /> : <Minus size={12} className="text-[rgb(var(--muted))]" />}
@@ -193,7 +239,7 @@ function StatCard({ label, value, subtitle, icon: Icon, iconColor = "text-blue-5
             </div>
           ) : null}
         </div>
-        <div className={`flex-shrink-0 rounded-lg p-2.5 ${iconColor.replace("text-", "bg-").replace("500", "500/10")} ${iconColor}`}>
+        <div className={`flex-shrink-0 rounded-xl p-3 ${iconColor.replace("text-", "bg-").replace("500", "500/10")} ${iconColor} ring-1 ring-inset ring-[rgb(var(--border)/.3)]`}>
           <Icon size={20} strokeWidth={1.8} />
         </div>
       </div>
@@ -203,16 +249,20 @@ function StatCard({ label, value, subtitle, icon: Icon, iconColor = "text-blue-5
 
 function InsightCard({ icon: Icon, iconColor = "text-blue-500", title, value, detail }) {
   return (
-    <div className="rt-panel-subtle p-4 flex items-start gap-3">
-      <div className={`flex-shrink-0 mt-0.5 rounded-md p-2 ${iconColor.replace("text-", "bg-").replace("500", "500/10")} ${iconColor}`}>
+    <motion.div
+      className="rt-panel-subtle p-4 flex items-start gap-3 group hover:bg-[rgb(var(--surface-2)/.5)] transition-colors duration-200"
+      whileHover={{ y: -2 }}
+      transition={{ duration: 0.2 }}
+    >
+      <div className={`flex-shrink-0 mt-0.5 rounded-lg p-2 ${iconColor.replace("text-", "bg-").replace("500", "500/10")} ${iconColor}`}>
         <Icon size={16} strokeWidth={1.8} />
       </div>
       <div className="flex-1 min-w-0">
         <div className="rt-kicker">{title}</div>
-        <div className="mt-1 font-semibold text-[rgb(var(--text))] truncate">{value}</div>
+        <div className="mt-1 font-bold text-[rgb(var(--text))] truncate">{value}</div>
         {detail ? <div className="mt-0.5 text-xs text-[rgb(var(--muted))]">{detail}</div> : null}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -283,21 +333,25 @@ function FunnelStep({ label, count, total, color, delay = 0 }) {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-20px" });
   return (
-    <div ref={ref} className="flex items-center gap-3">
-      <div className="w-20 text-right">
-        <div className="text-xs font-semibold text-[rgb(var(--text))]">{count}</div>
-        <div className="text-[10px] text-[rgb(var(--muted))]">{pct}%</div>
+    <div ref={ref} className="group flex items-center gap-4 py-0.5">
+      <div className="w-14 text-right flex-shrink-0">
+        <div className="text-base font-bold tabular-nums" style={{ color }}>{count}</div>
+        <div className="text-[10px] font-medium text-[rgb(var(--muted))]">{pct}%</div>
       </div>
-      <div className="flex-1 h-7 rounded-md bg-[rgb(var(--surface-2))] overflow-hidden relative">
-        <motion.div
-          className="h-full rounded-md"
-          style={{ backgroundColor: color }}
-          initial={{ width: 0 }}
-          animate={inView ? { width: `${pct}%` } : { width: 0 }}
-          transition={{ duration: 0.8, delay, ease: "easeOut" }}
-        />
+      <div className="flex-1 relative">
+        <div className="h-8 rounded-lg bg-[rgb(var(--surface-2))] overflow-hidden">
+          <motion.div
+            className="h-full rounded-lg relative overflow-hidden"
+            style={{ backgroundColor: color }}
+            initial={{ width: 0 }}
+            animate={inView ? { width: `${Math.max(pct, 2)}%` } : { width: 0 }}
+            transition={{ duration: 0.9, delay, ease: [0.25, 0.46, 0.45, 0.94] }}
+          >
+
+          </motion.div>
+        </div>
       </div>
-      <div className="w-28 text-xs font-medium text-[rgb(var(--muted))] truncate">{label}</div>
+      <div className="w-32 text-xs font-semibold text-[rgb(var(--text))] truncate">{label}</div>
     </div>
   );
 }
@@ -331,18 +385,50 @@ export default function AdminDashboard({
   const [selectedCycleKey, setSelectedCycleKey] = useState(() => formatYearMonth(new Date()));
 
   /* ── separate employee / manager window state ── */
-  const [empWindow, setEmpWindow] = useState({ start: "", end: "" });
-  const [mgrWindow, setMgrWindow] = useState({ start: "", end: "" });
+  const [empWindow, setEmpWindow] = useState({ start: "", end: "", manualClosed: false, isOpen: false });
+  const [mgrWindow, setMgrWindow] = useState({ start: "", end: "", manualClosed: false, isOpen: false });
   const [empWindowBusy, setEmpWindowBusy] = useState(false);
   const [mgrWindowBusy, setMgrWindowBusy] = useState(false);
 
-  /* sync from global → per-role on mount */
+  /* Fetch the actual role-specific windows from the server on mount */
+  const [empWindowLoaded, setEmpWindowLoaded] = useState(false);
+  const [mgrWindowLoaded, setMgrWindowLoaded] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchRoleSubmissionWindow("employee", { signal: controller.signal });
+        if (!alive) return;
+        const parsed = parseRoleWindowResponse(res, "");
+        if (parsed.start) { setEmpWindow(parsed); setEmpWindowLoaded(true); }
+      } catch { /* ignore – will fall back to global sync below */ }
+    })();
+    return () => { alive = false; controller.abort(); };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchRoleSubmissionWindow("manager", { signal: controller.signal });
+        if (!alive) return;
+        const parsed = parseRoleWindowResponse(res, "");
+        if (parsed.start) { setMgrWindow(parsed); setMgrWindowLoaded(true); }
+      } catch { /* ignore – will fall back to global sync below */ }
+    })();
+    return () => { alive = false; controller.abort(); };
+  }, []);
+
+  /* Fallback: sync from global when role-specific fetch didn't provide data */
   useEffect(() => {
     if (portalWindow?.start) {
-      setEmpWindow((prev) => prev.start ? prev : { start: portalWindow.start, end: portalWindow.end || "" });
-      setMgrWindow((prev) => prev.start ? prev : { start: portalWindow.start, end: portalWindow.end || "" });
+      if (!empWindowLoaded) setEmpWindow((prev) => prev.start ? prev : { start: portalWindow.start, end: portalWindow.end || "", manualClosed: Boolean(portalWindow.manualClosed), isOpen: undefined });
+      if (!mgrWindowLoaded) setMgrWindow((prev) => prev.start ? prev : { start: portalWindow.start, end: portalWindow.end || "", manualClosed: Boolean(portalWindow.manualClosed), isOpen: undefined });
     }
-  }, [portalWindow?.start, portalWindow?.end]);
+  }, [portalWindow?.start, portalWindow?.end, portalWindow?.manualClosed, empWindowLoaded, mgrWindowLoaded]);
 
   const CHART_TOOLTIP_STYLE = useChartTooltipStyle();
 
@@ -397,6 +483,10 @@ export default function AdminDashboard({
   }, [portalWindow?.manualClosed, portalWindow.start, portalWindow.end, now]);
 
   function isWindowOpen(win) {
+    /* If server explicitly told us the state, use it */
+    if (win?.manualClosed) return false;
+    if (typeof win?.isOpen === "boolean") return win.isOpen;
+    /* Fallback: compute from dates */
     const start = parseLocalInputValue(win?.start);
     if (!start) return false;
     const endRaw = String(win?.end ?? "").trim();
@@ -417,6 +507,8 @@ export default function AdminDashboard({
     return {
       start: startAt && !Number.isNaN(startAt.getTime()) ? toLocalInputValue(startAt) : fallbackStart || "",
       end: endAt && !Number.isNaN(endAt.getTime()) ? toLocalInputValue(endAt) : "",
+      manualClosed: Boolean(obj.manualClosed),
+      isOpen: typeof obj.isOpen === "boolean" ? obj.isOpen : undefined,
     };
   }
 
@@ -430,7 +522,16 @@ export default function AdminDashboard({
       const res = isOpen
         ? await closeRoleSubmissionWindowNow(role)
         : await openRoleSubmissionWindowNow(role);
-      setWin(parseRoleWindowResponse(res, isOpen ? "" : toLocalInputValue(new Date())));
+      const parsed = parseRoleWindowResponse(res, isOpen ? "" : toLocalInputValue(new Date()));
+      /* Always force the correct state based on the action we just took */
+      if (isOpen) {
+        parsed.manualClosed = true;
+        parsed.isOpen = false;
+      } else {
+        parsed.manualClosed = false;
+        parsed.isOpen = true;
+      }
+      setWin(parsed);
       showToast({ title: isOpen ? `${isEmp ? "Employee" : "Manager"} window stopped` : `${isEmp ? "Employee" : "Manager"} window started`, message: isOpen ? "Window closed." : "Window opened." });
     } catch (err) {
       showToast({ title: "Window update failed", message: err?.message || "Please try again." });
@@ -452,7 +553,11 @@ export default function AdminDashboard({
     setBusy(true);
     try {
       const res = await scheduleRoleSubmissionWindow(role, { startAt: new Date(win.start).toISOString(), endAt: new Date(win.end).toISOString() });
-      setWin(parseRoleWindowResponse(res, win.start));
+      const parsed = parseRoleWindowResponse(res, win.start);
+      /* Scheduling re-opens the window (clears a previous manual close) */
+      parsed.manualClosed = false;
+      if (parsed.isOpen === undefined) parsed.isOpen = undefined; /* let isWindowOpen recalculate from dates */
+      setWin(parsed);
       showToast({ title: `${isEmp ? "Employee" : "Manager"} window scheduled`, message: "Schedule updated." });
     } catch (err) {
       showToast({ title: "Schedule failed", message: err?.message || "Please try again." });
@@ -549,8 +654,22 @@ export default function AdminDashboard({
       const certifications = Array.isArray(submissionExtras?.certifications)
         ? submissionExtras.certifications
         : Array.isArray(emp?.certifications) ? emp.certifications : [];
-      const merged = { ...emp, recognitions, certifications, abilityScoreFromRatings: submissionExtras?.abilityScore ?? null };
-      return { ...merged, certCount: certifications.length, performanceScore: computeEmployeePerformanceScore(merged) };
+      const managerKpiRatings = submissionExtras?.managerKpiRatings ?? null;
+      const managerWebknotValueRatings = submissionExtras?.managerWebknotValueRatings ?? null;
+      const techShowcase = String(submissionExtras?.techShowcase ?? "").trim();
+      const merged = {
+        ...emp,
+        recognitions, certifications,
+        managerKpiRatings, managerWebknotValueRatings, techShowcase,
+        abilityScoreFromRatings: submissionExtras?.abilityScore ?? null,
+      };
+      const certCount = certifications.length;
+      return {
+        ...merged,
+        certCount,
+        performanceScore: computeEmployeePerformanceScore(merged),
+        browniePoints: computeBrowniePoints({ ...merged, certCount }),
+      };
     });
   }, [normalizedEmployees, submissionExtrasByEmployee]);
 
@@ -726,21 +845,17 @@ export default function AdminDashboard({
   }, [enrichedEmployees]);
 
   const orgHealthRadarData = useMemo(() => {
-    const base = [
-      { metric: "Emp. Submission", value: stats.employeeSubmissionRate, fullMark: 100 },
-      { metric: "Mgr. Submission", value: stats.managerSubmissionRate, fullMark: 100 },
-      { metric: "Avg Ability", value: Math.round(stats.latestAbility * 20), fullMark: 100 },
-      { metric: "Coverage", value: stats.totalHeadcount > 0 ? Math.round(((stats.employeesSubmitted + stats.managersSubmitted) / stats.totalHeadcount) * 100) : 0, fullMark: 100 },
-    ];
+    const base = [];
     const deptRows = departmentBreakdown.filter((d) => d.group && d.group !== "Unassigned");
     if (deptRows.length > 0) {
       for (const d of deptRows.slice(0, 8)) {
-        base.push({ metric: d.group, value: Math.round((d.submissionRate || 0) * 100), fullMark: 100 });
+        base.push({ metric: d.group, employees: d.headcount || 0 });
       }
     } else {
-      base.push({ metric: "Dept. Health", value: 0, fullMark: 100 });
+      base.push({ metric: "No Departments", employees: 0 });
     }
-    return base;
+    const maxVal = Math.max(...base.map((d) => d.employees), 1);
+    return base.map((d) => ({ ...d, fullMark: maxVal }));
   }, [stats, departmentBreakdown]);
 
   const cycleComparisonData = useMemo(() => {
@@ -778,6 +893,7 @@ export default function AdminDashboard({
   const submissionFunnel = useMemo(() => {
     const totalEligible = stats.employeeHeadcount + stats.totalManagers;
     const submitted = stats.employeesSubmitted + stats.managersSubmitted;
+    const inDraft = Math.max(0, totalEligible - submitted);
     // count how many have been manager-reviewed and admin-reviewed
     let managerReviewed = 0;
     let adminApproved = 0;
@@ -791,6 +907,7 @@ export default function AdminDashboard({
     }
     return [
       { label: "Total Eligible", count: totalEligible, color: "#6366f1" },
+      { label: "In Draft", count: inDraft, color: "#a855f7" },
       { label: "Submitted", count: submitted, color: "#3b82f6" },
       { label: "Manager Reviewed", count: managerReviewed, color: "#f59e0b" },
       { label: "Admin Approved", count: adminApproved, color: "#10b981" },
@@ -849,8 +966,8 @@ export default function AdminDashboard({
       sections.push("");
     }
     sections.push("--- FULL EMPLOYEE ROSTER ---");
-    sections.push("ID,Name,Email,Role,Band,Department,Submitted,Performance Score");
-    for (const emp of enrichedEmployees) sections.push(`${emp.id},"${emp.name}",${emp.email || "—"},${emp.role},${emp.band || "—"},${getDepartmentLabel(emp)},${emp.submitted ? "Yes" : "No"},${(emp.performanceScore || 0).toFixed(1)}`);
+    sections.push("ID,Name,Email,Role,Band,Department,Submitted,Performance Score,Brownie Points");
+    for (const emp of enrichedEmployees) sections.push(`${emp.id},"${emp.name}",${emp.email || "—"},${emp.role},${emp.band || "—"},${getDepartmentLabel(emp)},${emp.submitted ? "Yes" : "No"},${(emp.performanceScore || 0).toFixed(1)},${emp.browniePoints || 0}`);
 
     const blob = new Blob([sections.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -871,7 +988,14 @@ export default function AdminDashboard({
     setPortalWindowBusy(true);
     try {
       const res = portalIsOpenNow ? await closeSubmissionWindowNow() : await openSubmissionWindowNow();
-      setPortalWindow(portalWindowFromServer(res));
+      const parsed = portalWindowFromServer(res);
+      /* Explicitly set manualClosed when we close, clear when we open */
+      if (portalIsOpenNow) {
+        parsed.manualClosed = true;
+      } else {
+        parsed.manualClosed = false;
+      }
+      setPortalWindow(parsed);
       showToast({ title: portalIsOpenNow ? "Window stopped" : "Window started", message: portalIsOpenNow ? "Submission window closed." : "Submission window opened." });
     } catch (err) {
       showToast({ title: "Window update failed", message: err?.message || "Please try again." });
@@ -931,33 +1055,32 @@ export default function AdminDashboard({
     <div className="space-y-8 max-w-7xl mx-auto">
 
       {/* ── header ── */}
-      <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-        <div>
-          <h2 className="rt-title">Overview</h2>
-          <div className="mt-2 flex items-center gap-3">
-            <span className="inline-flex items-center gap-1.5">
-              <span className={`h-2 w-2 rounded-full ${empWindowOpen ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
-              <span className="rt-kicker">Emp {empWindowOpen ? "Open" : "Closed"}</span>
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className={`h-2 w-2 rounded-full ${mgrWindowOpen ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
-              <span className="rt-kicker">Mgr {mgrWindowOpen ? "Open" : "Closed"}</span>
-            </span>
+      <header className="rt-panel p-6 sm:p-8">
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-5">
+          <div>
+            <div className="flex items-center gap-3 mb-2">
+              <div className="h-9 w-9 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center">
+                <BarChart3 size={18} strokeWidth={1.8} />
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[rgb(var(--muted))]">Admin Dashboard</span>
+            </div>
+            <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Dashboard Overview</h2>
+            <p className="text-sm text-[rgb(var(--muted))] mt-1">Real-time performance analytics & submission tracking</p>
           </div>
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <select
-            value={selectedCycleKey}
-            onChange={(e) => setSelectedCycleKey(e.target.value)}
-            className="rt-input px-3 py-2 text-sm w-40"
-          >
-            {cycleOptions.map((opt) => (
-              <option key={opt.key} value={opt.key}>{opt.label}</option>
-            ))}
-          </select>
-          <button onClick={handleGenerateReport} className="rt-btn-ghost">
-            <Download size={15} /> Export Report
-          </button>
+          <div className="flex items-center gap-3 flex-wrap">
+            <select
+              value={selectedCycleKey}
+              onChange={(e) => setSelectedCycleKey(e.target.value)}
+              className="rt-input px-3 py-2.5 text-sm w-40"
+            >
+              {cycleOptions.map((opt) => (
+                <option key={opt.key} value={opt.key}>{opt.label}</option>
+              ))}
+            </select>
+            <button onClick={handleGenerateReport} className="rt-btn-ghost py-2.5">
+              <Download size={15} /> Export
+            </button>
+          </div>
         </div>
       </header>
 
@@ -995,147 +1118,6 @@ export default function AdminDashboard({
         />
       </section>
 
-      {/* ── submission windows (employee + manager) ── */}
-      <section className="rt-panel p-6">
-        <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg p-2.5 bg-blue-500/10 text-blue-500">
-              <Calendar size={20} strokeWidth={1.8} />
-            </div>
-            <div>
-              <h3 className="font-semibold tracking-tight text-[rgb(var(--text))]">Submission Windows</h3>
-              <p className="text-xs text-[rgb(var(--muted))] mt-0.5">Configure separate employee and manager portal access</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
-              <span className={`h-2 w-2 rounded-full ${empWindowOpen ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
-              Emp {empWindowOpen ? "Open" : "Closed"}
-            </span>
-            <span className="text-[rgb(var(--border))]">·</span>
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
-              <span className={`h-2 w-2 rounded-full ${mgrWindowOpen ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
-              Mgr {mgrWindowOpen ? "Open" : "Closed"}
-            </span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          {/* Employee Window */}
-          <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="rounded-md p-1.5 bg-blue-500/10 text-blue-500"><UserCheck size={14} /></div>
-              <span className="text-sm font-semibold text-[rgb(var(--text))]">Employee Window</span>
-              <span className={`ml-auto text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${empWindowOpen ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20" : "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20"}`}>
-                {empWindowOpen ? "Active" : "Inactive"}
-              </span>
-            </div>
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="rt-kicker">Open at</label>
-                <div className="relative">
-                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
-                  <input type="datetime-local" value={empWindow.start} onChange={(e) => setEmpWindow((p) => ({ ...p, start: e.target.value }))} className="w-full rt-input py-2.5 pl-9 pr-3 text-sm" />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="rt-kicker">Close at</label>
-                <div className="relative">
-                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
-                  <input type="datetime-local" value={empWindow.end} onChange={(e) => setEmpWindow((p) => ({ ...p, end: e.target.value }))} className="w-full rt-input py-2.5 pl-9 pr-3 text-sm" />
-                </div>
-              </div>
-              <div className="flex gap-2 pt-1">
-                <button
-                  onClick={() => handleRoleToggle("employee")}
-                  className={["flex-1 rt-btn-primary justify-center py-2.5 text-sm", empWindowOpen ? "!bg-red-500/10 !text-red-700 dark:!text-red-300 !border-red-500/20 hover:!bg-red-500 hover:!text-white" : "!bg-emerald-500 !text-white hover:!bg-emerald-400"].join(" ")}
-                  disabled={empWindowBusy}
-                >
-                  {empWindowOpen ? <><Square size={13} /> Stop</> : <><Play size={13} /> Start</>}
-                </button>
-                <button onClick={() => handleRoleSchedule("employee")} className="flex-1 rt-btn-ghost justify-center py-2.5 text-sm" disabled={empWindowBusy}>
-                  Schedule
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Manager Window */}
-          <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="rounded-md p-1.5 bg-emerald-500/10 text-emerald-500"><Shield size={14} /></div>
-              <span className="text-sm font-semibold text-[rgb(var(--text))]">Manager Window</span>
-              <span className={`ml-auto text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${mgrWindowOpen ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20" : "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20"}`}>
-                {mgrWindowOpen ? "Active" : "Inactive"}
-              </span>
-            </div>
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="rt-kicker">Open at</label>
-                <div className="relative">
-                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
-                  <input type="datetime-local" value={mgrWindow.start} onChange={(e) => setMgrWindow((p) => ({ ...p, start: e.target.value }))} className="w-full rt-input py-2.5 pl-9 pr-3 text-sm" />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="rt-kicker">Close at</label>
-                <div className="relative">
-                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
-                  <input type="datetime-local" value={mgrWindow.end} onChange={(e) => setMgrWindow((p) => ({ ...p, end: e.target.value }))} className="w-full rt-input py-2.5 pl-9 pr-3 text-sm" />
-                </div>
-              </div>
-              <div className="flex gap-2 pt-1">
-                <button
-                  onClick={() => handleRoleToggle("manager")}
-                  className={["flex-1 rt-btn-primary justify-center py-2.5 text-sm", mgrWindowOpen ? "!bg-red-500/10 !text-red-700 dark:!text-red-300 !border-red-500/20 hover:!bg-red-500 hover:!text-white" : "!bg-emerald-500 !text-white hover:!bg-emerald-400"].join(" ")}
-                  disabled={mgrWindowBusy}
-                >
-                  {mgrWindowOpen ? <><Square size={13} /> Stop</> : <><Play size={13} /> Start</>}
-                </button>
-                <button onClick={() => handleRoleSchedule("manager")} className="flex-1 rt-btn-ghost justify-center py-2.5 text-sm" disabled={mgrWindowBusy}>
-                  Schedule
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Global window fallback — kept for backward compat */}
-        <details className="mt-5 group">
-          <summary className="cursor-pointer text-xs font-semibold text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] transition-colors flex items-center gap-1.5">
-            <span className="transition-transform group-open:rotate-90">▶</span> Global Window (legacy)
-          </summary>
-          <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="space-y-1.5">
-              <label className="rt-kicker">Open at</label>
-              <div className="relative">
-                <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
-                <input type="datetime-local" value={portalWindow.start} onChange={(e) => setPortalWindow((prev) => ({ ...prev, start: e.target.value, meta: { ...(prev.meta ?? {}), lastAction: "manual", updatedAt: Date.now() } }))} className="w-full rt-input py-2.5 pl-9 pr-3 text-sm" />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <label className="rt-kicker">Close at (optional)</label>
-              <div className="relative">
-                <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
-                <input type="datetime-local" value={portalWindow.end} onChange={(e) => setPortalWindow((prev) => ({ ...prev, end: e.target.value, meta: { ...(prev.meta ?? {}), lastAction: "manual", updatedAt: Date.now() } }))} className="w-full rt-input py-2.5 pl-9 pr-3 text-sm" />
-              </div>
-            </div>
-            <div className="flex items-end gap-2">
-              <button
-                onClick={handleToggleWindow}
-                className={["flex-1 rt-btn-primary justify-center py-2.5 text-sm", portalIsOpenNow ? "!bg-red-500/10 !text-red-700 dark:!text-red-300 !border-red-500/20 hover:!bg-red-500 hover:!text-white" : "!bg-emerald-500 !text-white hover:!bg-emerald-400"].join(" ")}
-                disabled={portalWindowBusy || portalWindowLoading}
-              >
-                {portalIsOpenNow ? <><Square size={13} /> Stop</> : <><Play size={13} /> Start</>}
-              </button>
-              <button onClick={handleScheduleWindow} className="flex-1 rt-btn-ghost justify-center py-2.5 text-sm" disabled={portalWindowBusy || portalWindowLoading}>
-                Schedule
-              </button>
-            </div>
-          </div>
-        </details>
-      </section>
-
       {/* ── submission rate cards with radial gauges ── */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="rt-panel p-5 flex items-center gap-5">
@@ -1169,9 +1151,9 @@ export default function AdminDashboard({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <div className="rounded-md p-1.5 bg-purple-500/10 text-purple-500"><Activity size={14} /></div>
-              <div className="rt-kicker">Org Health Index</div>
+              <div className="rt-kicker">Submission Rate</div>
             </div>
-            <div className="text-xs text-[rgb(var(--muted))] mt-1">Combined completion across all roles</div>
+            <div className="text-xs text-[rgb(var(--muted))] mt-1">All the employees submission rate</div>
             <div className="mt-2">
               <MiniProgressBar value={stats.overallSubmissionRate} color="bg-purple-500" />
             </div>
@@ -1209,24 +1191,18 @@ export default function AdminDashboard({
           <div className="flex items-center gap-3 mb-1">
             <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><TrendingUp size={16} /></div>
             <div className="rt-section-header">
-              <h3 className="rt-section-title">Ability Trend</h3>
-              <p className="rt-section-subtitle">6-month rolling average performance score</p>
+              <h3 className="rt-section-title">Performance Trend</h3>
+              <p className="rt-section-subtitle">6-month rolling average score</p>
             </div>
           </div>
           <div className="mt-4 w-full" style={{ height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={ability6m} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-                <defs>
-                  <linearGradient id="abilityGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#2563eb" stopOpacity={0.2} />
-                    <stop offset="100%" stopColor="#2563eb" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
                 <XAxis dataKey="month" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                 <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} domain={[0, 5]} />
                 <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
-                <Area type="monotone" dataKey="avg" stroke="#2563eb" strokeWidth={2.5} fill="url(#abilityGrad)" dot={{ r: 3, strokeWidth: 2, fill: "rgb(var(--surface))" }} activeDot={{ r: 5 }} />
+                <Area type="monotone" dataKey="avg" stroke="#2563eb" strokeWidth={2.5} fill="#2563eb" fillOpacity={0.1} dot={{ r: 4, strokeWidth: 2, fill: "rgb(var(--surface))", stroke: "#2563eb" }} activeDot={{ r: 6, strokeWidth: 2, fill: "#2563eb" }} animationDuration={1200} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -1236,46 +1212,67 @@ export default function AdminDashboard({
           <div className="flex items-center gap-3 mb-1">
             <div className="rounded-lg p-2 bg-purple-500/10 text-purple-500"><Target size={16} /></div>
             <div className="rt-section-header">
-              <h3 className="rt-section-title">Org Health</h3>
-              <p className="rt-section-subtitle">Multi-dimensional health radar</p>
+              <h3 className="rt-section-title">Workforce Distribution</h3>
+              <p className="rt-section-subtitle">Employee headcount by department</p>
             </div>
           </div>
           <div className="mt-4 w-full" style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart outerRadius="65%" data={orgHealthRadarData}>
-                <PolarGrid stroke="rgb(var(--border))" />
+                <PolarGrid stroke="rgb(var(--border))" strokeDasharray="3 3" />
                 <PolarAngleAxis dataKey="metric" tick={{ fontSize: 9, fill: "rgb(var(--muted))" }} />
-                <PolarRadiusAxis angle={90} domain={[0, 100]} tick={false} axisLine={false} />
-                <Radar name="Health" dataKey="value" stroke="#7c3aed" fill="#7c3aed" fillOpacity={0.15} strokeWidth={2} dot={{ r: 3 }} />
-                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+                <PolarRadiusAxis angle={90} domain={[0, 'dataMax']} tick={{ fontSize: 9, fill: "rgb(var(--muted))" }} axisLine={false} />
+                <Radar name="Employees" dataKey="employees" stroke="#7c3aed" fill="#7c3aed" fillOpacity={0.12} strokeWidth={2} dot={{ r: 3, fill: "#7c3aed" }} animationDuration={1200} />
+                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(value) => [`${value} employee${value !== 1 ? 's' : ''}`, 'Headcount']} />
               </RadarChart>
             </ResponsiveContainer>
           </div>
         </div>
       </section>
 
-      {/* ── cycle comparison + pie ── */}
+      {/* ── cycle comparison + completion trend + pie ── */}
       {cycleComparisonData.length > 0 ? (
-        <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
           <div className="rt-panel p-6">
             <div className="flex items-center gap-3 mb-4">
               <div className="rounded-lg p-2 bg-emerald-500/10 text-emerald-500"><BarChart3 size={16} /></div>
               <div className="rt-section-header">
-                <h3 className="rt-section-title">Cycle Comparison</h3>
-                <p className="rt-section-subtitle">Submission volume per review cycle</p>
+                <h3 className="rt-section-title">Review Cycle Comparison</h3>
+                <p className="rt-section-subtitle">Submission volume per cycle</p>
               </div>
             </div>
             <div style={{ height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={cycleComparisonData} barGap={8} barCategoryGap={20}>
+                <BarChart data={cycleComparisonData} barGap={4} barCategoryGap={20}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
                   <XAxis dataKey="cycle" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                   <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
                   <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600 }} />
-                  <Bar dataKey="submitted" name="Submitted" fill="#2563eb" radius={[6, 6, 0, 0]} maxBarSize={40} />
-                  <Bar dataKey="pending" name="Pending" fill="#f59e0b" radius={[6, 6, 0, 0]} maxBarSize={40} />
+                  <Bar dataKey="submitted" name="Submitted" fill="#2563eb" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={40} animationDuration={1000} />
+                  <Bar dataKey="pending" name="Pending" fill="#f59e0b" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={40} animationDuration={1000} />
                 </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="rt-panel p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><TrendingUp size={16} /></div>
+              <div className="rt-section-header">
+                <h3 className="rt-section-title">Completion Rate Trend</h3>
+                <p className="rt-section-subtitle">Submission rate % across cycles</p>
+              </div>
+            </div>
+            <div style={{ height: 260 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={cycleComparisonData} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
+                  <XAxis dataKey="cycle" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
+                  <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" />
+                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} formatter={(value) => [`${value}%`, "Completion Rate"]} />
+                  <Line type="monotone" dataKey="rate" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4, strokeWidth: 2, fill: "rgb(var(--surface))", stroke: "#2563eb" }} activeDot={{ r: 6, strokeWidth: 2, fill: "#2563eb" }} animationDuration={1200} />
+                </LineChart>
               </ResponsiveContainer>
             </div>
           </div>
@@ -1284,14 +1281,14 @@ export default function AdminDashboard({
             <div className="flex items-center gap-3 mb-4">
               <div className="rounded-lg p-2 bg-amber-500/10 text-amber-500"><FileBarChart size={16} /></div>
               <div className="rt-section-header">
-                <h3 className="rt-section-title">Current Cycle Health</h3>
-                <p className="rt-section-subtitle">Employee vs manager completion</p>
+                <h3 className="rt-section-title">Current Cycle Status</h3>
+                <p className="rt-section-subtitle">Employee vs manager submission progress</p>
               </div>
             </div>
             <div style={{ height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={cycleHealthPieData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={88} paddingAngle={2}>
+                  <Pie data={cycleHealthPieData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={88} paddingAngle={3} strokeWidth={0} animationDuration={1000}>
                     {cycleHealthPieData.map((entry, idx) => <Cell key={`hc:${idx}`} fill={entry.color} />)}
                   </Pie>
                   <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
@@ -1326,47 +1323,41 @@ export default function AdminDashboard({
               <p className="rt-section-subtitle">Performance bell curve across all employees</p>
             </div>
           </div>
-          <div className="space-y-2.5">
-            {performanceDistribution.buckets.map((b, idx) => {
-              const pct = performanceDistribution.maxCount > 0 ? (b.count / performanceDistribution.maxCount) * 100 : 0;
-              return (
-                <div key={b.range} className="flex items-center gap-3">
-                  <div className="w-16 text-right text-xs font-mono font-semibold text-[rgb(var(--muted))]">{b.range}</div>
-                  <div className="flex-1 h-6 rounded-md bg-[rgb(var(--surface-2))] overflow-hidden relative">
-                    <motion.div
-                      className="h-full rounded-md"
-                      style={{ backgroundColor: b.color }}
-                      initial={{ width: 0 }}
-                      whileInView={{ width: `${pct}%` }}
-                      viewport={{ once: true, margin: "-20px" }}
-                      transition={{ duration: 0.7, delay: idx * 0.08, ease: "easeOut" }}
-                    />
-                    {b.count > 0 ? (
-                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-[rgb(var(--text))]">
-                        {b.count}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
+          <div style={{ height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={performanceDistribution.buckets} barCategoryGap="20%" margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
+                <XAxis dataKey="range" stroke="rgb(var(--muted))" fontSize={10} tickLine={false} axisLine={false} />
+                <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
+                <Tooltip
+                  contentStyle={CHART_TOOLTIP_STYLE}
+                  labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }}
+                  formatter={(value) => [`${value} employee${value !== 1 ? "s" : ""}`, "Count"]}
+                />
+                <Bar dataKey="count" name="Employees" radius={[8, 8, 0, 0]} maxBarSize={52} animationDuration={1200} animationEasing="ease-out">
+                  {performanceDistribution.buckets.map((b, i) => (
+                    <Cell key={`cell-${i}`} fill={b.color} opacity={0.85} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
-          <div className="mt-4 flex items-center gap-4 text-[10px] text-[rgb(var(--muted))]">
-            <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-500" />Needs Improvement</span>
-            <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" />Core</span>
-            <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />Top Performers</span>
+          <div className="mt-3 flex items-center justify-center gap-5 text-[10px] text-[rgb(var(--muted))]">
+            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-red-500" />Needs Improvement</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-blue-500" />Core</span>
+            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />Top Performers</span>
           </div>
         </div>
 
         <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-4">
+          <div className="flex items-center gap-3 mb-5">
             <div className="rounded-lg p-2 bg-violet-500/10 text-violet-500"><Filter size={16} /></div>
             <div className="rt-section-header">
-              <h3 className="rt-section-title">Submission Pipeline</h3>
-              <p className="rt-section-subtitle">End-to-end review funnel</p>
+              <h3 className="rt-section-title">Review Pipeline</h3>
+              <p className="rt-section-subtitle">End-to-end submission funnel</p>
             </div>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-2">
             {submissionFunnel.map((step, idx) => (
               <FunnelStep
                 key={step.label}
@@ -1374,11 +1365,11 @@ export default function AdminDashboard({
                 count={step.count}
                 total={submissionFunnel[0]?.count || 1}
                 color={step.color}
-                delay={idx * 0.12}
+                delay={idx * 0.1}
               />
             ))}
           </div>
-          <div className="mt-5 rt-panel-subtle p-3 flex items-center gap-3">
+          <div className="mt-5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-3.5 flex items-center gap-3">
             <div className="rounded-md p-1.5 bg-emerald-500/10 text-emerald-500"><CheckCircle2 size={14} /></div>
             <div className="flex-1">
               <div className="text-xs font-semibold text-[rgb(var(--text))]">
@@ -1400,8 +1391,8 @@ export default function AdminDashboard({
           <div className="flex items-center gap-3 mb-4">
             <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><Briefcase size={16} /></div>
             <div className="rt-section-header">
-              <h3 className="rt-section-title">Department Breakdown</h3>
-              <p className="rt-section-subtitle">Bell curve & intervention status</p>
+              <h3 className="rt-section-title">Department Analysis</h3>
+              <p className="rt-section-subtitle">Performance classification & alerts</p>
             </div>
           </div>
           <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
@@ -1432,8 +1423,8 @@ export default function AdminDashboard({
           <div className="flex items-center gap-3 mb-4">
             <div className="rounded-lg p-2 bg-emerald-500/10 text-emerald-500"><Zap size={16} /></div>
             <div className="rt-section-header">
-              <h3 className="rt-section-title">Project Breakdown</h3>
-              <p className="rt-section-subtitle">By project assignment</p>
+              <h3 className="rt-section-title">Project Analysis</h3>
+              <p className="rt-section-subtitle">Performance by project assignment</p>
             </div>
           </div>
           <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
@@ -1466,12 +1457,12 @@ export default function AdminDashboard({
         <div className="flex items-center gap-3 mb-5">
           <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><BarChart3 size={16} /></div>
           <div className="rt-section-header">
-            <h3 className="rt-section-title">Delivery Analytics</h3>
-            <p className="rt-section-subtitle">Role throughput, band load, and distribution</p>
+            <h3 className="rt-section-title">Operational Analytics</h3>
+            <p className="rt-section-subtitle">Role throughput and band distribution</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           <div className="rt-panel-subtle p-4 flex flex-col" style={{ height: 340 }}>
             <div className="flex items-center gap-2 mb-3">
               <Users size={14} className="text-[rgb(var(--muted))]" />
@@ -1479,13 +1470,13 @@ export default function AdminDashboard({
             </div>
             <div className="flex-1 min-h-0">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={roleThroughputData} barGap={10} barCategoryGap={24}>
+                <BarChart data={roleThroughputData} barGap={6} barCategoryGap={24}>
                   <XAxis dataKey="role" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                   <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={{ fill: "rgb(var(--surface-2))", opacity: 0.5 }} />
                   <Legend wrapperStyle={{ fontSize: 10, fontWeight: 600 }} />
-                  <Bar dataKey="submitted" name="Submitted" fill="#2563eb" radius={[6, 6, 0, 0]} maxBarSize={36} />
-                  <Bar dataKey="pending" name="Pending" fill="#94a3b8" radius={[6, 6, 0, 0]} maxBarSize={36} />
+                  <Bar dataKey="submitted" name="Submitted" fill="#2563eb" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={36} animationDuration={1000} />
+                  <Bar dataKey="pending" name="Pending" fill="#94a3b8" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={36} animationDuration={1000} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -1509,37 +1500,6 @@ export default function AdminDashboard({
               )) : <p className="text-sm text-[rgb(var(--muted))]">No band data yet.</p>}
             </div>
           </div>
-
-          <div className="rt-panel-subtle p-4 flex flex-col" style={{ height: 340 }}>
-            <div className="flex items-center gap-2 mb-3">
-              <FileBarChart size={14} className="text-[rgb(var(--muted))]" />
-              <div className="rt-kicker">Cycle Health Mix</div>
-            </div>
-            <div className="flex-1 min-h-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={cycleHealthPieData} dataKey="value" nameKey="name" innerRadius={45} outerRadius={75} paddingAngle={2}>
-                    {cycleHealthPieData.map((entry, idx) => <Cell key={`chm:${idx}`} fill={entry.color} />)}
-                  </Pie>
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
-                  <Legend
-                    verticalAlign="bottom"
-                    height={36}
-                    content={({ payload }) => (
-                      <div className="flex flex-wrap items-center justify-center gap-2 text-[10px] font-semibold text-[rgb(var(--text))]">
-                        {(payload || []).map((entry, idx) => (
-                          <span key={idx} className="inline-flex items-center gap-1 whitespace-nowrap">
-                            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: entry?.color || "#8884d8" }} />
-                            {entry?.value}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -1550,7 +1510,7 @@ export default function AdminDashboard({
             <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><Briefcase size={16} /></div>
             <div className="rt-section-header">
               <h3 className="rt-section-title">Department Performance</h3>
-              <p className="rt-section-subtitle">Avg score & submission rate</p>
+              <p className="rt-section-subtitle">Average score & submission rate by department</p>
             </div>
           </div>
           <div style={{ height: 280 }}>
@@ -1562,8 +1522,8 @@ export default function AdminDashboard({
                 <YAxis yAxisId="right" orientation="right" domain={[0, 100]} stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
                 <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600 }} />
-                <Bar yAxisId="left" dataKey="avgScore" name="Avg Score" fill="#2563eb" radius={[6, 6, 0, 0]} />
-                <Bar yAxisId="right" dataKey="submissionRate" name="Submission %" fill="#0f766e" radius={[6, 6, 0, 0]} />
+                <Bar yAxisId="left" dataKey="avgScore" name="Avg Score" fill="#2563eb" opacity={0.85} radius={[6, 6, 0, 0]} animationDuration={1000} />
+                <Bar yAxisId="right" dataKey="submissionRate" name="Submission %" fill="#0f766e" opacity={0.85} radius={[6, 6, 0, 0]} animationDuration={1000} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1586,8 +1546,8 @@ export default function AdminDashboard({
                 <YAxis yAxisId="right" orientation="right" domain={[0, 100]} stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
                 <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600 }} />
-                <Bar yAxisId="left" dataKey="avgScore" name="Avg Score" fill="#7c3aed" radius={[6, 6, 0, 0]} />
-                <Bar yAxisId="right" dataKey="submissionRate" name="Submission %" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+                <Bar yAxisId="left" dataKey="avgScore" name="Avg Score" fill="#7c3aed" opacity={0.85} radius={[6, 6, 0, 0]} animationDuration={1000} />
+                <Bar yAxisId="right" dataKey="submissionRate" name="Submission %" fill="#f59e0b" opacity={0.85} radius={[6, 6, 0, 0]} animationDuration={1000} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1600,20 +1560,20 @@ export default function AdminDashboard({
           <div className="flex items-center gap-3 mb-4">
             <div className="rounded-lg p-2 bg-emerald-500/10 text-emerald-500"><Shield size={16} /></div>
             <div className="rt-section-header">
-              <h3 className="rt-section-title">Manager Team Ownership</h3>
-              <p className="rt-section-subtitle">Team size, submission & score</p>
+              <h3 className="rt-section-title">Manager Team Overview</h3>
+              <p className="rt-section-subtitle">Team composition and submission progress</p>
             </div>
           </div>
           <div style={{ height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={managerOwnershipData} barGap={10} barCategoryGap={24}>
+              <BarChart data={managerOwnershipData} barGap={4} barCategoryGap={24}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
                 <XAxis dataKey="managerName" stroke="rgb(var(--muted))" fontSize={10} tickLine={false} axisLine={false} />
                 <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
                 <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600 }} />
-                <Bar dataKey="submitted" name="Submitted" fill="#16a34a" radius={[6, 6, 0, 0]} maxBarSize={36} />
-                <Bar dataKey="pending" name="Pending" fill="#f97316" radius={[6, 6, 0, 0]} maxBarSize={36} />
+                <Bar dataKey="submitted" name="Submitted" fill="#16a34a" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={36} animationDuration={1000} />
+                <Bar dataKey="pending" name="Pending" fill="#f97316" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={36} animationDuration={1000} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1624,13 +1584,20 @@ export default function AdminDashboard({
             <div className="rounded-lg p-2 bg-amber-500/10 text-amber-500"><Award size={16} /></div>
             <div className="rt-section-header">
               <h3 className="rt-section-title">Top Performers</h3>
-              <p className="rt-section-subtitle">Highest scoring employees & managers</p>
+              <p className="rt-section-subtitle">Highest-rated employees this cycle</p>
             </div>
           </div>
           <div className="space-y-2.5 max-h-[280px] overflow-y-auto pr-1">
             {topPerformers.length ? topPerformers.map((emp, idx) => (
-              <div key={`top:${emp.id}`} className="rt-panel-subtle p-3 flex items-center gap-3">
-                <div className="flex-shrink-0 h-8 w-8 rounded-full bg-[rgb(var(--surface-3))] flex items-center justify-center text-xs font-bold text-[rgb(var(--text))]">
+              <motion.div
+                key={`top:${emp.id}`}
+                className="rt-panel-subtle p-3 flex items-center gap-3 group hover:bg-[rgb(var(--surface-2)/.5)] transition-colors"
+                initial={{ opacity: 0, x: -12 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ delay: idx * 0.08, duration: 0.4 }}
+              >
+                <div className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${idx === 0 ? "bg-amber-500" : idx === 1 ? "bg-slate-400" : idx === 2 ? "bg-orange-500" : "bg-[rgb(var(--surface-3))] text-[rgb(var(--text))]"}`}>
                   {idx + 1}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -1639,9 +1606,9 @@ export default function AdminDashboard({
                 </div>
                 <div className="text-right flex-shrink-0">
                   <div className="text-lg font-bold rt-stat-value">{(emp.performanceScore || 0).toFixed(1)}</div>
-                  <div className="text-[10px] text-[rgb(var(--muted))]">{emp.recognitions} rec · {emp.certCount} cert</div>
+                  <div className="text-[10px] text-[rgb(var(--muted))]">Brownie: {emp.browniePoints || 0}</div>
                 </div>
-              </div>
+              </motion.div>
             )) : <p className="text-sm text-[rgb(var(--muted))]">No performance data yet.</p>}
           </div>
         </div>
@@ -1652,8 +1619,8 @@ export default function AdminDashboard({
         <div className="p-6 flex items-center gap-3">
           <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><FileBarChart size={16} /></div>
           <div className="rt-section-header">
-            <h3 className="rt-section-title">Department Granularity</h3>
-            <p className="rt-section-subtitle">Full drilldown with manager and employee detail</p>
+            <h3 className="rt-section-title">Department Details</h3>
+            <p className="rt-section-subtitle">Comprehensive breakdown with employee and manager metrics</p>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -1699,8 +1666,8 @@ export default function AdminDashboard({
         <div className="p-6 flex items-center gap-3">
           <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><Users size={16} /></div>
           <div className="rt-section-header">
-            <h3 className="rt-section-title">Employee Directory</h3>
-            <p className="rt-section-subtitle">Full roster with submission status</p>
+            <h3 className="rt-section-title">Employee Roster</h3>
+            <p className="rt-section-subtitle">Complete directory with submission status</p>
           </div>
         </div>
 

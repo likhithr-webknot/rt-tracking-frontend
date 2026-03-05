@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Info, RotateCcw, Save, Shield, Sliders, Wrench } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Calendar, ChevronDown, ChevronRight, Clock, Info, Play, RotateCcw, Save, Search, Shield, Sliders, Square, UserCheck, Users, Wrench } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
 import { adminResetPassword } from "../../api/auth.js";
 import {
@@ -8,8 +8,21 @@ import {
   resetAppSettings,
   saveAppSettings,
 } from "../../utils/appSettings.js";
+import {
+  fetchSubmissionWindowCurrent,
+  scheduleSubmissionWindow,
+  openSubmissionWindowNow,
+  closeSubmissionWindowNow,
+  fetchRoleSubmissionWindow,
+  scheduleRoleSubmissionWindow,
+  openRoleSubmissionWindowNow,
+  closeRoleSubmissionWindowNow,
+  openSubmissionWindowForEmployeeNow,
+  closeSubmissionWindowForEmployeeNow,
+  fetchEmployeeSubmissionWindowStatus,
+} from "../../api/submission-window.js";
 
-function SectionCard({ icon: Icon, title, description, children, defaultOpen = true }) {
+function SectionCard({ icon: Icon, title, description, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="rt-panel overflow-hidden">
@@ -66,6 +79,127 @@ function Toggle({ checked, onChange, label }) {
   );
 }
 
+/* ── datetime helpers ── */
+
+function toLocalInputValue(date) {
+  if (!date || !(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+}
+
+function parseInputDate(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function parseServerWindow(data) {
+  const obj = data && typeof data === "object" ? data : {};
+  const startAt = obj.startAt ? new Date(obj.startAt) : null;
+  const endAt = obj.endAt ? new Date(obj.endAt) : null;
+  return {
+    start: startAt && !Number.isNaN(startAt.getTime()) ? toLocalInputValue(startAt) : "",
+    end: endAt && !Number.isNaN(endAt.getTime()) ? toLocalInputValue(endAt) : "",
+    isOpen: Boolean(obj.isOpen),
+    manualClosed: Boolean(obj.manualClosed),
+    cycleKey: typeof obj.cycleKey === "string" ? obj.cycleKey : null,
+  };
+}
+
+function isWindowOpenLocal(win) {
+  /* If server explicitly told us the state, use it */
+  if (win?.manualClosed) return false;
+  if (typeof win?.isOpen === "boolean") return win.isOpen;
+  /* Fallback: compute from dates */
+  if (!win?.start) return false;
+  const start = parseInputDate(win.start);
+  if (!start) return false;
+  const now = new Date();
+  if (now < start) return false;
+  const endRaw = String(win.end ?? "").trim();
+  if (!endRaw) return true;
+  const end = parseInputDate(endRaw);
+  if (!end) return false;
+  return now <= end;
+}
+
+/* ── WindowCard sub-component ── */
+
+function WindowCard({ icon: Icon, iconColor, title, win, setWin, isOpen, busy, onToggle, onSchedule }) {
+  return (
+    <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <div className={`rounded-md p-1.5 ${iconColor}/10 ${iconColor.replace("bg-", "text-")}`}>
+          <Icon size={14} />
+        </div>
+        <span className="text-sm font-semibold text-[rgb(var(--text))]">{title}</span>
+        <span
+          className={`ml-auto text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${
+            isOpen
+              ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
+              : "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20"
+          }`}
+        >
+          {isOpen ? "Active" : "Inactive"}
+        </span>
+      </div>
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <label className="rt-kicker">Open at</label>
+          <div className="relative">
+            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
+            <input
+              type="datetime-local"
+              value={win.start}
+              onChange={(e) => setWin((p) => ({ ...p, start: e.target.value }))}
+              className="w-full rt-input py-2.5 pl-9 pr-3 text-sm"
+            />
+          </div>
+        </div>
+        <div className="space-y-1">
+          <label className="rt-kicker">Close at</label>
+          <div className="relative">
+            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
+            <input
+              type="datetime-local"
+              value={win.end}
+              onChange={(e) => setWin((p) => ({ ...p, end: e.target.value }))}
+              className="w-full rt-input py-2.5 pl-9 pr-3 text-sm"
+            />
+          </div>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onToggle}
+            disabled={busy}
+            className={[
+              "flex-1 rt-btn-primary justify-center py-2.5 text-sm",
+              isOpen
+                ? "!bg-red-500/10 !text-red-700 dark:!text-red-300 !border-red-500/20 hover:!bg-red-500 hover:!text-white"
+                : "!bg-emerald-500 !text-white hover:!bg-emerald-400",
+              busy ? " opacity-60 cursor-not-allowed" : "",
+            ].join(" ")}
+          >
+            {busy ? "Working…" : isOpen ? <><Square size={13} /> Stop</> : <><Play size={13} /> Start</>}
+          </button>
+          <button
+            type="button"
+            onClick={onSchedule}
+            disabled={busy}
+            className={["flex-1 rt-btn-ghost justify-center py-2.5 text-sm", busy ? " opacity-60 cursor-not-allowed" : ""].join("")}
+          >
+            Schedule
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPanel() {
   const [settings, setSettings] = useState(() => getAppSettings());
   const [toast, setToast] = useState(null);
@@ -77,6 +211,166 @@ export default function SettingsPanel() {
   });
   const [resetBusy, setResetBusy] = useState(false);
   const [hasUnsaved, setHasUnsaved] = useState(false);
+
+  /* ── Submission Window state ── */
+  const [globalWin, setGlobalWin] = useState({ start: "", end: "" });
+  const [empWin, setEmpWin] = useState({ start: "", end: "" });
+  const [mgrWin, setMgrWin] = useState({ start: "", end: "" });
+  const [globalBusy, setGlobalBusy] = useState(false);
+  const [empBusy, setEmpBusy] = useState(false);
+  const [mgrBusy, setMgrBusy] = useState(false);
+  const [winLoading, setWinLoading] = useState(true);
+
+  /* per-employee override */
+  const [empOverrideId, setEmpOverrideId] = useState("");
+  const [empOverrideResult, setEmpOverrideResult] = useState(null);
+  const [empOverrideBusy, setEmpOverrideBusy] = useState(false);
+
+  const globalIsOpen = useMemo(() => isWindowOpenLocal(globalWin), [globalWin]);
+  const empIsOpen = useMemo(() => isWindowOpenLocal(empWin), [empWin]);
+  const mgrIsOpen = useMemo(() => isWindowOpenLocal(mgrWin), [mgrWin]);
+
+  /* Fetch all 3 windows on mount */
+  useEffect(() => {
+    let alive = true;
+    const controller = new AbortController();
+    (async () => {
+      setWinLoading(true);
+      try {
+        const [gRes, eRes, mRes] = await Promise.allSettled([
+          fetchSubmissionWindowCurrent({ signal: controller.signal }),
+          fetchRoleSubmissionWindow("employee", { signal: controller.signal }),
+          fetchRoleSubmissionWindow("manager", { signal: controller.signal }),
+        ]);
+        if (!alive) return;
+        if (gRes.status === "fulfilled") {
+          const p = parseServerWindow(gRes.value);
+          if (p.start) setGlobalWin(p);
+        }
+        if (eRes.status === "fulfilled") {
+          const p = parseServerWindow(eRes.value);
+          if (p.start) setEmpWin(p);
+        }
+        if (mRes.status === "fulfilled") {
+          const p = parseServerWindow(mRes.value);
+          if (p.start) setMgrWin(p);
+        }
+      } catch { /* swallow */ }
+      if (alive) setWinLoading(false);
+    })();
+    return () => { alive = false; controller.abort(); };
+  }, []);
+
+  function showToastMsg(t) { setToast(t); }
+
+  /* ── Window action helpers ── */
+  const handleGlobalToggle = useCallback(async () => {
+    setGlobalBusy(true);
+    try {
+      const res = globalIsOpen ? await closeSubmissionWindowNow() : await openSubmissionWindowNow();
+      const p = parseServerWindow(res);
+      /* Explicitly set manualClosed on close, clear on open */
+      if (globalIsOpen) { p.manualClosed = true; p.isOpen = false; }
+      else { p.manualClosed = false; if (!p.isOpen) p.isOpen = true; }
+      if (p.start) setGlobalWin(p);
+      showToastMsg({ title: globalIsOpen ? "Global window closed" : "Global window opened", message: "Updated." });
+    } catch (err) {
+      showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
+    } finally { setGlobalBusy(false); }
+  }, [globalIsOpen]);
+
+  const handleGlobalSchedule = useCallback(async () => {
+    const start = parseInputDate(globalWin.start);
+    const end = parseInputDate(globalWin.end);
+    if (!start || !end) { showToastMsg({ title: "Invalid", message: "Pick valid dates." }); return; }
+    if (end <= start) { showToastMsg({ title: "Invalid", message: "Close must be after Open." }); return; }
+    setGlobalBusy(true);
+    try {
+      const res = await scheduleSubmissionWindow({ startAt: start.toISOString(), endAt: end.toISOString() });
+      const p = parseServerWindow(res);
+      if (p.start) setGlobalWin(p);
+      showToastMsg({ title: "Scheduled", message: "Global window schedule saved." });
+    } catch (err) {
+      showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
+    } finally { setGlobalBusy(false); }
+  }, [globalWin]);
+
+  function makeRoleHandlers(role, win, setWin, isOpen, setBusy) {
+    const label = role === "employee" ? "Employee" : "Manager";
+    const toggle = async () => {
+      setBusy(true);
+      try {
+        const res = isOpen ? await closeRoleSubmissionWindowNow(role) : await openRoleSubmissionWindowNow(role);
+        const p = parseServerWindow(res);
+        /* Explicitly set manualClosed on close, clear on open */
+        if (isOpen) { p.manualClosed = true; p.isOpen = false; }
+        else { p.manualClosed = false; if (!p.isOpen) p.isOpen = true; }
+        if (p.start) setWin(p);
+        showToastMsg({ title: isOpen ? `${label} window closed` : `${label} window opened`, message: "Updated." });
+      } catch (err) {
+        showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
+      } finally { setBusy(false); }
+    };
+    const schedule = async () => {
+      const start = parseInputDate(win.start);
+      const end = parseInputDate(win.end);
+      if (!start || !end) { showToastMsg({ title: "Invalid", message: "Pick valid dates." }); return; }
+      if (end <= start) { showToastMsg({ title: "Invalid", message: "Close must be after Open." }); return; }
+      setBusy(true);
+      try {
+        const res = await scheduleRoleSubmissionWindow(role, { startAt: start.toISOString(), endAt: end.toISOString() });
+        const p = parseServerWindow(res);
+        if (p.start) setWin(p);
+        showToastMsg({ title: "Scheduled", message: `${label} window schedule saved.` });
+      } catch (err) {
+        showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
+      } finally { setBusy(false); }
+    };
+    return { toggle, schedule };
+  }
+
+  const empHandlers = useMemo(() => makeRoleHandlers("employee", empWin, setEmpWin, empIsOpen, setEmpBusy), [empWin, empIsOpen]);
+  const mgrHandlers = useMemo(() => makeRoleHandlers("manager", mgrWin, setMgrWin, mgrIsOpen, setMgrBusy), [mgrWin, mgrIsOpen]);
+
+  /* Per-employee override handlers */
+  async function lookupEmployeeWindow() {
+    const id = String(empOverrideId).trim();
+    if (!id) { showToastMsg({ title: "Missing", message: "Enter an employee ID." }); return; }
+    setEmpOverrideBusy(true);
+    setEmpOverrideResult(null);
+    try {
+      const res = await fetchEmployeeSubmissionWindowStatus(id);
+      setEmpOverrideResult({ type: "status", data: parseServerWindow(res), employeeId: id });
+    } catch (err) {
+      showToastMsg({ title: "Lookup failed", message: err?.message || "Please try again." });
+    } finally { setEmpOverrideBusy(false); }
+  }
+
+  async function openWindowForEmployee() {
+    const id = String(empOverrideId).trim();
+    if (!id) return;
+    setEmpOverrideBusy(true);
+    try {
+      const res = await openSubmissionWindowForEmployeeNow(id);
+      setEmpOverrideResult({ type: "status", data: parseServerWindow(res), employeeId: id });
+      showToastMsg({ title: "Window opened", message: `Opened for ${id}.` });
+    } catch (err) {
+      showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
+    } finally { setEmpOverrideBusy(false); }
+  }
+
+  async function closeWindowForEmployee() {
+    const id = String(empOverrideId).trim();
+    if (!id) return;
+    setEmpOverrideBusy(true);
+    try {
+      const res = await closeSubmissionWindowForEmployeeNow(id);
+      setEmpOverrideResult({ type: "status", data: parseServerWindow(res), employeeId: id });
+      showToastMsg({ title: "Window closed", message: `Closed for ${id}.` });
+    } catch (err) {
+      showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
+    } finally { setEmpOverrideBusy(false); }
+  }
 
   useEffect(() => {
     function onUpdated(event) {
@@ -287,6 +581,146 @@ export default function SettingsPanel() {
             label="Debug mode (verbose console logging)"
           />
         </div>
+      </SectionCard>
+
+      {/* ── Submission Windows ── */}
+      <SectionCard icon={Calendar} title="Windows" description="Manage submission window schedules for all portals">
+        {winLoading ? (
+          <div className="text-sm text-[rgb(var(--muted))] animate-pulse py-4 text-center">Loading window status…</div>
+        ) : (
+          <>
+            {/* Status indicators */}
+            <div className="flex items-center gap-4 flex-wrap pb-2">
+              {[
+                { label: "Global", open: globalIsOpen },
+                { label: "Employee", open: empIsOpen },
+                { label: "Manager", open: mgrIsOpen },
+              ].map(({ label, open }) => (
+                <span key={label} className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                  <span className={`h-2 w-2 rounded-full ${open ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
+                  {label} {open ? "Open" : "Closed"}
+                </span>
+              ))}
+            </div>
+
+            {/* Three window cards */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <WindowCard
+                icon={Calendar}
+                iconColor="bg-purple-500"
+                title="Global"
+                win={globalWin}
+                setWin={setGlobalWin}
+                isOpen={globalIsOpen}
+                busy={globalBusy}
+                onToggle={handleGlobalToggle}
+                onSchedule={handleGlobalSchedule}
+              />
+              <WindowCard
+                icon={UserCheck}
+                iconColor="bg-blue-500"
+                title="Employee"
+                win={empWin}
+                setWin={setEmpWin}
+                isOpen={empIsOpen}
+                busy={empBusy}
+                onToggle={empHandlers.toggle}
+                onSchedule={empHandlers.schedule}
+              />
+              <WindowCard
+                icon={Shield}
+                iconColor="bg-emerald-500"
+                title="Manager"
+                win={mgrWin}
+                setWin={setMgrWin}
+                isOpen={mgrIsOpen}
+                busy={mgrBusy}
+                onToggle={mgrHandlers.toggle}
+                onSchedule={mgrHandlers.schedule}
+              />
+            </div>
+
+            {/* Per-employee override */}
+            <div className="border-t border-[rgb(var(--border))] pt-5 mt-2">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="rounded-md p-1.5 bg-amber-500/10 text-amber-500"><Users size={14} /></div>
+                <div>
+                  <div className="text-sm font-semibold text-[rgb(var(--text))]">Per-Employee Override</div>
+                  <div className="text-[10px] text-[rgb(var(--muted))]">Open, close, or check window status for a specific employee</div>
+                </div>
+              </div>
+
+              <div className="flex items-end gap-3 flex-wrap">
+                <div className="flex-1 min-w-[200px]">
+                  <FieldLabel>Employee ID</FieldLabel>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
+                    <input
+                      value={empOverrideId}
+                      onChange={(e) => setEmpOverrideId(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") lookupEmployeeWindow(); }}
+                      className="w-full rt-input py-2.5 pl-9 pr-3 text-sm font-mono"
+                      placeholder="e.g. EMP001"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={lookupEmployeeWindow}
+                  disabled={empOverrideBusy || !empOverrideId.trim()}
+                  className={["rt-btn-ghost text-sm py-2.5", empOverrideBusy ? " opacity-60 cursor-not-allowed" : ""].join("")}
+                >
+                  <Search size={13} /> Lookup
+                </button>
+                <button
+                  type="button"
+                  onClick={openWindowForEmployee}
+                  disabled={empOverrideBusy || !empOverrideId.trim()}
+                  className={["rt-btn-primary text-sm py-2.5 !bg-emerald-500 !text-white hover:!bg-emerald-400", empOverrideBusy ? " opacity-60 cursor-not-allowed" : ""].join("")}
+                >
+                  <Play size={13} /> Open
+                </button>
+                <button
+                  type="button"
+                  onClick={closeWindowForEmployee}
+                  disabled={empOverrideBusy || !empOverrideId.trim()}
+                  className={["rt-btn-primary text-sm py-2.5 !bg-red-500/10 !text-red-700 dark:!text-red-300 !border-red-500/20 hover:!bg-red-500 hover:!text-white", empOverrideBusy ? " opacity-60 cursor-not-allowed" : ""].join("")}
+                >
+                  <Square size={13} /> Close
+                </button>
+              </div>
+
+              {empOverrideResult?.data ? (
+                <div className="mt-3 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-semibold text-[rgb(var(--text))]">
+                      Window for <span className="font-mono">{empOverrideResult.employeeId}</span>
+                    </span>
+                    <span
+                      className={`ml-auto text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${
+                        empOverrideResult.data.isOpen || isWindowOpenLocal(empOverrideResult.data)
+                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
+                          : "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20"
+                      }`}
+                    >
+                      {empOverrideResult.data.isOpen || isWindowOpenLocal(empOverrideResult.data) ? "Open" : "Closed"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-[rgb(var(--muted))]">Opens:</span>{" "}
+                      <span className="font-mono text-[rgb(var(--text))]">{empOverrideResult.data.start || "—"}</span>
+                    </div>
+                    <div>
+                      <span className="text-[rgb(var(--muted))]">Closes:</span>{" "}
+                      <span className="font-mono text-[rgb(var(--text))]">{empOverrideResult.data.end || "—"}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </>
+        )}
       </SectionCard>
 
       {/* ── Save / Reset bar ── */}
