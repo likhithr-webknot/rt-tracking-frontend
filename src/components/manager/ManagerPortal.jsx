@@ -26,7 +26,7 @@ import {
   UserCircle2,
   Users,
   X,
-  XCircle
+  XCircle,
 } from "lucide-react";
 
 import { fetchMe } from "../../api/auth.js";
@@ -37,7 +37,7 @@ import {
   formatYearMonth,
   normalizeMonthlySubmission,
   saveMonthlyDraft,
-  submitMonthlySubmission
+  submitMonthlySubmission,
 } from "../../api/monthly-submissions.js";
 import { normalizeCursorPage } from "../../api/employee-portal.js";
 import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions.js";
@@ -93,7 +93,9 @@ function saveManagerReviewDrafts(next) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(MANAGER_REVIEW_DRAFT_KEY, JSON.stringify(next || {}));
-  } catch { void 0; }
+  } catch {
+    void 0;
+  }
 }
 
 function isSubmittedStatus(status) {
@@ -160,19 +162,23 @@ function normalizeTeamSubmissions(data) {
       const staleManagerReject =
         currentStatus === "SUBMITTED" && rawManagerAction === "REJECT";
 
+      const managerSubmittedFromSubmission =
+        typeof submission?.managerSubmitted === "boolean" ? submission.managerSubmitted : null;
       const managerSubmitted = staleManagerReject
         ? false
-        : Boolean(
-            obj?.managerSubmittedAt ||
-            obj?.managerReviewedAt ||
-            obj?.reviewedByManager ||
-            obj?.managerReview ||
-            obj?.managerEvaluation ||
-            obj?.payload?.managerSubmittedAt ||
-            obj?.payload?.managerReviewedAt ||
-            obj?.payload?.managerReview ||
-            obj?.payload?.managerEvaluation
-          );
+        : managerSubmittedFromSubmission != null
+          ? managerSubmittedFromSubmission
+          : Boolean(
+              obj?.managerSubmittedAt ||
+              obj?.managerReviewedAt ||
+              obj?.reviewedByManager ||
+              obj?.managerReview ||
+              obj?.managerEvaluation ||
+              obj?.payload?.managerSubmittedAt ||
+              obj?.payload?.managerReviewedAt ||
+              obj?.payload?.managerReview ||
+              obj?.payload?.managerEvaluation
+            );
       const managerSubmittedAt = String(
         obj?.managerSubmittedAt ??
         obj?.managerReviewedAt ??
@@ -437,6 +443,7 @@ function buildManagerSelfSubmissionPayload({
   selfReviewText,
   kpiRatings,
   selectedValues,
+  valueComments,
   allowedKpiIds,
   managerId,
   reviewStatus = null,
@@ -462,6 +469,7 @@ function buildManagerSelfSubmissionPayload({
   }));
 
   const normalizedValues = normalizeSelfValueRatings(selectedValues);
+  const normalizedValueComments = valueComments && typeof valueComments === "object" ? valueComments : {};
   const valueEntries = Object.entries(normalizedValues).sort(([a], [b]) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
   );
@@ -469,6 +477,7 @@ function buildManagerSelfSubmissionPayload({
   const webknotValueResponses = valueEntries.map(([valueId, rating]) => ({
     valueId: String(valueId || "").trim(),
     rating,
+    comment: String(normalizedValueComments?.[valueId] || "").trim() || undefined,
   }));
   const webknotValues = valueEntries.map(([id]) => String(id));
   const monthKey = normalizeYearMonth(month) || String(month || "").trim() || null;
@@ -488,16 +497,23 @@ function buildManagerSelfSubmissionPayload({
     targetRole: "ADMIN",
     subjectEmployeeId: String(managerId || "").trim() || null,
     selfReviewText: String(selfReviewText || ""),
-    certifications: [],
     kpiRatings: kpiRatingsArray,
     webknotValues,
     webknotValueRatings: stableValueRatings,
     webknotValueResponses,
+    webknotValueComments: normalizedValueComments,
     recognitionsCount: 0,
   };
   if (reviewStatus != null) next.reviewStatus = String(reviewStatus || "").trim() || null;
   if (reopenedForResubmission != null) next.reopenedForResubmission = Boolean(reopenedForResubmission);
   return next;
+}
+
+function formatReviewTimestamp(value) {
+  if (!value) return "—";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  return dt.toLocaleString();
 }
 
 function isFinalSubmissionStatus(status, meta) {
@@ -581,16 +597,14 @@ function mergeNotifications(existing, incoming) {
 const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account }) => {
   const navItems = [
     { id: "team", icon: <Users size={20} />, label: "Team Submissions" },
-    { id: "project-ratings", icon: <FolderKanban size={20} />, label: "Project Ratings" },
     { id: "self-review", icon: <ClipboardCheck size={20} />, label: "Self Review" },
   ];
 
   return (
     <aside
       className={[
-        "rt-sidebar fixed left-0 top-0 h-full transition-all duration-300 z-50",
-        "flex flex-col",
-        "md:translate-x-0",
+        "rt-sidebar fixed left-0 top-0 h-full z-50 flex flex-col",
+        "md:translate-x-0 will-change-transform transition-[transform,width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
         isOpen ? "translate-x-0 w-64" : "-translate-x-full md:translate-x-0 md:w-[72px]",
       ].join(" ")}
     >
@@ -718,7 +732,7 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [filter, setFilter] = useState("PENDING_MANAGER_REVIEW"); // SUBMITTED | ALL | PENDING_MANAGER_REVIEW
   const [teamSearch, setTeamSearch] = useState("");
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
-  const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review", "project-ratings"]), []);
+  const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review"]), []);
 
   const getMgrTabFromPath = useCallback(() => {
     const raw = window.location.pathname.replace(/^\//, "").split("/")[0];
@@ -745,6 +759,7 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [managerSelfReviewText, setManagerSelfReviewText] = useState("");
   const [managerSelfKpiRatings, setManagerSelfKpiRatings] = useState({});
   const [managerSelfValueRatings, setManagerSelfValueRatings] = useState({});
+  const [managerSelfValueComments, setManagerSelfValueComments] = useState({});
   const [savingSelfReview, setSavingSelfReview] = useState(false);
   const [managerDraftSaving, setManagerDraftSaving] = useState(false);
   const [managerDraftError, setManagerDraftError] = useState("");
@@ -819,6 +834,22 @@ export default function ManagerPortal({ onLogout, auth }) {
     }
     return map;
   }, [reviewModal?.row?.payload?.webknotValueRatings, reviewModal?.row?.payload?.webknotValues, selfValues]);
+  const selfValuesByPillar = useMemo(() => {
+    const groups = new Map();
+    for (const valueItem of selfValues) {
+      const pillar = String(valueItem?.pillar || "—").trim() || "—";
+      if (!groups.has(pillar)) groups.set(pillar, []);
+      groups.get(pillar).push(valueItem);
+    }
+    return Array.from(groups.entries())
+      .sort(([a], [b]) => String(a).localeCompare(String(b), undefined, { numeric: true }))
+      .map(([pillar, items]) => ({
+        pillar,
+        items: items
+          .slice()
+          .sort((a, b) => String(a?.title || a?.id || "").localeCompare(String(b?.title || b?.id || ""), undefined, { numeric: true })),
+      }));
+  }, [selfValues]);
   const filteredSelfKpis = useMemo(
     () => selfKpis.filter((k) => kpiAppliesToManager(k, { band: managerBand, stream: managerStream })),
     [managerBand, managerStream, selfKpis]
@@ -1182,7 +1213,8 @@ export default function ManagerPortal({ onLogout, auth }) {
       setManagerSelfReviewText(enhanced);
       showToast({ title: "Enhanced", message: "Updated your self review text." });
     } catch (err) {
-      showToast({ title: "AI failed", message: err?.message || "Please try again." });
+      const status = err?.status ? ` [${err.status}]` : "";
+      showToast({ title: "AI failed", message: `${err?.message || "Please try again."}${status}` });
     } finally {
       setAiEnhancingSelfReview(false);
     }
@@ -1205,7 +1237,8 @@ export default function ManagerPortal({ onLogout, auth }) {
       setManagerNotes(enhanced);
       showToast({ title: "Enhanced", message: "Updated manager comments." });
     } catch (err) {
-      showToast({ title: "AI failed", message: err?.message || "Please try again." });
+      const status = err?.status ? ` [${err.status}]` : "";
+      showToast({ title: "AI failed", message: `${err?.message || "Please try again."}${status}` });
     } finally {
       setAiEnhancingManagerNotes(false);
     }
@@ -1328,6 +1361,28 @@ export default function ManagerPortal({ onLogout, auth }) {
 
   const selectedRow = reviewModal.open ? reviewModal.row : null;
   const selectedKey = selectedRow ? `${selectedRow.employee.id}:${String(selectedRow.month || month)}` : "";
+  const selectedValueComments = useMemo(() => {
+    if (!selectedRow) return {};
+    const payload = selectedRow.payload || {};
+    const out = {};
+    if (payload.webknotValueComments && typeof payload.webknotValueComments === "object") {
+      for (const [id, comment] of Object.entries(payload.webknotValueComments)) {
+        const key = String(id || "").trim();
+        if (!key) continue;
+        const text = String(comment || "").trim();
+        if (text) out[key] = text;
+      }
+    }
+    if (Array.isArray(payload.webknotValueResponses)) {
+      for (const entry of payload.webknotValueResponses) {
+        const key = String(entry?.valueId || entry?.id || "").trim();
+        if (!key) continue;
+        const text = String(entry?.comment || "").trim();
+        if (text) out[key] = text;
+      }
+    }
+    return out;
+  }, [selectedRow]);
 
   useEffect(() => {
     if (!reviewModal.open || !selectedRow) return;
@@ -1648,11 +1703,13 @@ export default function ManagerPortal({ onLogout, auth }) {
           setManagerSelfReviewText("");
           setManagerSelfKpiRatings({});
           setManagerSelfValueRatings({});
+          setManagerSelfValueComments({});
           const cleared = buildManagerSelfSubmissionPayload({
             month,
             selfReviewText: "",
             kpiRatings: {},
             selectedValues: {},
+            valueComments: {},
             allowedKpiIds: filteredSelfKpiIds,
             managerId,
             reviewStatus: "DRAFT",
@@ -1687,12 +1744,23 @@ export default function ManagerPortal({ onLogout, auth }) {
         setManagerSelfReviewText(normalized.selfReviewText || "");
         setManagerSelfKpiRatings(nextKpis);
         setManagerSelfValueRatings(nextValues);
+        const nextValueComments = (normalized.webknotValueComments && typeof normalized.webknotValueComments === "object")
+          ? normalized.webknotValueComments
+          : Array.isArray(normalized.webknotValueResponses)
+            ? Object.fromEntries(
+                normalized.webknotValueResponses
+                  .map((entry) => [String(entry?.valueId || entry?.id || ""), String(entry?.comment || "").trim()])
+                  .filter(([id, comment]) => id)
+              )
+            : {};
+        setManagerSelfValueComments(nextValueComments);
 
         const loaded = buildManagerSelfSubmissionPayload({
           month: normalized.month || month,
           selfReviewText: normalized.selfReviewText || "",
           kpiRatings: nextKpis,
           selectedValues: nextValues,
+            valueComments: nextValueComments,
           allowedKpiIds: filteredSelfKpiIds,
           managerId,
           reviewStatus: normalized.reviewStatus || "DRAFT",
@@ -1733,6 +1801,47 @@ export default function ManagerPortal({ onLogout, auth }) {
     const manager = String(selfSubmissionMeta?.managerReview?.comments || "").trim();
     return admin || manager || "";
   }, [selfSubmissionMeta?.adminReview?.comments, selfSubmissionMeta?.managerReview?.comments]);
+  const selfStatusSummary = useMemo(() => {
+    const reviewStatus = String(selfSubmissionMeta?.reviewStatus || "DRAFT").trim().toUpperCase();
+    const adminAction = String(selfSubmissionMeta?.adminReview?.action || "").trim().toUpperCase();
+    const submittedAt = selfSubmissionMeta?.submittedAt || selfSubmissionMeta?.updatedAt || null;
+    const actor = selfSubmissionMeta?.adminReview?.reviewedBy || "Admin";
+    const needsChanges = Boolean(isResubmissionRequested(selfSubmissionMeta));
+    if (needsChanges) {
+      return {
+        chip: "Changes requested",
+        chipClass: "bg-amber-500/15 text-amber-800 dark:text-amber-200 border-amber-500/30",
+        title: "Admin returned your self review",
+        detail: "Address the feedback and resubmit. Only admins can approve manager self reviews.",
+        timestamp: formatReviewTimestamp(selfSubmissionMeta?.adminReview?.reviewedAt || submittedAt),
+      };
+    }
+    if (reviewStatus.includes("APPROVED")) {
+      return {
+        chip: "Approved",
+        chipClass: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border-emerald-500/30",
+        title: "Approved by admin",
+        detail: actor ? `${actor} approved this self review.` : "Admin approved this self review.",
+        timestamp: formatReviewTimestamp(selfSubmissionMeta?.adminReview?.reviewedAt || submittedAt),
+      };
+    }
+    if (reviewStatus.includes("SUBMITTED")) {
+      return {
+        chip: adminAction ? `Admin: ${adminAction}` : "Submitted",
+        chipClass: "bg-blue-500/15 text-blue-800 dark:text-blue-200 border-blue-500/30",
+        title: "Pending admin evaluation",
+        detail: "Admins review and finalize manager self reviews. You can edit until approval unless locked.",
+        timestamp: formatReviewTimestamp(submittedAt),
+      };
+    }
+    return {
+      chip: "Draft",
+      chipClass: "bg-slate-500/10 text-slate-700 dark:text-slate-200 border-slate-500/20",
+      title: "Draft in progress",
+      detail: "Submit to send your self review to admins for evaluation.",
+      timestamp: submittedAt ? formatReviewTimestamp(submittedAt) : "—",
+    };
+  }, [selfSubmissionMeta]);
 
   useEffect(() => {
     if (!String(month || "").trim()) return;
@@ -1744,6 +1853,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       selfReviewText: managerSelfReviewText,
       kpiRatings: managerSelfKpiRatings,
       selectedValues: managerSelfValueRatings,
+      valueComments: managerSelfValueComments,
       allowedKpiIds: filteredSelfKpiIds,
       managerId,
       reviewStatus: selfSubmissionMeta?.reviewStatus || "DRAFT",
@@ -1777,6 +1887,7 @@ export default function ManagerPortal({ onLogout, auth }) {
     managerSelfKpiRatings,
     managerSelfReviewText,
     managerSelfValueRatings,
+    managerSelfValueComments,
     managerId,
     month,
     onLogout,
@@ -2077,6 +2188,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       selfReviewText: managerSelfReviewText,
       kpiRatings: managerSelfKpiRatings,
       selectedValues: managerSelfValueRatings,
+      valueComments: managerSelfValueComments,
       allowedKpiIds: filteredSelfKpiIds,
       managerId,
       reviewStatus: selfSubmissionMeta?.reviewStatus || "DRAFT",
@@ -2112,6 +2224,7 @@ export default function ManagerPortal({ onLogout, auth }) {
         selfReviewText: text,
         kpiRatings: managerSelfKpiRatings,
         selectedValues: managerSelfValueRatings,
+        valueComments: managerSelfValueComments,
         allowedKpiIds: filteredSelfKpiIds,
         managerId,
         reviewStatus: "SUBMITTED",
@@ -2141,12 +2254,23 @@ export default function ManagerPortal({ onLogout, auth }) {
         submittedAt: normalized?.submittedAt ?? payload.submittedAt ?? now,
         updatedAt: normalized?.updatedAt ?? now,
       });
+      const normalizedValueComments = (normalized?.webknotValueComments && typeof normalized.webknotValueComments === "object")
+        ? normalized.webknotValueComments
+        : Array.isArray(normalized?.webknotValueResponses)
+          ? Object.fromEntries(
+              normalized.webknotValueResponses
+                .map((entry) => [String(entry?.valueId || entry?.id || ""), String(entry?.comment || "").trim()])
+                .filter(([id, comment]) => id)
+            )
+          : managerSelfValueComments;
+      setManagerSelfValueComments(normalizedValueComments);
       lastSavedSelfDraftHashRef.current = payloadHash(
         buildManagerSelfSubmissionPayload({
           month,
           selfReviewText: managerSelfReviewText,
           kpiRatings: managerSelfKpiRatings,
           selectedValues: managerSelfValueRatings,
+          valueComments: normalizedValueComments,
           allowedKpiIds: filteredSelfKpiIds,
           managerId,
           reviewStatus: "SUBMITTED",
@@ -2501,7 +2625,7 @@ export default function ManagerPortal({ onLogout, auth }) {
             <div className="flex items-center gap-3 mb-2">
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">
-              {activeTab === "team" ? "Team Submissions Workspace" : activeTab === "project-ratings" ? "Project Ratings" : "Manager Self Review Workspace"}
+              {activeTab === "team" ? "Team Submissions Workspace" : "Manager Self Review Workspace"}
             </h1>
             <p className="text-sm text-[rgb(var(--muted))] mt-1.5">
               Monitor submission health, review reportees, and complete your monthly manager self review.
@@ -3235,6 +3359,25 @@ export default function ManagerPortal({ onLogout, auth }) {
             <h2 className="rt-section-title">Manager Self Review</h2>
             <p className="rt-section-subtitle mt-1">Write your monthly self review, rate KPIs and Webknot values, then submit.</p>
 
+            <div className="mt-5 rounded-2xl border border-[rgb(var(--border))] bg-gradient-to-r from-[rgb(var(--surface))] via-[rgb(var(--surface-2)/.6)] to-white/60 dark:from-[rgb(var(--surface-2))] dark:via-[rgb(var(--surface-2))] dark:to-transparent shadow-sm p-5 sm:p-6 relative overflow-hidden">
+              <div className="absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-blue-500 via-indigo-500 to-cyan-500" aria-hidden="true" />
+              <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_15%_20%,rgba(59,130,246,0.08),transparent_28%),radial-gradient(circle_at_80%_0%,rgba(99,102,241,0.08),transparent_28%)]" aria-hidden="true" />
+              <div className="relative flex flex-col gap-3">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Admin-only evaluation</div>
+                    <div className="text-sm font-semibold text-[rgb(var(--text))]">Admins review and finalize manager self reviews.</div>
+                  </div>
+                  <span className={[
+                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wider",
+                    selfStatusSummary.chipClass,
+                  ].join(" ")}>{selfStatusSummary.chip}</span>
+                </div>
+                <p className="text-xs text-[rgb(var(--muted))] leading-relaxed">{selfStatusSummary.detail}</p>
+                <div className="text-[11px] text-[rgb(var(--muted))]">Last update: {selfStatusSummary.timestamp}</div>
+              </div>
+            </div>
+
             {selfReviewLocked && !selfNeedsResubmission ? (
               <div className="mt-5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-200">
                 This month is submitted and locked. You can submit once per month.
@@ -3338,35 +3481,57 @@ export default function ManagerPortal({ onLogout, auth }) {
 
               <div className="rt-panel-subtle rounded-lg p-4">
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Webknot Values Ratings (1-5)</div>
-                <div className="mt-3 space-y-3 max-h-[260px] overflow-y-auto pr-1">
-                  {selfValues.map((valueItem) => {
-                    const id = String(valueItem?.id || "").trim();
-                    const value = managerSelfValueRatings?.[id];
-                    const display = formatOneDecimalDisplay(value);
-                    return (
-                      <div key={id} className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-3">
-                        <div className="min-w-0 pr-2">
-                          <div className="text-sm text-[rgb(var(--text))] truncate">{String(valueItem?.title || id)}</div>
-                          <div className="text-[10px] text-[rgb(var(--muted))] mt-1">{String(valueItem?.pillar || "—")}</div>
-                        </div>
-                        <input
-                          type="number"
-                          min={1}
-                          max={5}
-                          step={0.1}
-                          value={display}
-                          readOnly={selfReviewLocked}
-                          onWheel={preventWheelInputChange}
-                          onChange={(e) => handleSelfRatingChange("value", id, e.target.value)}
-                          className={[
-                            "rt-input w-36 py-2 px-3 text-sm justify-self-end",
-                            selfReviewLocked ? "opacity-75 cursor-not-allowed" : "",
-                          ].join(" ")}
-                          placeholder="1-5"
-                        />
-                      </div>
-                    );
-                  })}
+                <div className="mt-3 space-y-4 max-h-[320px] overflow-y-auto pr-1">
+                  {selfValuesByPillar.map((group) => (
+                    <div key={group.pillar} className="space-y-3">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">{group.pillar}</div>
+                      {group.items.map((valueItem) => {
+                        const id = String(valueItem?.id || "").trim();
+                        const value = managerSelfValueRatings?.[id];
+                        const display = formatOneDecimalDisplay(value);
+                        const comment = managerSelfValueComments?.[id] || "";
+                        return (
+                          <div key={id} className="space-y-2 rounded-md border border-[rgb(var(--border))] p-3 bg-[rgb(var(--surface-1))]">
+                            <div className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-3">
+                              <div className="min-w-0 pr-2">
+                                <div className="text-sm text-[rgb(var(--text))] truncate">{String(valueItem?.title || id)}</div>
+                                <div className="text-[10px] text-[rgb(var(--muted))] mt-1">{String(valueItem?.pillar || group.pillar || "—")}</div>
+                              </div>
+                              <input
+                                type="number"
+                                min={1}
+                                max={5}
+                                step={0.1}
+                                value={display}
+                                readOnly={selfReviewLocked}
+                                onWheel={preventWheelInputChange}
+                                onChange={(e) => handleSelfRatingChange("value", id, e.target.value)}
+                                className={[
+                                  "rt-input w-36 py-2 px-3 text-sm justify-self-end",
+                                  selfReviewLocked ? "opacity-75 cursor-not-allowed" : "",
+                                ].join(" ")}
+                                placeholder="1-5"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Self comments</label>
+                              <textarea
+                                value={comment}
+                                onChange={(e) => setManagerSelfValueComments((prev) => ({ ...prev, [id]: e.target.value }))}
+                                readOnly={selfReviewLocked}
+                                rows={2}
+                                className={[
+                                  "mt-2 rt-input p-2 text-sm w-full resize-none",
+                                  selfReviewLocked ? "opacity-75 cursor-not-allowed" : "",
+                                ].join(" ")}
+                                placeholder="Add a short note for this evaluation criteria"
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
                   {!selfValuesLoading && selfValues.length === 0 ? (
                     <div className="text-sm text-[rgb(var(--muted))]">No values available.</div>
                   ) : null}
@@ -3643,31 +3808,39 @@ export default function ManagerPortal({ onLogout, auth }) {
                             const display =
                               typeof current === "number" && Number.isFinite(current) ? current : (current ?? "");
                             const valueLabel = valueLabelIndex[String(id)] || id;
+                            const selfComment = selectedValueComments?.[String(id)] || "";
                             return (
-                              <div key={id} className="flex items-center justify-between gap-3">
-                                <div className="text-sm text-[rgb(var(--text))]">{String(valueLabel)}</div>
-                                <input
-                                  type="number"
-                                  min={1}
-                                  max={5}
-                                  step={0.1}
-                                  value={display}
-                                  onChange={(e) => {
-                                    const raw = String(e.target.value ?? "").trim();
-                                    const parsed = raw === "" ? null : Number.parseFloat(raw);
-                                    setManagerValueRatings((prev) => {
-                                      const next = { ...(prev || {}) };
-                                      if (parsed == null || !Number.isFinite(parsed)) {
-                                        delete next[id];
+                              <div key={id} className="space-y-2 rounded-md border border-[rgb(var(--border))] p-3 bg-[rgb(var(--surface-1))]">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="text-sm text-[rgb(var(--text))] leading-tight">{String(valueLabel)}</div>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={5}
+                                    step={0.1}
+                                    value={display}
+                                    onChange={(e) => {
+                                      const raw = String(e.target.value ?? "").trim();
+                                      const parsed = raw === "" ? null : Number.parseFloat(raw);
+                                      setManagerValueRatings((prev) => {
+                                        const next = { ...(prev || {}) };
+                                        if (parsed == null || !Number.isFinite(parsed)) {
+                                          delete next[id];
+                                          return next;
+                                        }
+                                        next[id] = Math.round(parsed * 10) / 10;
                                         return next;
-                                      }
-                                      next[id] = Math.round(parsed * 10) / 10;
-                                      return next;
-                                    });
-                                  }}
-                                  className="rt-input w-28 py-2 px-3 text-sm"
-                                  placeholder="1-5"
-                                />
+                                      });
+                                    }}
+                                    className="rt-input w-28 py-2 px-3 text-sm"
+                                    placeholder="1-5"
+                                  />
+                                </div>
+                                {selfComment ? (
+                                  <div className="text-xs text-[rgb(var(--muted))] leading-snug">
+                                    Self comment: <span className="text-[rgb(var(--text))]">{selfComment}</span>
+                                  </div>
+                                ) : null}
                               </div>
                             );
                           })

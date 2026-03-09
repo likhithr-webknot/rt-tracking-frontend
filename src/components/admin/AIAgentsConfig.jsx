@@ -98,6 +98,7 @@ export default function AIAgentsConfig() {
           return prev;
         });
       } catch (err) {
+        if (err?.name === "AbortError") return;
         setAgents([]);
         setNextCursor(null);
         setError(err?.message || "Failed to load AI agents.");
@@ -300,21 +301,21 @@ export default function AIAgentsConfig() {
                     <div className="flex justify-end gap-2">
                       <button
                         onClick={() => openEditModal(agent)}
-                        className="p-2.5 bg-[rgb(var(--surface-2))] text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] hover:brightness-95 rounded-md transition-all border border-[rgb(var(--border))]"
+                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
                         title="Edit API key"
                         aria-label={`Edit API key for ${providerLabel(agent.provider)}`}
                       >
-                        <Edit3 size={18} />
+                        <Edit3 size={16} />
                       </button>
                       <button
                         onClick={() => {
                           setPendingDeleteAgent(agent);
                         }}
-                        className="p-2.5 bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white rounded-md transition-all border border-red-500/20"
+                        className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all"
                         title="Delete agent"
                         aria-label={`Delete agent ${providerLabel(agent.provider)}`}
                       >
-                        <Trash2 size={18} />
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </td>

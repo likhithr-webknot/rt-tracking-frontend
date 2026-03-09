@@ -290,12 +290,49 @@ function normalizeWebknotValueRatingsForState(input) {
   return out;
 }
 
+function normalizeValueCommentsForState(input) {
+  if (!input) return {};
+  const out = {};
+
+  const assign = (idRaw, textRaw) => {
+    const id = String(idRaw ?? "").trim();
+    if (!id) return;
+    const text = String(textRaw ?? "").trim();
+    if (!text) return;
+    out[id] = text;
+  };
+
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      if (!item || typeof item !== "object") continue;
+      const id =
+        item.valueId ??
+        item.webknotValueId ??
+        item.id ??
+        item.code ??
+        item.key ??
+        item.value ??
+        item.title ??
+        item.name;
+      const comment = item.comment ?? item.valueComment ?? item.note ?? item.text ?? item.description;
+      assign(id, comment);
+    }
+    return out;
+  }
+
+  if (typeof input === "object") {
+    for (const [k, v] of Object.entries(input)) assign(k, v);
+  }
+  return out;
+}
+
 function buildMonthlySubmissionPayload({
   month,
   selfReviewText,
   selectedCertifications,
   kpiRatings,
   selectedValues,
+  valueComments,
   recognitionsCount,
   submissionType = "EMPLOYEE_MONTHLY_SUBMISSION",
   actorRole = "EMPLOYEE",
@@ -316,11 +353,18 @@ function buildMonthlySubmissionPayload({
   const stableRatings = Object.fromEntries(ratingEntries);
 
   const valueRatings = normalizeWebknotValueRatingsForState(selectedValues);
+  const normalizedValueComments = normalizeValueCommentsForState(valueComments);
   const valueRatingEntries = Object.entries(valueRatings).sort(([a], [b]) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
   );
   const stableValueRatings = Object.fromEntries(valueRatingEntries);
   const values = valueRatingEntries.map(([id]) => String(id));
+  const webknotValueResponses = valueRatingEntries.map(([valueId, rating]) => ({
+    valueId: String(valueId || "").trim(),
+    webknotValueId: String(valueId || "").trim(),
+    rating,
+    comment: String(normalizedValueComments?.[valueId] || "").trim() || undefined,
+  }));
 
   const next = {
     month: normalizeYearMonth(month) || String(month || "").trim() || null,
@@ -339,6 +383,8 @@ function buildMonthlySubmissionPayload({
     kpiRatings: stableRatings,
     webknotValues: values,
     webknotValueRatings: stableValueRatings,
+    webknotValueResponses,
+    webknotValueComments: normalizedValueComments,
     recognitionsCount:
       typeof recognitionsCount === "number" && Number.isFinite(recognitionsCount)
         ? recognitionsCount
@@ -398,9 +444,8 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
   return (
     <aside
       className={[
-        "rt-sidebar fixed left-0 top-0 h-full transition-all duration-300 z-50",
-        "flex flex-col",
-        "md:translate-x-0",
+        "rt-sidebar fixed left-0 top-0 h-full z-50 flex flex-col",
+        "md:translate-x-0 will-change-transform transition-[transform,width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
         isOpen ? "translate-x-0 w-64" : "-translate-x-full md:translate-x-0 md:w-[72px]",
       ].join(" ")}
     >
@@ -630,6 +675,11 @@ function ProfileTab({ employee, authEmail }) {
   }, [selectedProjectIds, originalProjectIds]);
 
   async function saveProjects() {
+    if (selectedProjectIds.size === 0) {
+      setProjectsError("Select at least one project before saving.");
+      setProjectsSuccess("");
+      return;
+    }
     setProjectsSaving(true);
     setProjectsError("");
     setProjectsSuccess("");
@@ -756,7 +806,7 @@ function ProfileTab({ employee, authEmail }) {
               No projects available yet. Projects will appear here once created by an admin.
             </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
               {filteredAllProjects.map((project) => {
                 const isSelected = selectedProjectIds.has(project.id);
                 const rating = ratingsMap.get(project.id);
@@ -916,7 +966,9 @@ function SelfReviewEditor({
                 setText(enhanced);
                 showToast({ title: "Enhanced", message: "Updated your self review text." });
               } catch (err) {
-                showToast({ title: "AI failed", message: err?.message || "Please try again." });
+                const statusText = err?.status ? ` (status ${err.status})` : "";
+                const msg = [err?.message || "Please try again.", statusText].join("").trim();
+                showToast({ title: "AI failed", message: msg });
               } finally {
                 setEnhancing(false);
               }
@@ -1189,6 +1241,33 @@ function ValuesTab({
   locked,
   canProceed,
 }) {
+  const pillarPalette = useMemo(
+    () => [
+      { bg: "bg-blue-500/10", text: "text-blue-500", border: "border-blue-500/20" },
+      { bg: "bg-emerald-500/10", text: "text-emerald-500", border: "border-emerald-500/20" },
+      { bg: "bg-amber-500/10", text: "text-amber-600", border: "border-amber-500/30" },
+      { bg: "bg-purple-500/10", text: "text-purple-500", border: "border-purple-500/20" },
+      { bg: "bg-rose-500/10", text: "text-rose-500", border: "border-rose-500/20" },
+      { bg: "bg-cyan-500/10", text: "text-cyan-500", border: "border-cyan-500/20" },
+      { bg: "bg-indigo-500/10", text: "text-indigo-500", border: "border-indigo-500/20" },
+      { bg: "bg-teal-500/10", text: "text-teal-500", border: "border-teal-500/20" },
+    ],
+    []
+  );
+
+  const colorForPillar = useCallback(
+    (pillar) => {
+      const key = String(pillar || "").toLowerCase().trim();
+      if (!key) return { bg: "bg-[rgb(var(--surface-2))]", text: "text-[rgb(var(--muted))]", border: "border-[rgb(var(--border))]" };
+      let hash = 0;
+      for (let i = 0; i < key.length; i++) {
+        hash = (hash * 31 + key.charCodeAt(i)) | 0;
+      }
+      const idx = Math.abs(hash) % pillarPalette.length;
+      return pillarPalette[idx];
+    },
+    [pillarPalette]
+  );
   const valueRatings = useMemo(
     () => normalizeWebknotValueRatingsForState(selectedValues),
     [selectedValues]
@@ -1247,6 +1326,7 @@ function ValuesTab({
                 const display = typeof value === "number" && Number.isFinite(value) ? value : "";
                 const pillar = String(v?.pillar || "—");
                 const isPillarMissing = !pillar || pillar === "—";
+                const colors = colorForPillar(isPillarMissing ? "" : pillar);
                 return (
                   <tr key={id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                     <td className="p-6">
@@ -1258,7 +1338,7 @@ function ValuesTab({
                           "inline-flex text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border",
                           isPillarMissing
                             ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
-                            : "bg-blue-500/10 text-blue-400 border-blue-500/20",
+                            : `${colors.bg} ${colors.text} ${colors.border}`,
                         ].join(" ")}
                       >
                         {pillar || "—"}
@@ -2303,6 +2383,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [valuesLoading, setValuesLoading] = useState(false);
   const [valuesError, setValuesError] = useState("");
   const [selectedValues, setSelectedValues] = useState({}); // { [valueId]: rating }
+  const [valueComments, setValueComments] = useState({}); // { [valueId]: comment }
   const [recognitionsCount, setRecognitionsCount] = useState(0);
 
   // Route all error states through toast
@@ -2464,6 +2545,11 @@ export default function EmployeePortal({ onLogout, auth }) {
         if (!mounted) return;
         if (err?.status === 401) {
           onLogout?.();
+          return;
+        }
+        if (err?.status === 403) {
+          // Some tenants block this alias for employees; continue with basic profile data instead of showing an error toast.
+          setPortalBootstrapError("");
           return;
         }
         setPortalBootstrapError(err?.message || "Failed to load portal data.");
@@ -3128,11 +3214,23 @@ export default function EmployeePortal({ onLogout, auth }) {
     [submissionMeta]
   );
 
+  const resubmissionActor = useMemo(() => {
+    if (!needsResubmission) return null;
+    const reviewStatusUpper = String(submissionMeta?.reviewStatus || "").toUpperCase();
+    const adminAction = String(submissionMeta?.adminReview?.action || "").toUpperCase();
+    const managerAction = String(submissionMeta?.managerReview?.action || "").toUpperCase();
+    if (adminAction.includes("REJECT") || reviewStatusUpper.includes("ADMIN")) return "ADMIN";
+    if (managerAction.includes("REJECT") || reviewStatusUpper.includes("MANAGER")) return "MANAGER";
+    return null;
+  }, [needsResubmission, submissionMeta?.adminReview?.action, submissionMeta?.managerReview?.action, submissionMeta?.reviewStatus]);
+
   const latestReviewComment = useMemo(() => {
     const manager = String(submissionMeta?.managerReview?.comments || "").trim();
     const admin = String(submissionMeta?.adminReview?.comments || "").trim();
+    if (resubmissionActor === "ADMIN") return admin || manager || "";
+    if (resubmissionActor === "MANAGER") return manager || admin || "";
     return admin || manager || "";
-  }, [submissionMeta?.adminReview?.comments, submissionMeta?.managerReview?.comments]);
+  }, [resubmissionActor, submissionMeta?.adminReview?.comments, submissionMeta?.managerReview?.comments]);
 
   const stepItems = useMemo(() => ([
     { id: "profile", label: "Profile", status: "done" },
@@ -3314,22 +3412,44 @@ export default function EmployeePortal({ onLogout, auth }) {
         </div>
 
         {!locked && needsResubmission ? (
-          <div className="max-w-4xl mx-auto mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5 space-y-3">
-            <div className="flex items-start gap-3">
-              <ShieldAlert size={18} className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-              <div>
-                <div className="text-sm font-semibold text-amber-800 dark:text-amber-200">Changes Requested by Manager</div>
-                <div className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">Your manager has reviewed your submission and returned it with feedback. Please address the comments below and resubmit.</div>
-              </div>
-            </div>
-            {latestReviewComment ? (
-              <div className="rounded-lg border border-amber-400/30 bg-white/40 dark:bg-black/20 p-3 sm:p-4 space-y-1.5">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-200">Manager Comments</div>
-                <div className="text-sm text-amber-950 dark:text-amber-50 whitespace-pre-wrap break-words">
-                  {latestReviewComment}
+          <div className="max-w-4xl mx-auto mb-6">
+            <div className="relative overflow-hidden rounded-2xl border border-amber-500/45 bg-gradient-to-r from-amber-50 via-amber-50 to-white shadow-sm dark:from-amber-950/40 dark:via-amber-900/40 dark:to-transparent">
+              <div className="absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-amber-500 to-orange-500" aria-hidden="true" />
+              <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_10%_20%,rgba(251,191,36,0.12),transparent_35%),radial-gradient(circle_at_80%_0%,rgba(253,186,116,0.15),transparent_30%)]" aria-hidden="true" />
+              <div className="relative p-5 sm:p-6 flex items-start gap-4">
+                <div className="h-11 w-11 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-200 flex items-center justify-center shadow-inner shadow-amber-500/20">
+                  <ShieldAlert size={18} />
+                </div>
+                <div className="flex-1 space-y-2">
+                  <div className="flex items-center gap-3 flex-wrap justify-between">
+                    <div className="space-y-0.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-200">Changes Requested</div>
+                      <div className="text-sm font-semibold text-amber-900 dark:text-amber-100">
+                        Returned by {resubmissionActor === "ADMIN" ? "Admin" : "Manager"}
+                      </div>
+                    </div>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-200">
+                      {resubmissionActor === "ADMIN" ? "Admin review" : "Manager review"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+                    {resubmissionActor === "ADMIN"
+                      ? "An admin reviewed this cycle and returned it for changes. Please address the notes below and resubmit."
+                      : "Your manager reviewed your submission and returned it with feedback. Please address the comments below and resubmit."}
+                  </p>
+                  {latestReviewComment ? (
+                    <div className="rounded-xl border border-amber-500/25 bg-white/80 p-3 sm:p-4 shadow-inner shadow-amber-500/10 backdrop-blur-sm dark:border-amber-500/30 dark:bg-black/25">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-200">
+                        {resubmissionActor === "ADMIN" ? "Admin comments" : "Manager comments"}
+                      </div>
+                      <div className="mt-1 text-sm text-amber-950 dark:text-amber-50 whitespace-pre-wrap leading-relaxed break-words">
+                        {latestReviewComment}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
-            ) : null}
+            </div>
           </div>
         ) : null}
         <div className="max-w-4xl mx-auto mb-6 flex items-end justify-between gap-4 flex-wrap">

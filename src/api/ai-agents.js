@@ -176,7 +176,17 @@ export async function enhanceReviewText({ text, mode = "self_review", signal } =
     body: JSON.stringify({ text: content, mode }),
   });
 
-  if (!res.ok) throw await toHttpError(res);
+  if (!res.ok) {
+    // Provide clearer status-specific errors so UI toasts match backend responses
+    if (res.status === 429) {
+      const limitErr = new Error("AI provider rate limit hit (429). Please wait and try again, or check your API quota/billing settings.");
+      limitErr.status = 429;
+      throw limitErr;
+    }
+    const upstream = await toHttpError(res);
+    upstream.message = `AI enhance failed (${res.status} ${res.statusText || ""}). ${upstream.message}`.trim();
+    throw upstream;
+  }
   const data = await res.json().catch(() => ({}));
   const enhanced = toCleanString(data?.text ?? data?.content ?? "");
   if (!enhanced) throw new Error("AI returned an empty response.");

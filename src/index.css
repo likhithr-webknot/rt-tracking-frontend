@@ -770,6 +770,8 @@
     background: rgb(var(--sidebar-bg));
     color: rgb(var(--sidebar-text));
     border-right: 1px solid rgb(var(--sidebar-border));
+    transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1), width 520ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 260ms ease;
+    will-change: transform, width;
   }
 
   .rt-sidebar-nav-item {
@@ -781,7 +783,7 @@
     font-size: 0.875rem;
     font-weight: 500;
     color: rgb(var(--sidebar-muted));
-    transition: all 150ms ease;
+    transition: color 180ms ease, background-color 180ms ease, padding 220ms ease, gap 220ms ease;
     cursor: pointer;
     border: none;
     width: 100%;

@@ -226,7 +226,7 @@ export default function Certifications({
                       <button
                         onClick={() => { if (!busy) setPendingDeleteItem(item); }}
                         disabled={busy}
-                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-red-500 hover:bg-red-500/10 transition-all"
+                        className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Delete"
                         aria-label={`Delete ${item.name}`}
                       >
@@ -297,7 +297,7 @@ export default function Certifications({
                 <button
                   onClick={() => { if (!busy) setPendingDeleteItem(item); }}
                   disabled={busy}
-                  className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-red-500 hover:bg-red-500/10 transition-all"
+                  className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   title="Delete"
                 >
                   <Trash2 size={16} />

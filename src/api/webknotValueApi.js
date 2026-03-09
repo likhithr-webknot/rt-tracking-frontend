@@ -78,6 +78,8 @@ export function normalizeWebknotValue(raw, index = 0) {
     const pillar =
         pickDeep(obj, [
             "evaluationCriteria",
+            "evaluation_criteria",
+            "evaluationcriteria",
             "criteria",
             "pillar",
             "valuePillar",
@@ -118,7 +120,10 @@ export function normalizeWebknotValuesList(data) {
     const out = [];
     const seen = new Set();
     for (let i = 0; i < arr.length; i++) {
-        const v = normalizeWebknotValue(arr[i], i);
+        const raw = arr[i] && typeof arr[i] === "object" ? arr[i] : {};
+        const active = !(raw.active === false || raw.isActive === false || raw.deleted === true || raw.isDeleted === true || String(raw.status || "").toLowerCase() === "inactive");
+        if (!active) continue;
+        const v = normalizeWebknotValue(raw, i);
         const key = String(v.id);
         if (!key) continue;
         if (seen.has(key)) continue;
@@ -151,10 +156,16 @@ export async function fetchValues(activeOnly = true, { limit = null, cursor = nu
     qs.set("activeOnly", String(activeOnly));
     if (limit != null) qs.set("limit", String(limit));
     if (cursor) qs.set("cursor", String(cursor));
+    qs.set("_ts", Date.now().toString()); // cache-buster
     const res = await fetch(buildApiUrl(`/webknot-values/list?${qs.toString()}`), {
         signal,
         credentials: "include",
-        headers: auth ? { Authorization: auth } : undefined,
+        cache: "no-store",
+        headers: {
+            ...(auth ? { Authorization: auth } : {}),
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            Pragma: "no-cache",
+        },
     });
     if (!res.ok) throw await toHttpError(res);
     return res.json().catch(() => ([]));

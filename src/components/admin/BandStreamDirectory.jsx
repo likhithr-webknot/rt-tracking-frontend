@@ -132,7 +132,7 @@ export default function BandStreamDirectory() {
 
   function openAdd(type) {
     const options = type === "band" ? missingBandCodes : missingStreamCodes;
-    const code = options[0] || (type === "band" ? BAND_CODES[0] : STREAM_CODES[0]);
+    const code = options[0] || "";
     setEditor({
       open: true,
       mode: "add",
@@ -345,13 +345,13 @@ export default function BandStreamDirectory() {
                   </td>
                   <td className="p-5">
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => openEdit("band", row)} className="p-2.5 rounded-md bg-blue-500/10 text-blue-300 hover:bg-blue-500 hover:text-white transition-all" title="Edit">
+                      <button onClick={() => openEdit("band", row)} className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all" title="Edit">
                         <Edit3 size={16} />
                       </button>
-                      <button onClick={() => toggleActive("band", row)} className="p-2.5 rounded-md bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white transition-all" title={row.active ? "Deactivate" : "Activate"}>
+                      <button onClick={() => toggleActive("band", row)} className="p-2 rounded-md text-amber-500 hover:bg-amber-500/10 transition-all" title={row.active ? "Deactivate" : "Activate"}>
                         {row.active ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
-                      <button onClick={() => setPendingDelete({ type: "band", row })} className="p-2.5 rounded-md bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white transition-all" title="Delete">
+                      <button onClick={() => setPendingDelete({ type: "band", row })} className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all" title="Delete">
                         <Trash2 size={16} />
                       </button>
                     </div>
@@ -397,13 +397,13 @@ export default function BandStreamDirectory() {
                   </td>
                   <td className="p-5">
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => openEdit("stream", row)} className="p-2.5 rounded-md bg-blue-500/10 text-blue-300 hover:bg-blue-500 hover:text-white transition-all" title="Edit">
+                      <button onClick={() => openEdit("stream", row)} className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all" title="Edit">
                         <Edit3 size={16} />
                       </button>
-                      <button onClick={() => toggleActive("stream", row)} className="p-2.5 rounded-md bg-amber-500/10 text-amber-300 hover:bg-amber-500 hover:text-white transition-all" title={row.active ? "Deactivate" : "Activate"}>
+                      <button onClick={() => toggleActive("stream", row)} className="p-2 rounded-md text-amber-500 hover:bg-amber-500/10 transition-all" title={row.active ? "Deactivate" : "Activate"}>
                         {row.active ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
-                      <button onClick={() => setPendingDelete({ type: "stream", row })} className="p-2.5 rounded-md bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white transition-all" title="Delete">
+                      <button onClick={() => setPendingDelete({ type: "stream", row })} className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all" title="Delete">
                         <Trash2 size={16} />
                       </button>
                     </div>

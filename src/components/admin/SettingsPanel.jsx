@@ -97,14 +97,39 @@ function parseInputDate(value) {
 }
 
 function parseServerWindow(data) {
-  const obj = data && typeof data === "object" ? data : {};
-  const startAt = obj.startAt ? new Date(obj.startAt) : null;
-  const endAt = obj.endAt ? new Date(obj.endAt) : null;
+  /* Be defensive: APIs sometimes return different keys */
+  const root = data && typeof data === "object" ? data : {};
+  const obj = root?.data && typeof root.data === "object" ? root.data : root;
+
+  const startRaw = obj.startAt ?? obj.start ?? obj.openAt ?? obj.openFrom ?? obj.opensAt ?? null;
+  const endRaw = obj.endAt ?? obj.end ?? obj.closeAt ?? obj.closesAt ?? obj.closeFrom ?? null;
+
+  const startAt = startRaw ? new Date(startRaw) : null;
+  const endAt = endRaw ? new Date(endRaw) : null;
+
+  const isOpen =
+    typeof obj.isOpen === "boolean"
+      ? obj.isOpen
+      : typeof obj.open === "boolean"
+        ? obj.open
+        : typeof obj.active === "boolean"
+          ? obj.active
+          : null;
+
+  const manualClosed = Boolean(obj.manualClosed ?? obj.manuallyClosed ?? obj.closedManually);
+
+  const normalizedStart = startAt && !Number.isNaN(startAt.getTime())
+    ? toLocalInputValue(startAt)
+    : isOpen
+      ? toLocalInputValue(new Date())
+      : "";
+  const normalizedEnd = endAt && !Number.isNaN(endAt.getTime()) ? toLocalInputValue(endAt) : "";
+
   return {
-    start: startAt && !Number.isNaN(startAt.getTime()) ? toLocalInputValue(startAt) : "",
-    end: endAt && !Number.isNaN(endAt.getTime()) ? toLocalInputValue(endAt) : "",
-    isOpen: Boolean(obj.isOpen),
-    manualClosed: Boolean(obj.manualClosed),
+    start: normalizedStart,
+    end: normalizedEnd,
+    isOpen,
+    manualClosed,
     cycleKey: typeof obj.cycleKey === "string" ? obj.cycleKey : null,
   };
 }

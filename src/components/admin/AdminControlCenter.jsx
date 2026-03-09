@@ -92,7 +92,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
   ];
 
   return (
-    <aside className={`rt-sidebar fixed left-0 top-0 h-full transition-all duration-300 z-50 md:translate-x-0 flex flex-col ${isOpen ? 'translate-x-0 w-64' : '-translate-x-full md:translate-x-0 md:w-[72px]'}`}>
+    <aside className={`rt-sidebar fixed left-0 top-0 h-full z-50 md:translate-x-0 flex flex-col will-change-transform transition-[transform,width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${isOpen ? 'translate-x-0 w-64' : '-translate-x-full md:translate-x-0 md:w-[72px]'}`}>
       <div className="px-5 py-5 flex items-center justify-between">
         {isOpen && (
           <div className="flex items-center gap-2.5">
@@ -580,6 +580,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [kpis, setKpis] = useState([]);
   const [allKpis, setAllKpis] = useState([]);
+  const [allKpisLoaded, setAllKpisLoaded] = useState(false);
   const [allKpisLoading, setAllKpisLoading] = useState(false);
   const [allKpisError, setAllKpisError] = useState("");
   const [kpisLoading, setKpisLoading] = useState(false);
@@ -1073,13 +1074,19 @@ export default function AdminControlCenter({ onLogout, auth }) {
       const parsed = Number.parseFloat(numericText);
       return Number.isFinite(parsed) ? parsed : 0;
     };
+    const normalizeKey = (value) => {
+      const text = String(value ?? "").trim();
+      return text.toLowerCase();
+    };
     const nextBand = payload.band;
     const nextStream = payload.stream;
+    const nextBandKey = normalizeKey(nextBand);
+    const nextStreamKey = normalizeKey(nextStream);
     const nextWeight = toPercent(payload.weight);
     const kpiUniverse = allKpis.length ? allKpis : kpis;
     const existingSum = kpiUniverse
-      .filter((k) => String(k?.band ?? "").trim() === nextBand)
-      .filter((k) => String(k?.stream ?? "").trim() === nextStream)
+      .filter((k) => normalizeKey(k?.band) === nextBandKey)
+      .filter((k) => normalizeKey(k?.stream) === nextStreamKey)
       .filter((k) => String(k?.id) !== String(payload.id))
       .reduce((sum, k) => sum + toPercent(k?.weight), 0);
     const nextTotal = Math.round((existingSum + nextWeight) * 10) / 10;
@@ -1156,6 +1163,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
       }
 
       setAllKpis(collected);
+      setAllKpisLoaded(true);
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err?.status === 401) {
@@ -1209,37 +1217,36 @@ export default function AdminControlCenter({ onLogout, auth }) {
     const previousCursor = valuesCursorRef.current ?? null;
     setValuesError("");
     setValuesLoading(true);
+    // Reset state up front so stale values are not displayed if the fetch fails
+    setValues([]);
+    setValuesNextCursor(null);
+    setValuesCursor(null);
+    valuesCursorRef.current = null;
+    setValuesCursorStack([]);
     try {
-      const primary = await fetchValues(false, { limit: DIRECTORY_PAGE_SIZE, cursor: resolvedCursor, signal });
-      const primaryPage = normalizeCursorPage(primary);
-      let normalized = normalizeWebknotValuesList(primaryPage.items);
-      let nextCursor = primaryPage.nextCursor;
-
-      if (!normalized.length) {
-        const fallback = [];
-        let portalCursor = null;
-        for (let i = 0; i < 50; i += 1) {
-          const portalRaw = await fetchEmployeePortalWebknotValues({ limit: DIRECTORY_PAGE_SIZE, cursor: portalCursor, signal });
-          const portalPage = normalizeCursorPage(portalRaw);
-          fallback.push(...normalizeWebknotValues(portalPage.items));
-          if (!portalPage.nextCursor) break;
-          portalCursor = portalPage.nextCursor;
-        }
-        normalized = fallback;
-        nextCursor = null;
+      // Fetch all pages so grouped criteria stay together
+      const collected = [];
+      let next = resolvedCursor;
+      for (let i = 0; i < 100; i += 1) {
+        const pageRaw = await fetchValues(true, { limit: DIRECTORY_PAGE_SIZE, cursor: next, signal });
+        const page = normalizeCursorPage(pageRaw);
+        collected.push(...normalizeWebknotValuesList(page.items));
+        if (!page.nextCursor) break;
+        next = page.nextCursor;
       }
 
-      const sorted = normalized.sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true }));
-      setValues(sorted);
-      setValuesNextCursor(nextCursor);
-      setValuesCursor(resolvedCursor);
-      valuesCursorRef.current = resolvedCursor;
-      setValuesCursorStack((prev) => {
-        if (pageAction === "next") return [...prev, previousCursor];
-        if (pageAction === "prev") return prev.slice(0, -1);
-        if (pageAction === "reset") return [];
-        return prev;
+      const sorted = collected.sort((a, b) => {
+        const ka = String(a?.pillar || "").toLowerCase();
+        const kb = String(b?.pillar || "").toLowerCase();
+        if (ka !== kb) return ka.localeCompare(kb, undefined, { sensitivity: "base" });
+        return String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true });
       });
+
+      setValues(sorted);
+      setValuesNextCursor(null);
+      setValuesCursor(null);
+      valuesCursorRef.current = null;
+      setValuesCursorStack([]);
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err?.status === 401) {
@@ -1249,6 +1256,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
       }
       const message = err?.message || "Failed to load values.";
       setValuesError(message);
+      setValues([]);
+      setValuesNextCursor(null);
+      setValuesCursor(null);
+      valuesCursorRef.current = null;
+      setValuesCursorStack([]);
       throw err;
     } finally {
       setValuesLoading(false);
@@ -1313,9 +1325,13 @@ export default function AdminControlCenter({ onLogout, auth }) {
   const [employees, setEmployees] = useState([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [employeesError, setEmployeesError] = useState("");
+  const [allEmployees, setAllEmployees] = useState(null);
+  const [allEmployeesLoading, setAllEmployeesLoading] = useState(false);
+  const [allEmployeesError, setAllEmployeesError] = useState("");
 
   useEffect(() => { if (portalWindowError) showToast({ title: "Portal Window Error", message: portalWindowError, tone: "error" }); }, [portalWindowError, showToast]);
   useEffect(() => { if (employeesError) showToast({ title: "Employees Error", message: employeesError, tone: "error" }); }, [employeesError, showToast]);
+  useEffect(() => { if (allEmployeesError) showToast({ title: "Employees Error", message: allEmployeesError, tone: "error" }); }, [allEmployeesError, showToast]);
 
   const [, setEmployeesCursor] = useState(null);
   const [employeesNextCursor, setEmployeesNextCursor] = useState(null);
@@ -1360,8 +1376,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
     });
   }, [submissionSummary]);
 
-  const commitEmployeesPage = useCallback((page, { cursor, cursorStack }) => {
-    const base = normalizeEmployees(page.items);
+  const applyEmployeeMetadata = useCallback((items) => {
+    const base = normalizeEmployees(items);
     const extras = loadEmployeeExtras();
 
     const currentMonthKey = formatYearMonth(new Date());
@@ -1370,10 +1386,14 @@ export default function AdminControlCenter({ onLogout, auth }) {
       ? new Set(submissionSummary.submittedIds.map(String))
       : null;
 
-    const applied = applyEmployeeExtras(base, extras).map((emp) => {
+    return applyEmployeeExtras(base, extras).map((emp) => {
       if (!submittedIds) return emp;
       return submittedIds.has(String(emp.id)) ? { ...emp, submitted: true } : emp;
     });
+  }, [submissionSummary]);
+
+  const commitEmployeesPage = useCallback((page, { cursor, cursorStack }) => {
+    const applied = applyEmployeeMetadata(page.items);
 
     setEmployees(applied);
     setEmployeesNextCursor(page.nextCursor);
@@ -1424,7 +1444,38 @@ export default function AdminControlCenter({ onLogout, auth }) {
     setEmployeesCursor(cursor ?? null);
     employeesCursorRef.current = cursor ?? null;
     if (Array.isArray(cursorStack)) setEmployeesCursorStack(cursorStack);
-  }, [submissionSummary]);
+  }, [applyEmployeeMetadata]);
+
+  const reloadAllEmployees = useCallback(async ({ signal, silent = false } = {}) => {
+    setAllEmployeesError("");
+    if (!silent) setAllEmployeesLoading(true);
+    try {
+      const collected = [];
+      let cursor = null;
+      for (let i = 0; i < 200; i += 1) {
+        const data = await fetchEmployees({ limit: DIRECTORY_PAGE_SIZE * 5, cursor, signal });
+        const page = normalizeCursorPage(data);
+        collected.push(...applyEmployeeMetadata(page.items));
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+      setAllEmployees(collected);
+      return collected;
+    } catch (err) {
+      if (err?.name === "AbortError") return null;
+      if (err?.status === 401) {
+        showToast({ title: "Session expired", message: "Please login again." });
+        onLogout?.();
+        return null;
+      }
+      const message = err?.message || "Failed to load all employees.";
+      setAllEmployeesError(message);
+      showToast({ title: "Employees Error", message });
+      return null;
+    } finally {
+      if (!silent) setAllEmployeesLoading(false);
+    }
+  }, [applyEmployeeMetadata, onLogout, showToast]);
 
   const reloadEmployees = useCallback(async ({ signal, cursor, pageAction = "stay", cursorStackOverride = null } = {}) => {
     const resolvedCursor = cursor === undefined ? (employeesCursorRef.current ?? null) : (cursor ?? null);
@@ -1445,6 +1496,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 ? []
                 : employeesCursorStack;
       commitEmployeesPage(page, { cursor: resolvedCursor, cursorStack });
+      if (allEmployees == null && reloadAllEmployees) {
+        reloadAllEmployees({ silent: true }).catch(() => {});
+      }
     } catch (err) {
       if (err?.name === "AbortError") return;
       if (err?.status === 401) {
@@ -1466,7 +1520,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setEmployeesLoading(false);
     }
-  }, [commitEmployeesPage, employeesCursorStack, onLogout, showToast]);
+  }, [allEmployees, commitEmployeesPage, employeesCursorStack, onLogout, reloadAllEmployees, showToast]);
 
   const jumpEmployeesToPage = useCallback(async (rawPage) => {
     const parsed = Number.parseInt(String(rawPage ?? "").trim(), 10);
@@ -2386,8 +2440,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
         {activeTab === "directory" && (
           <EmployeeDirectory
             employees={employees}
+            allEmployees={allEmployees}
+            allEmployeesLoading={allEmployeesLoading}
             setEmployees={setEmployees}
             reloadEmployees={reloadEmployees}
+            reloadAllEmployees={reloadAllEmployees}
             employeesLoading={employeesLoading}
             employeesError={employeesError}
             totalEmployeesCount={employeesTotalCount}
@@ -2403,6 +2460,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
           <KPIRegistry
             kpis={kpis}
             allKpis={allKpis}
+            allKpisLoaded={allKpisLoaded}
             allKpisLoading={allKpisLoading}
             allKpisError={allKpisError}
             searchQuery={searchQuery}
@@ -2413,6 +2471,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
             loading={kpisLoading}
             error={kpisError}
             onReload={handleReloadKpis}
+            onReloadAll={reloadAllKpis}
             pager={kpiPager}
             pageSize={kpiPageSize}
             pageSizeOptions={KPI_PAGE_SIZE_OPTIONS}

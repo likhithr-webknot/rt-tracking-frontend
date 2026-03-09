@@ -211,8 +211,10 @@ export function normalizeManagers(data) {
     const rawMgrName = String(
       m.employeeName ?? m.employee_name ?? m.name ?? m.fullName ?? m.full_name ?? m.displayName ?? m.display_name ?? ""
     ).trim();
+    const employeeId = String(m.employeeId ?? m.id ?? m.empId ?? `MGR_${i}`);
     return {
-      id: String(m.employeeId ?? m.id ?? m.empId ?? `MGR_${i}`),
+      id: employeeId,
+      employeeId,
       name: rawMgrName || "Unknown",
       email: String(m.email ?? m.employeeEmail ?? m.mail ?? ""),
       role: String(m.empRole ?? m.role ?? "Manager"),

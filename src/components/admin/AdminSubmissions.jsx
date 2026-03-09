@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, RefreshCw, User, X, XCircle } from "lucide-react";
 import {
   fetchAdminAllSubmissions,
@@ -148,6 +148,7 @@ function normalizeAdminSubmissions(data, employeeLookup) {
         raw: obj,
       };
     })
+    // Only show submitted entries (hide drafts or other states)
     .filter((x) => x && x.id && x.status === "SUBMITTED");
 }
 
@@ -159,6 +160,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const inflightKeyRef = useRef(null);
   const [reviewModal, setReviewModal] = useState({ open: false, item: null });
   const [rejectModal, setRejectModal] = useState({ open: false, item: null, comment: "", target: "employee" });
   const [rejectBusy, setRejectBusy] = useState(false);
@@ -226,16 +228,34 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
     [items, onlyManagerSubmitted]
   );
 
+  const reviewModalIsManagerSelf = useMemo(() => {
+    const entry = reviewModal?.item;
+    const type = String(entry?.submissionType || entry?.entryType || "").toUpperCase();
+    return type.includes("MANAGER_SELF");
+  }, [reviewModal?.item?.entryType, reviewModal?.item?.submissionType]);
+
+  const rejectModalIsManagerSelf = useMemo(() => {
+    const entry = rejectModal?.item;
+    const type = String(entry?.submissionType || entry?.entryType || "").toUpperCase();
+    return type.includes("MANAGER_SELF");
+  }, [rejectModal?.item?.entryType, rejectModal?.item?.submissionType]);
+
   const reload = useCallback(async () => {
     setError("");
+    const key = `${query.month || "all"}|${query.status || "all"}`;
+    if (inflightKeyRef.current === key) return; // avoid duplicate fetches (StrictMode / rapid rerenders)
+    inflightKeyRef.current = key;
     setLoading(true);
+    const controller = new AbortController();
     try {
       const data = await fetchAdminAllSubmissions({
         month: query.month || undefined,
         status: query.status || undefined,
+        signal: controller.signal,
       });
       setItems(normalizeAdminSubmissions(data, employeeLookup));
     } catch (err) {
+      if (err?.name === "AbortError") return;
       if (err?.status === 401) {
         onLogout?.();
         return;
@@ -243,6 +263,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
       setError(err?.message || "Failed to load submissions.");
       setItems([]);
     } finally {
+      inflightKeyRef.current = null;
       setLoading(false);
     }
   }, [employeeLookup, onLogout, query.month, query.status]);
@@ -422,6 +443,11 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                     <span className="text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] text-[rgb(var(--text))]">
                       {it.entryType}
                     </span>
+                    {String(it.submissionType || it.entryType || "").toUpperCase().includes("MANAGER_SELF") ? (
+                      <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
+                        Admin-only
+                      </div>
+                    ) : null}
                   </td>
                   <td className="p-6 whitespace-nowrap">
                     <span
@@ -458,21 +484,22 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                           e.stopPropagation();
                           openReview(it);
                         }}
-                        className="p-2.5 bg-blue-500/10 text-blue-700 dark:text-blue-300 hover:bg-blue-500 hover:text-white rounded-md transition-all border border-blue-500/20"
+                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
                         title="Review"
                       >
-                        <CheckCircle2 size={18} />
+                        <CheckCircle2 size={16} />
                       </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          setRejectModal({ open: true, item: it, comment: "", target: "employee" });
+                          const isManagerSelf = String(it?.submissionType || it?.entryType || "").toUpperCase().includes("MANAGER_SELF");
+                          setRejectModal({ open: true, item: it, comment: "", target: isManagerSelf ? "manager" : "employee" });
                           setRejectError("");
                         }}
-                        className="p-2.5 bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500 hover:text-white rounded-md transition-all border border-amber-500/20"
+                        className="p-2 rounded-md text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 transition-all"
                         title="Reject with comments"
                       >
-                        <XCircle size={18} />
+                        <XCircle size={16} />
                       </button>
                     </div>
                   </td>
@@ -508,6 +535,11 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
               </div>
               {/* Reviewer identity badges */}
               <div className="mt-3 flex flex-wrap gap-2">
+                {reviewModalIsManagerSelf ? (
+                  <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/20">
+                    Admin-only path
+                  </span>
+                ) : null}
                 {reviewModal.item.submission?.managerReview?.reviewedBy ? (
                   <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20">
                     <User size={11} /> Manager: {reviewModal.item.submission.managerReview.reviewedBy}
@@ -620,169 +652,188 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
 
               <div className="rt-panel-subtle rounded-lg p-6">
                 <div className="space-y-5">
-                  <div className="rt-panel-subtle rounded-lg p-4">
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Ratings & Comments</div>
-                    <div className="mt-3 space-y-3 text-sm text-[rgb(var(--text))]">
-                      <div>
-                        <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Ratings</div>
-                        <div className="mt-2 space-y-1">
-                          {Object.entries(reviewModal.item.submission?.managerEvaluation?.kpiRatings || {}).length ? (
-                            Object.entries(reviewModal.item.submission.managerEvaluation.kpiRatings).map(([kpiId, rating]) => (
-                              <div key={kpiId} className="flex items-center justify-between gap-2">
-                                <div className="flex-1 min-w-0">
-                                  <div className="truncate">{kpiLabel(kpiId)}</div>
-                                </div>
-                                <span className="font-mono">{Number(rating).toFixed(1)}</span>
-                              </div>
-                            ))
-                          ) : (
-                            <div className="text-xs text-[rgb(var(--muted))]">No manager KPI ratings.</div>
-                          )}
-                        </div>
+                  {reviewModalIsManagerSelf ? (
+                    <div className="rt-panel-subtle rounded-lg p-4 space-y-2">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Self Review</div>
+                      <p className="text-sm text-[rgb(var(--muted))]">
+                        This entry is the manager&apos;s own self review. Admins review and approve directly; there is no separate manager evaluation layer.
+                      </p>
+                      <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
+                        Admin-only path
                       </div>
-                      <div>
-                        <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Value Ratings</div>
-                        <div className="mt-2 space-y-1">
-                          {Object.entries(reviewModal.item.submission?.managerEvaluation?.webknotValueRatings || {}).length ? (
-                            Object.entries(reviewModal.item.submission.managerEvaluation.webknotValueRatings).map(([valueId, rating]) => (
-                              <div key={valueId} className="flex items-center justify-between gap-2">
-                                <div className="flex-1 min-w-0">
-                                  <div className="truncate">{valueLabel(valueId)}</div>
-                                </div>
-                                <span className="font-mono">{Number(rating).toFixed(1)}</span>
-                              </div>
-                            ))
-                          ) : (
-                            <div className="text-xs text-[rgb(var(--muted))]">No manager value ratings.</div>
-                          )}
-                        </div>
-                      </div>
-                      {String(reviewModal.item.submission?.managerReview?.comments || "").trim() ? (
+                    </div>
+                  ) : (
+                    <div className="rt-panel-subtle rounded-lg p-4">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Ratings & Comments</div>
+                      <div className="mt-3 space-y-3 text-sm text-[rgb(var(--text))]">
                         <div>
-                          <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Comments</div>
-                          <div className="mt-2 whitespace-pre-wrap">{String(reviewModal.item.submission?.managerReview?.comments || "")}</div>
+                          <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Ratings</div>
+                          <div className="mt-2 space-y-1">
+                            {Object.entries(reviewModal.item.submission?.managerEvaluation?.kpiRatings || {}).length ? (
+                              Object.entries(reviewModal.item.submission.managerEvaluation.kpiRatings).map(([kpiId, rating]) => (
+                                <div key={kpiId} className="flex items-center justify-between gap-2">
+                                  <div className="flex-1 min-w-0">
+                                    <div className="truncate">{kpiLabel(kpiId)}</div>
+                                  </div>
+                                  <span className="font-mono">{Number(rating).toFixed(1)}</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="text-xs text-[rgb(var(--muted))]">No manager KPI ratings.</div>
+                            )}
+                          </div>
                         </div>
+                        <div>
+                          <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Value Ratings</div>
+                          <div className="mt-2 space-y-1">
+                            {Object.entries(reviewModal.item.submission?.managerEvaluation?.webknotValueRatings || {}).length ? (
+                              Object.entries(reviewModal.item.submission.managerEvaluation.webknotValueRatings).map(([valueId, rating]) => (
+                                <div key={valueId} className="flex items-center justify-between gap-2">
+                                  <div className="flex-1 min-w-0">
+                                    <div className="truncate">{valueLabel(valueId)}</div>
+                                  </div>
+                                  <span className="font-mono">{Number(rating).toFixed(1)}</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="text-xs text-[rgb(var(--muted))]">No manager value ratings.</div>
+                            )}
+                          </div>
+                        </div>
+                        {String(reviewModal.item.submission?.managerReview?.comments || "").trim() ? (
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Comments</div>
+                            <div className="mt-2 whitespace-pre-wrap">{String(reviewModal.item.submission?.managerReview?.comments || "")}</div>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Scoring Breakdown */}
+                  {!reviewModalIsManagerSelf ? (() => {
+                    const toAvg = (obj) => {
+                      if (!obj || typeof obj !== "object") return null;
+                      const nums = Object.values(obj)
+                        .map((v) => (typeof v === "number" ? v : Number.parseFloat(String(v ?? ""))))
+                        .filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
+                      return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null;
+                    };
+                    const mgrKpiAvg = toAvg(reviewModal.item.submission?.managerEvaluation?.kpiRatings);
+                    const mgrValueAvg = toAvg(reviewModal.item.submission?.managerEvaluation?.webknotValueRatings);
+                    const certCount = Array.isArray(reviewModal.item.submission?.certifications) ? reviewModal.item.submission.certifications.length : 0;
+                    const recognitions = Number(reviewModal.item.submission?.recognitionsCount || 0) || 0;
+                    const existingTechShowcase = String(reviewModal.item.submission?.techShowcase || "").trim();
+                    const brownie = certCount + recognitions + (existingTechShowcase ? 1 : 0);
+                    let weighted = null;
+                    if (mgrKpiAvg != null && mgrValueAvg != null) weighted = 0.85 * mgrKpiAvg + 0.15 * mgrValueAvg;
+                    else if (mgrKpiAvg != null) weighted = mgrKpiAvg;
+                    else if (mgrValueAvg != null) weighted = mgrValueAvg;
+                    if (weighted != null) weighted = Math.round(Math.min(5, Math.max(1, weighted)) * 10) / 10;
+                    return (
+                      <div className="rt-panel-subtle rounded-lg p-5 space-y-3">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Scoring Breakdown</div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                          <div className="rt-panel-subtle rounded-md p-3">
+                            <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Avg</div>
+                            <div className="text-xl font-bold mt-1">{mgrKpiAvg != null ? mgrKpiAvg.toFixed(1) : "—"}</div>
+                            <div className="text-[10px] text-[rgb(var(--muted))]">85% weight</div>
+                          </div>
+                          <div className="rt-panel-subtle rounded-md p-3">
+                            <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Values Avg</div>
+                            <div className="text-xl font-bold mt-1">{mgrValueAvg != null ? mgrValueAvg.toFixed(1) : "—"}</div>
+                            <div className="text-[10px] text-[rgb(var(--muted))]">15% weight</div>
+                          </div>
+                          <div className="rt-panel-subtle rounded-md p-3">
+                            <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Weighted Score</div>
+                            <div className="text-xl font-bold mt-1 rt-stat-value">{weighted != null ? weighted.toFixed(1) : "—"}</div>
+                            <div className="text-[10px] text-[rgb(var(--muted))]">out of 5</div>
+                          </div>
+                          <div className="rt-panel-subtle rounded-md p-3">
+                            <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Brownie Points</div>
+                            <div className="text-xl font-bold mt-1 text-amber-500">{brownie}</div>
+                            <div className="text-[10px] text-[rgb(var(--muted))]">{certCount} cert · {recognitions} rec{existingTechShowcase ? " · 1 tech" : ""}</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })() : null}
+
+                  {/* Tech Showcase + Approve */}
+                  <div className="rt-panel-subtle rounded-lg p-6 space-y-4">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Admin Evaluation</div>
+                      {reviewModalIsManagerSelf ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
+                          Manager self review
+                        </span>
                       ) : null}
                     </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">
+                        Tech Showcase (Brownie Points)
+                      </label>
+                      <textarea
+                        value={techShowcaseText}
+                        onChange={(e) => setTechShowcaseText(e.target.value)}
+                        className="rt-input w-full min-h-[80px] text-sm"
+                        placeholder="Describe employee's tech showcase contribution (leave empty if none)…"
+                        disabled={approveBusy}
+                      />
+                      <p className="text-[10px] text-[rgb(var(--muted))]">
+                        If the employee presented a tech showcase, describe it here. This contributes to brownie points.
+                      </p>
+                    </div>
+                    <div className="flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={closeReview}
+                        className="rt-btn-ghost transition-all"
+                        disabled={approveBusy}
+                      >
+                        Close
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (approveBusy) return;
+                          setApproveBusy(true);
+                          try {
+                            await submitAdminReviewDecision({
+                              submissionId: reviewModal.item.id,
+                              id: reviewModal.item.id,
+                              month: reviewModal.item.month,
+                              subjectEmployeeId: reviewModal.item.employee.id,
+                              employeeId: reviewModal.item.employee.id,
+                              submissionType: reviewModal.item.submission?.submissionType ?? reviewModal.item.submissionType,
+                              techShowcase: techShowcaseText.trim(),
+                              adminReview: {
+                                action: "APPROVE",
+                                comments: "",
+                                reviewedAt: new Date().toISOString(),
+                              },
+                              reviewStatus: "APPROVED",
+                            });
+                            closeReview();
+                            await reload();
+                          } catch (err) {
+                            if (err?.status === 401) {
+                              onLogout?.();
+                              return;
+                            }
+                            // show inline error via showToast if available
+                          } finally {
+                            setApproveBusy(false);
+                          }
+                        }}
+                        className="bg-emerald-600 text-white hover:bg-emerald-500 rounded-md px-5 py-2.5 text-xs font-semibold uppercase tracking-wider transition-all disabled:opacity-70"
+                        disabled={approveBusy}
+                      >
+                        {approveBusy ? "Approving…" : "Approve"}
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            {/* Scoring Breakdown */}
-            {(() => {
-              const toAvg = (obj) => {
-                if (!obj || typeof obj !== "object") return null;
-                const nums = Object.values(obj)
-                  .map((v) => (typeof v === "number" ? v : Number.parseFloat(String(v ?? ""))))
-                  .filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
-                return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null;
-              };
-              const mgrKpiAvg = toAvg(reviewModal.item.submission?.managerEvaluation?.kpiRatings);
-              const mgrValueAvg = toAvg(reviewModal.item.submission?.managerEvaluation?.webknotValueRatings);
-              const certCount = Array.isArray(reviewModal.item.submission?.certifications) ? reviewModal.item.submission.certifications.length : 0;
-              const recognitions = Number(reviewModal.item.submission?.recognitionsCount || 0) || 0;
-              const existingTechShowcase = String(reviewModal.item.submission?.techShowcase || "").trim();
-              const brownie = certCount + recognitions + (existingTechShowcase ? 1 : 0);
-              let weighted = null;
-              if (mgrKpiAvg != null && mgrValueAvg != null) weighted = 0.85 * mgrKpiAvg + 0.15 * mgrValueAvg;
-              else if (mgrKpiAvg != null) weighted = mgrKpiAvg;
-              else if (mgrValueAvg != null) weighted = mgrValueAvg;
-              if (weighted != null) weighted = Math.round(Math.min(5, Math.max(1, weighted)) * 10) / 10;
-              return (
-                <div className="mt-4 rt-panel-subtle rounded-lg p-5 space-y-3">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Scoring Breakdown</div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
-                    <div className="rt-panel-subtle rounded-md p-3">
-                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Avg</div>
-                      <div className="text-xl font-bold mt-1">{mgrKpiAvg != null ? mgrKpiAvg.toFixed(1) : "—"}</div>
-                      <div className="text-[10px] text-[rgb(var(--muted))]">85% weight</div>
-                    </div>
-                    <div className="rt-panel-subtle rounded-md p-3">
-                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Values Avg</div>
-                      <div className="text-xl font-bold mt-1">{mgrValueAvg != null ? mgrValueAvg.toFixed(1) : "—"}</div>
-                      <div className="text-[10px] text-[rgb(var(--muted))]">15% weight</div>
-                    </div>
-                    <div className="rt-panel-subtle rounded-md p-3">
-                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Weighted Score</div>
-                      <div className="text-xl font-bold mt-1 rt-stat-value">{weighted != null ? weighted.toFixed(1) : "—"}</div>
-                      <div className="text-[10px] text-[rgb(var(--muted))]">out of 5</div>
-                    </div>
-                    <div className="rt-panel-subtle rounded-md p-3">
-                      <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Brownie Points</div>
-                      <div className="text-xl font-bold mt-1 text-amber-500">{brownie}</div>
-                      <div className="text-[10px] text-[rgb(var(--muted))]">{certCount} cert · {recognitions} rec{existingTechShowcase ? " · 1 tech" : ""}</div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Tech Showcase + Approve */}
-            <div className="mt-6 rt-panel-subtle rounded-lg p-6 space-y-4">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Admin Evaluation</div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">
-                  Tech Showcase (Brownie Points)
-                </label>
-                <textarea
-                  value={techShowcaseText}
-                  onChange={(e) => setTechShowcaseText(e.target.value)}
-                  className="rt-input w-full min-h-[80px] text-sm"
-                  placeholder="Describe employee's tech showcase contribution (leave empty if none)…"
-                  disabled={approveBusy}
-                />
-                <p className="text-[10px] text-[rgb(var(--muted))]">
-                  If the employee presented a tech showcase, describe it here. This contributes to brownie points.
-                </p>
-              </div>
-              <div className="flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={closeReview}
-                  className="rt-btn-ghost transition-all"
-                  disabled={approveBusy}
-                >
-                  Close
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (approveBusy) return;
-                    setApproveBusy(true);
-                    try {
-                      await submitAdminReviewDecision({
-                        submissionId: reviewModal.item.id,
-                        id: reviewModal.item.id,
-                        month: reviewModal.item.month,
-                        subjectEmployeeId: reviewModal.item.employee.id,
-                        employeeId: reviewModal.item.employee.id,
-                        submissionType: reviewModal.item.submission?.submissionType ?? reviewModal.item.submissionType,
-                        techShowcase: techShowcaseText.trim(),
-                        adminReview: {
-                          action: "APPROVE",
-                          comments: "",
-                          reviewedAt: new Date().toISOString(),
-                        },
-                        reviewStatus: "APPROVED",
-                      });
-                      closeReview();
-                      await reload();
-                    } catch (err) {
-                      if (err?.status === 401) {
-                        onLogout?.();
-                        return;
-                      }
-                      // show inline error via showToast if available
-                    } finally {
-                      setApproveBusy(false);
-                    }
-                  }}
-                  className="bg-emerald-600 text-white hover:bg-emerald-500 rounded-md px-5 py-2.5 text-xs font-semibold uppercase tracking-wider transition-all disabled:opacity-70"
-                  disabled={approveBusy}
-                >
-                  {approveBusy ? "Approving…" : "Approve"}
-                </button>
               </div>
             </div>
         </ModalOverlay>
@@ -802,6 +853,11 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
               <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Admin Reject</div>
               <div className="mt-2 text-xl font-semibold text-[rgb(var(--text))]">{rejectModal.item.employee.name}</div>
               <div className="text-xs text-[rgb(var(--muted))] mt-1">{rejectModal.item.month} • {rejectModal.item.entryType}</div>
+              {rejectModalIsManagerSelf ? (
+                <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
+                  Manager self review
+                </div>
+              ) : null}
             </div>
           }
         >
@@ -810,39 +866,47 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
               <label className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                 What to reject
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setRejectModal((prev) => ({ ...prev, target: "employee" }))}
-                  className={[
-                    "px-3 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all text-center",
-                    (rejectModal.target || "employee") === "employee"
-                      ? "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30 ring-1 ring-red-500/20"
-                      : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))] hover:border-[rgb(var(--muted))]",
-                  ].join(" ")}
-                  disabled={rejectBusy}
-                >
-                  Reject Employee Review
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRejectModal((prev) => ({ ...prev, target: "manager" }))}
-                  className={[
-                    "px-3 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all text-center",
-                    rejectModal.target === "manager"
-                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 ring-1 ring-amber-500/20"
-                      : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))] hover:border-[rgb(var(--muted))]",
-                  ].join(" ")}
-                  disabled={rejectBusy || !rejectModal.item.managerReady}
-                  title={!rejectModal.item.managerReady ? "Manager has not submitted yet" : "Reject manager's review only"}
-                >
-                  Reject Manager Review
-                </button>
-              </div>
+              {rejectModalIsManagerSelf ? (
+                <div className="rounded-lg border border-blue-500/25 bg-blue-500/5 p-3 text-[11px] text-[rgb(var(--muted))]">
+                  This is a manager self review. Rejection will return it to the manager with your comments for resubmission.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRejectModal((prev) => ({ ...prev, target: "employee" }))}
+                    className={[
+                      "px-3 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all text-center",
+                      (rejectModal.target || "employee") === "employee"
+                        ? "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30 ring-1 ring-red-500/20"
+                        : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))] hover:border-[rgb(var(--muted))]",
+                    ].join(" ")}
+                    disabled={rejectBusy}
+                  >
+                    Reject Employee Review
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRejectModal((prev) => ({ ...prev, target: "manager" }))}
+                    className={[
+                      "px-3 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider border transition-all text-center",
+                      rejectModal.target === "manager"
+                        ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 ring-1 ring-amber-500/20"
+                        : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))] hover:border-[rgb(var(--muted))]",
+                    ].join(" ")}
+                    disabled={rejectBusy || !rejectModal.item.managerReady}
+                    title={!rejectModal.item.managerReady ? "Manager has not submitted yet" : "Reject manager's review only"}
+                  >
+                    Reject Manager Review
+                  </button>
+                </div>
+              )}
               <p className="text-[10px] text-[rgb(var(--muted))]">
-                {(rejectModal.target || "employee") === "employee"
-                  ? "The employee's submission will be sent back for resubmission."
-                  : "Only the manager's review will be rejected; employee submission stays intact."}
+                {rejectModalIsManagerSelf
+                  ? "The manager will edit and resubmit their own review with your feedback."
+                  : (rejectModal.target || "employee") === "employee"
+                    ? "The employee's submission will be sent back for resubmission."
+                    : "Only the manager's review will be rejected; employee submission stays intact."}
               </p>
             </div>
 
@@ -887,7 +951,18 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                     setRejectError("Add a short explanation for the employee.");
                     return;
                   }
-                  const target = rejectModal.target || "employee";
+                  const target = rejectModalIsManagerSelf ? "manager" : (rejectModal.target || "employee");
+                  const submission = rejectModal.item.submission || rejectModal.item.raw || {};
+                  const payload =
+                    (submission.raw && submission.raw.payload && typeof submission.raw.payload === "object" ? submission.raw.payload : null) ||
+                    (submission.payload && typeof submission.payload === "object" ? submission.payload : null) ||
+                    (submission && typeof submission === "object" ? submission : {});
+                  const selfReviewText = String(payload.selfReviewText ?? payload.selfReview ?? payload.reviewText ?? "").trim();
+                  const certifications = Array.isArray(payload.certifications) ? payload.certifications : [];
+                  const kpiRatings = payload.kpiRatings && typeof payload.kpiRatings === "object" ? payload.kpiRatings : {};
+                  const webknotValueRatings = payload.webknotValueRatings && typeof payload.webknotValueRatings === "object" ? payload.webknotValueRatings : {};
+                  const webknotValues = Array.isArray(payload.webknotValues) ? payload.webknotValues : Object.keys(webknotValueRatings);
+                  const recognitionsCount = Number.isFinite(Number(payload.recognitionsCount)) ? Number(payload.recognitionsCount) : 0;
                   setRejectBusy(true);
                   try {
                     await submitAdminReviewDecision({
@@ -898,13 +973,19 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                       employeeId: rejectModal.item.employee.id,
                       submissionType: rejectModal.item.submission?.submissionType ?? rejectModal.item.submissionType,
                       adminReview: {
-                        action: target === "manager" ? "REJECT_MANAGER" : "REJECT",
+                        action: rejectModalIsManagerSelf ? "REJECT" : target === "manager" ? "REJECT_MANAGER" : "REJECT",
                         target,
                         comments: comment,
                         reviewedAt: new Date().toISOString(),
                       },
-                      reviewStatus: target === "manager" ? "NEEDS_MANAGER_REVIEW" : "REJECT",
-                      reopenedForResubmission: target === "employee",
+                      reviewStatus: rejectModalIsManagerSelf ? "REJECT" : target === "manager" ? "NEEDS_MANAGER_REVIEW" : "REJECT",
+                      reopenedForResubmission: rejectModalIsManagerSelf || target === "employee",
+                      selfReviewText,
+                      certifications,
+                      kpiRatings,
+                      webknotValueRatings,
+                      webknotValues,
+                      recognitionsCount,
                     });
                     setRejectModal({ open: false, item: null, comment: "", target: "employee" });
                     setRejectError("");

@@ -4,6 +4,10 @@ import CursorPagination from "../shared/CursorPagination.jsx";
 
 export default function KPIRegistry({
   kpis,
+  allKpis = null,
+  allKpisLoaded = false,
+  allKpisLoading = false,
+  allKpisError = "",
   searchQuery,
   setSearchQuery,
   onAddKpi,
@@ -12,12 +16,48 @@ export default function KPIRegistry({
   loading,
   error,
   onReload,
+  onReloadAll = null,
   pager,
   pageSize = 10,
   pageSizeOptions = [10, 20, 50],
   onPageSizeChange,
 }) {
   const [selectedBands, setSelectedBands] = useState([]); // band strings; empty means "all"
+
+  const searchUniverse = useMemo(() => {
+    if (allKpisLoaded && Array.isArray(allKpis)) return allKpis;
+    return kpis;
+  }, [allKpis, allKpisLoaded, kpis]);
+
+  // Ensure the full KPI list is hydrated at least once when the tab loads
+  React.useEffect(() => {
+    if (!onReloadAll) return;
+    if (allKpisLoading) return;
+    if (allKpisLoaded) return;
+    onReloadAll({ silent: true }).catch(() => {});
+  }, [allKpisLoaded, allKpisLoading, onReloadAll]);
+
+  // Auto-load the full KPI set when user starts typing so search spans all pages
+  React.useEffect(() => {
+    if (!searchQuery.trim()) return;
+    if (!onReloadAll) return;
+    if (allKpisLoading) return;
+    if (Array.isArray(allKpis) && allKpis.length) return;
+    onReloadAll({ silent: true }).catch(() => {});
+  }, [allKpis, allKpisLoading, onReloadAll, searchQuery]);
+
+  // When user clicks Refresh, also trigger full reload (not just current page)
+  const handleRefresh = React.useCallback(() => {
+    onReload?.();
+    if (onReloadAll) {
+      onReloadAll({ silent: true }).catch(() => {});
+    }
+  }, [onReload, onReloadAll]);
+
+  function normalizeKey(value) {
+    const text = String(value ?? "").trim();
+    return text ? text.toLowerCase() : "unassigned";
+  }
 
   function parseWeightPercent(value) {
     if (value == null) return 0;
@@ -30,32 +70,41 @@ export default function KPIRegistry({
   }
 
   const bandStats = useMemo(() => {
-    const map = new Map(); // band -> { count }
-    for (const kpi of kpis) {
-      const band = String(kpi?.band ?? "").trim() || "Unassigned";
-      const prev = map.get(band) || { count: 0 };
+    const map = new Map(); // normalized band -> { key, label, count }
+    for (const kpi of searchUniverse) {
+      const label = String(kpi?.band ?? "").trim() || "Unassigned";
+      const key = normalizeKey(label);
+      const prev = map.get(key) || { key, label, count: 0 };
       prev.count += 1;
-      map.set(band, prev);
+      if (!map.has(key)) prev.label = label; // preserve first label for display
+      map.set(key, prev);
     }
 
-    const entries = Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+    const entries = Array.from(map.values()).sort((a, b) =>
+      String(a.label).localeCompare(String(b.label), undefined, { numeric: true })
+    );
 
     return {
       map,
-      bands: entries.map(([band]) => band),
+      entries,
     };
-  }, [kpis]);
+  }, [searchUniverse]);
 
   const comboStats = useMemo(() => {
-    const map = new Map(); // `${band}||${stream}` -> { band, stream, count, sum }
-    for (const kpi of kpis) {
+    const map = new Map(); // `${bandKey}||${streamKey}` -> { band, stream, bandKey, streamKey, count, sum }
+    for (const kpi of searchUniverse) {
       const band = String(kpi?.band ?? "").trim() || "Unassigned";
       const stream = String(kpi?.stream ?? "").trim() || "Unassigned";
-      const key = `${band}||${stream}`;
-      const prev = map.get(key) || { band, stream, count: 0, sum: 0 };
+      const bandKey = normalizeKey(band);
+      const streamKey = normalizeKey(stream);
+      const key = `${bandKey}||${streamKey}`;
+      const prev = map.get(key) || { band, stream, bandKey, streamKey, count: 0, sum: 0 };
       prev.count += 1;
       prev.sum += parseWeightPercent(kpi?.weight);
+      if (!map.has(key)) {
+        prev.band = band;
+        prev.stream = stream;
+      }
       map.set(key, prev);
     }
 
@@ -66,26 +115,27 @@ export default function KPIRegistry({
     });
 
     return { entries };
-  }, [kpis]);
+  }, [searchUniverse]);
 
   const selectedBandSet = useMemo(() => new Set(selectedBands), [selectedBands]);
 
   const filtered = useMemo(() => {
     const q = searchQuery.toLowerCase();
-    return kpis.filter((kpi) => {
+    return searchUniverse.filter((kpi) => {
       const matchesText =
         kpi.title.toLowerCase().includes(q) || kpi.stream.toLowerCase().includes(q);
 
       const band = String(kpi?.band ?? "").trim() || "Unassigned";
-      const matchesBand = selectedBandSet.size === 0 ? true : selectedBandSet.has(band);
+      const bandKey = normalizeKey(band);
+      const matchesBand = selectedBandSet.size === 0 ? true : selectedBandSet.has(bandKey);
 
       return matchesText && matchesBand;
     });
-  }, [kpis, searchQuery, selectedBandSet]);
+  }, [searchQuery, searchUniverse, selectedBandSet]);
 
   const selectedBandWeightWarnings = useMemo(() => {
     return comboStats.entries
-      .filter((entry) => (selectedBandSet.size === 0 ? true : selectedBandSet.has(entry.band)))
+      .filter((entry) => (selectedBandSet.size === 0 ? true : selectedBandSet.has(entry.bandKey)))
       .map((entry) => ({
         band: entry.band,
         stream: entry.stream,
@@ -100,7 +150,7 @@ export default function KPIRegistry({
       new Set(
         comboStats.entries
           .filter((entry) => Math.round(entry.sum * 10) / 10 > 100)
-          .map((entry) => String(entry.band))
+          .map((entry) => entry.bandKey)
       ),
     [comboStats.entries]
   );
@@ -139,7 +189,7 @@ export default function KPIRegistry({
             </select>
           </label>
           <button
-            onClick={() => onReload?.()}
+            onClick={handleRefresh}
             disabled={Boolean(loading)}
             className={[
               "rt-btn-ghost transition-all",
@@ -161,13 +211,13 @@ export default function KPIRegistry({
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="rt-panel-subtle p-4">
           <div className="rt-kicker">Rows Loaded</div>
-          <div className="mt-2 text-2xl font-semibold tracking-tight">{kpis.length}</div>
+          <div className="mt-2 text-2xl font-semibold tracking-tight">{searchUniverse.length}</div>
         </div>
         <div className="rt-panel-subtle p-4">
           <div className="rt-kicker">Bands On Page</div>
           <div className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <Layers3 size={18} className="text-blue-500" />
-            <span>{bandStats.bands.length}</span>
+            <span>{bandStats.entries.length}</span>
           </div>
         </div>
         <div className="rt-panel-subtle p-4">
@@ -198,17 +248,19 @@ export default function KPIRegistry({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {bandStats.bands.map((band) => {
-            const isSelected = selectedBandSet.has(band);
-            const stats = bandStats.map.get(band) || { count: 0 };
-            const isOver = overweightBandSet.has(band);
+          {bandStats.entries.map((bandEntry) => {
+            const band = bandEntry.label;
+            const key = bandEntry.key;
+            const isSelected = selectedBandSet.has(key);
+            const stats = bandStats.map.get(key) || { count: 0 };
+            const isOver = overweightBandSet.has(key);
 
             return (
               <button
-                key={band}
+                key={key}
                 onClick={() => {
                   if (isSelected) return;
-                  setSelectedBands((prev) => Array.from(new Set([...prev, band])));
+                  setSelectedBands((prev) => Array.from(new Set([...prev, key])));
                 }}
                 className={[
                   "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[10px] font-semibold uppercase tracking-wider border transition-all",
@@ -229,13 +281,13 @@ export default function KPIRegistry({
                     tabIndex={0}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setSelectedBands((prev) => prev.filter((b) => b !== band));
+                      setSelectedBands((prev) => prev.filter((b) => b !== key));
                     }}
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" && e.key !== " ") return;
                       e.preventDefault();
                       e.stopPropagation();
-                      setSelectedBands((prev) => prev.filter((b) => b !== band));
+                      setSelectedBands((prev) => prev.filter((b) => b !== key));
                     }}
                     className="ml-1 rounded-md p-1 hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--border))]"
                     aria-label={`Deselect ${band}`}
@@ -286,22 +338,22 @@ export default function KPIRegistry({
                 </td>
                 <td className="p-4 sm:p-5 font-mono font-semibold text-indigo-600 dark:text-indigo-300">{kpi.band}</td>
 	                <td className="p-4 sm:p-5 text-right px-8">
-	                  <div className="flex justify-end gap-2">
-	                    <button
-	                      onClick={() => onEditKpi?.(kpi)}
-	                      className="p-2.5 bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white rounded-md transition-all border border-blue-200 dark:bg-blue-500/5 dark:text-blue-300 dark:hover:bg-blue-500 dark:border-blue-500/20"
-	                      title="Edit"
-	                    >
-	                      <Edit3 size={18} />
-	                    </button>
-	                    <button
-                      onClick={() => onDeleteKpi?.(kpi)}
-                      className="p-2.5 bg-red-50 text-red-700 hover:bg-red-600 hover:text-white rounded-md transition-all border border-red-200 dark:bg-red-500/5 dark:text-red-300 dark:hover:bg-red-500 dark:border-red-500/20"
-                      title="Delete"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-	                  </div>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => onEditKpi?.(kpi)}
+                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
+                        title="Edit"
+                      >
+                        <Edit3 size={16} />
+                      </button>
+                      <button
+                        onClick={() => onDeleteKpi?.(kpi)}
+                        className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all"
+                        title="Delete"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
 	                </td>
               </tr>
             ))}

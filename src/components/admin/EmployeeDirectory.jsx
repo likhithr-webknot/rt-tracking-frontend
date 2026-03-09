@@ -71,8 +71,11 @@ function buildOptionStats(employees, key, { emptyLabel = "Unassigned" } = {}) {
 
 export default function EmployeeDirectory({
   employees,
+  allEmployees = null,
+  allEmployeesLoading = false,
   setEmployees,
   reloadEmployees,
+  reloadAllEmployees = null,
   employeesLoading,
   employeesError,
   totalEmployeesCount = null,
@@ -106,6 +109,7 @@ export default function EmployeeDirectory({
     email: "",
     empRole: "Employee",
     designation: "",
+    allowNoDesignationOverride: false,
     band: "B4",
     stream: "",
     managerId: "",
@@ -117,6 +121,19 @@ export default function EmployeeDirectory({
   const [managersError, setManagersError] = useState("");
   const [directoryBands, setDirectoryBands] = useState([]);
   const [directoryStreams, setDirectoryStreams] = useState([]);
+
+  const searchUniverse = useMemo(() => {
+    if (query.trim() && Array.isArray(allEmployees) && allEmployees.length) return allEmployees;
+    return employees;
+  }, [allEmployees, employees, query]);
+
+  useEffect(() => {
+    if (!query.trim()) return;
+    if (!reloadAllEmployees) return;
+    if (allEmployeesLoading) return;
+    if (Array.isArray(allEmployees) && allEmployees.length) return;
+    reloadAllEmployees({ silent: true }).catch(() => {});
+  }, [allEmployees, allEmployeesLoading, query, reloadAllEmployees]);
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -135,10 +152,14 @@ export default function EmployeeDirectory({
   }
 
   const [editingEmployeeId, setEditingEmployeeId] = useState(null);
-  const editingEmployee = useMemo(
-    () => employees.find((e) => e.id === editingEmployeeId) ?? null,
-    [employees, editingEmployeeId]
-  );
+  const editingEmployee = useMemo(() => {
+    if (!editingEmployeeId) return null;
+    const findEmp = (list) =>
+      Array.isArray(list)
+        ? list.find((e) => String(e?.id) === String(editingEmployeeId)) ?? null
+        : null;
+    return findEmp(employees) ?? findEmp(allEmployees);
+  }, [allEmployees, employees, editingEmployeeId]);
 
   const [draft, setDraft] = useState({
     name: "",
@@ -151,9 +172,10 @@ export default function EmployeeDirectory({
   const [editDesignationLoading, setEditDesignationLoading] = useState(false);
 
   const filtered = useMemo(() => {
+    const pool = Array.isArray(searchUniverse) ? searchUniverse : [];
     const q = query.trim().toLowerCase();
 
-    return employees.filter((e) => {
+    return pool.filter((e) => {
       const matchesText = !q
         ? true
         : e.name.toLowerCase().includes(q) ||
@@ -176,7 +198,7 @@ export default function EmployeeDirectory({
   }, [employees, query, roleFilter, designationFilter, bandFilter]);
 
   const directoryStats = useMemo(() => {
-    const list = Array.isArray(employees) ? employees : [];
+    const list = Array.isArray(searchUniverse) ? searchUniverse : [];
     const uniqueBands = new Set(
       list
         .map((emp) => String(emp?.band ?? "").trim())
@@ -208,14 +230,14 @@ export default function EmployeeDirectory({
   const visibleEmployees = filtered;
 
   /* ── Clear stale selections when the employee list changes (pagination, reload) ── */
-  const employeeIdFingerprint = useMemo(() => employees.map((e) => e.id).join(","), [employees]);
+  const employeeIdFingerprint = useMemo(() => searchUniverse.map((e) => e.id).join(","), [searchUniverse]);
   useEffect(() => {
     setSelectedEmployeeIds([]);
   }, [employeeIdFingerprint]);
 
   const selectedIdSet = useMemo(() => new Set(selectedEmployeeIds), [selectedEmployeeIds]);
   const filteredIdSet = useMemo(() => new Set(filtered.map((e) => e.id)), [filtered]);
-  const employeeIdSet = useMemo(() => new Set(employees.map((e) => e.id)), [employees]);
+  const employeeIdSet = useMemo(() => new Set(searchUniverse.map((e) => e.id)), [searchUniverse]);
   const allVisibleSelected = useMemo(() => {
     if (visibleEmployees.length === 0) return false;
     for (const emp of visibleEmployees) {
@@ -232,13 +254,13 @@ export default function EmployeeDirectory({
     return validSelected.filter((id) => String(id) !== String(currentEmployeeId)).length;
   }, [selectedEmployeeIds, currentEmployeeId, employeeIdSet]);
 
-  const nextEmployeeId = useMemo(() => computeNextEmployeeId(employees), [employees]);
-  const roleOptions = useMemo(() => buildOptionStats(employees, "role"), [employees]);
+  const nextEmployeeId = useMemo(() => computeNextEmployeeId(searchUniverse), [searchUniverse]);
+  const roleOptions = useMemo(() => buildOptionStats(searchUniverse, "role"), [searchUniverse]);
   const designationOptions = useMemo(
-    () => buildOptionStats(employees, "designation"),
-    [employees]
+    () => buildOptionStats(searchUniverse, "designation"),
+    [searchUniverse]
   );
-  const bandOptions = useMemo(() => buildOptionStats(employees, "band"), [employees]);
+  const bandOptions = useMemo(() => buildOptionStats(searchUniverse, "band"), [searchUniverse]);
   const bandLabelMap = useMemo(() => {
     const map = new Map();
     for (const row of directoryBands) {
@@ -272,7 +294,7 @@ export default function EmployeeDirectory({
     if (fromDirectory.length) return fromDirectory;
 
     const defaults = ["B1", "B2", "B3", "B4", "B5", "B5H", "B5L", "B6H", "B6L", "B7H", "B7L", "B8"];
-    const fromEmployees = employees
+    const fromEmployees = searchUniverse
       .map((emp) => String(emp?.band ?? "").trim())
       .filter(Boolean)
       .map((value) => ({ value, label: value }));
@@ -282,7 +304,7 @@ export default function EmployeeDirectory({
         ...fromEmployees.map((row) => [row.value, row]),
       ]).values()
     ).sort((a, b) => a.value.localeCompare(b.value, undefined, { numeric: true }));
-  }, [directoryBands, employees]);
+  }, [directoryBands, searchUniverse]);
 
   const streamSelectOptions = useMemo(() => {
     const fromDirectory = directoryStreams
@@ -296,7 +318,7 @@ export default function EmployeeDirectory({
 
     const fromEmployees = Array.from(
       new Set(
-        employees
+        searchUniverse
           .map((emp) => String(emp?.stream ?? "").trim())
           .filter(Boolean)
       )
@@ -305,7 +327,7 @@ export default function EmployeeDirectory({
       .map((value) => ({ value, label: value }));
     if (fromEmployees.length > 0) return fromEmployees;
     return [{ value: "Development", label: "Development" }];
-  }, [directoryStreams, employees]);
+  }, [directoryStreams, searchUniverse]);
 
   const defaultAddBand = useMemo(
     () => (bandSelectOptions.find((opt) => opt.value === "B4")?.value || bandSelectOptions[0]?.value || "B4"),
@@ -655,7 +677,14 @@ export default function EmployeeDirectory({
     e.preventDefault();
     if (!editingEmployeeId) return;
 
-    const current = employees.find((emp) => String(emp?.id) === String(editingEmployeeId)) || null;
+    const current =
+      (Array.isArray(employees)
+        ? employees.find((emp) => String(emp?.id) === String(editingEmployeeId))
+        : null) ||
+      (Array.isArray(allEmployees)
+        ? allEmployees.find((emp) => String(emp?.id) === String(editingEmployeeId))
+        : null) ||
+      null;
     if (!current) {
       showToast({ title: "Update failed", message: "Employee not found." });
       return;
@@ -715,6 +744,7 @@ export default function EmployeeDirectory({
       email: "",
       empRole: "Employee",
       designation: "",
+      allowNoDesignationOverride: false,
       band: defaultAddBand,
       stream: defaultAddStream,
       managerId: "",
@@ -761,6 +791,12 @@ export default function EmployeeDirectory({
 
     const isAdminRole = String(addDraft.empRole || "").trim().toLowerCase() === "admin";
     const employeeIdValue = (addDraft.useNextEmployeeId ? nextEmployeeId : addDraft.employeeId).trim();
+    const designationValue = addDraft.designation.trim();
+    const missingDesignation = !designationValue;
+    if (missingDesignation && !addDraft.allowNoDesignationOverride) {
+      showToast({ title: "Designation required", message: "Select a designation or tick override to proceed." });
+      return;
+    }
     const payload = {
       ...(employeeIdValue ? { employeeId: employeeIdValue } : {}),
       employeeName: addDraft.employeeName.trim(),
@@ -768,7 +804,7 @@ export default function EmployeeDirectory({
       empRole: addDraft.empRole,
       band: isAdminRole ? null : addDraft.band.trim() || null,
       stream: isAdminRole ? null : addDraft.stream.trim() || null,
-      designation: addDraft.designation.trim() || null,
+      designation: designationValue || null,
       managerId: addDraft.managerId.trim() || null,
     };
 
@@ -1013,31 +1049,31 @@ export default function EmployeeDirectory({
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-1.5">
+                    <div className="flex justify-end gap-2">
                       <button
                         onClick={() => openEdit(emp)}
-                        className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500 hover:text-white rounded-md transition-all border border-blue-500/20"
+                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
                         title="Edit"
                       >
-                        <Edit3 size={15} />
+                        <Edit3 size={16} />
                       </button>
 
                       <button
                         onClick={() => requestPromoteEmployee(emp)}
                         disabled={promotingId === emp.id}
-                        className="p-2 bg-purple-500/10 text-purple-600 dark:text-purple-300 hover:bg-purple-500 hover:text-white rounded-md transition-all border border-purple-500/20"
+                        className="p-2 rounded-md text-purple-600 dark:text-purple-300 hover:bg-purple-500/10 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                         title="Promote"
                       >
-                        <ArrowUpCircle size={15} />
+                        <ArrowUpCircle size={16} />
                       </button>
 
                       <button
                         onClick={() => requestRemoveEmployee(emp)}
                         disabled={isSelf(emp)}
-                        className="p-2 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500 hover:text-white rounded-md transition-all border border-red-500/20"
+                        className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                         title="Remove"
                       >
-                        <Trash2 size={15} />
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </td>
@@ -1379,6 +1415,17 @@ export default function EmployeeDirectory({
                   className="mt-2 rt-input text-sm"
                   placeholder="e.g., Software Engineer"
                 />
+                <label className="mt-3 inline-flex items-center gap-3 select-none cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={addDraft.allowNoDesignationOverride}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, allowNoDesignationOverride: e.target.checked }))}
+                    className="h-4 w-4 accent-purple-600"
+                  />
+                  <span className="text-xs text-[rgb(var(--text))]">
+                    Override and allow adding without a designation
+                  </span>
+                </label>
               </div>
 
               <div className={addRoleIsAdmin ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 sm:grid-cols-2 gap-4"}>
@@ -1452,10 +1499,12 @@ export default function EmployeeDirectory({
                 </button>
                 <button
                   type="submit"
-                  disabled={employeesLoading || mutating}
+                  disabled={employeesLoading || mutating || (!addDraft.allowNoDesignationOverride && !addDraft.designation.trim())}
                   className={[
                     "rt-btn-primary transition-all",
-                    employeesLoading || mutating ? "opacity-60 cursor-not-allowed" : "",
+                    employeesLoading || mutating || (!addDraft.allowNoDesignationOverride && !addDraft.designation.trim())
+                      ? "opacity-60 cursor-not-allowed"
+                      : "",
                   ].join(" ")}
                 >
                   {mutating ? "Adding…" : "Add employee"}

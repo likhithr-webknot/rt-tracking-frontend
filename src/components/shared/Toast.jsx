@@ -78,19 +78,35 @@ function ProgressBar({ durationMs, toneProgress, toastKey }) {
   );
 }
 
-export default function Toast({ toast, onDismiss, durationMs = null }) {
+export default function Toast({ toast, onDismiss, durationMs = 2600 }) {
   const prefersReducedMotion = useReducedMotion();
   const timeoutRef = useRef(null);
 
   const toneKey = String(toast?.tone || "").trim().toLowerCase() || "primary";
   const tone = TONES[toneKey] || TONES.primary;
 
+  const displayTitle = useMemo(() => {
+    if (!toast) return "";
+    if (toneKey === "error") return toast.friendlyTitle || "Something went wrong";
+    return toast.title || "";
+  }, [toast, toneKey]);
+
+  const displayMessage = useMemo(() => {
+    if (!toast) return "";
+    const raw = String(toast.message || "").trim();
+    if (toneKey === "error") {
+      if (raw) console.debug("Suppressed error message", raw);
+      return toast.friendlyMessage || "Please try again in a moment.";
+    }
+    return raw;
+  }, [toast, toneKey]);
+
   const toastKey = useMemo(() => {
     if (!toast) return "empty";
-    const title = String(toast?.title ?? "");
-    const message = String(toast?.message ?? "");
+    const title = displayTitle;
+    const message = displayMessage;
     return `${toneKey}:${title}:${message}:${Date.now()}`;
-  }, [toast, toneKey]);
+  }, [displayMessage, displayTitle, toneKey, toast]);
 
   useEffect(() => {
     if (!toast || !durationMs) return;
@@ -151,6 +167,14 @@ export default function Toast({ toast, onDismiss, durationMs = null }) {
               boxShadow: `0 8px 32px -4px rgba(0,0,0,0.12), 0 2px 8px -2px rgba(0,0,0,0.06), 0 0 0 1px ${tone.glow}`,
             }}
           >
+            {/* floating glow */}
+            <motion.div
+              className="absolute right-[-40px] top-[-30px] h-28 w-28 rounded-full pointer-events-none"
+              style={{ background: `radial-gradient(circle, ${tone.glow} 0%, transparent 55%)` }}
+              animate={prefersReducedMotion ? undefined : { opacity: [0.45, 0.8, 0.45], scale: [0.9, 1.05, 0.9] }}
+              transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}
+            />
+
             {/* Accent gradient strip */}
             <motion.div
               initial={{ scaleX: 0 }}
@@ -172,16 +196,16 @@ export default function Toast({ toast, onDismiss, durationMs = null }) {
                   transition={{ duration: 0.3, delay: 0.06 }}
                   className="text-sm font-semibold text-[rgb(var(--text))] truncate leading-snug"
                 >
-                  {toast.title}
+                  {displayTitle}
                 </motion.div>
-                {toast.message ? (
+                {displayMessage ? (
                   <motion.div
                     initial={prefersReducedMotion ? {} : { opacity: 0, x: 6 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.3, delay: 0.12 }}
                     className="text-xs mt-1 text-[rgb(var(--muted))] break-words leading-relaxed"
                   >
-                    {toast.message}
+                    {displayMessage}
                   </motion.div>
                 ) : null}
               </div>

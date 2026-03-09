@@ -367,6 +367,7 @@ export function normalizeMonthlySubmission(data) {
     (statusUpper === "SUBMITTED" && (reviewStatusUpper.includes("REJECT") || reviewStatusUpper.includes("NEEDS_REVIEW")));
   /* Override stale reviewStatus when the submission itself is SUBMITTED */
   const effectiveReviewStatus = isResubmittedStatus ? "SUBMITTED" : reviewStatus;
+  const clearedManagerSubmittedAt = isResubmittedStatus ? null : managerSubmittedAt;
   const effectiveManagerReview =
     isResubmittedStatus &&
     managerReview &&
@@ -379,6 +380,8 @@ export function normalizeMonthlySubmission(data) {
     String(adminReview.action ?? "").trim().toUpperCase() === "REJECT"
       ? null
       : adminReview;
+  const effectiveManagerEvaluation = isResubmittedStatus ? null : managerEvaluation;
+  const effectiveAdminEvaluation = isResubmittedStatus ? null : adminEvaluation;
 
   const managerAction = String(effectiveManagerReview?.action ?? "").trim().toUpperCase();
   const adminAction = String(effectiveAdminReview?.action ?? "").trim().toUpperCase();
@@ -398,6 +401,8 @@ export function normalizeMonthlySubmission(data) {
     adminAction === "REJECT"
   );
 
+  const managerSubmitted = Boolean(clearedManagerSubmittedAt) && !resubmissionRequested;
+
   return {
     id: id == null ? null : String(id),
     month: month ? String(month) : null,
@@ -412,10 +417,11 @@ export function normalizeMonthlySubmission(data) {
     cycleEndMonth: normalizeYearMonth(payload?.cycleEndMonth ?? obj?.cycleEndMonth) || cycleMeta.cycleEndMonth || null,
     reviewStatus: effectiveReviewStatus,
     managerReview: effectiveManagerReview,
-    managerEvaluation,
-    managerSubmittedAt: managerSubmittedAt ? String(managerSubmittedAt) : null,
+    managerEvaluation: effectiveManagerEvaluation,
+    managerSubmittedAt: clearedManagerSubmittedAt ? String(clearedManagerSubmittedAt) : null,
+    managerSubmitted,
     adminReview: effectiveAdminReview,
-    adminEvaluation,
+    adminEvaluation: effectiveAdminEvaluation,
     adminSubmittedAt: adminSubmittedAt ? String(adminSubmittedAt) : null,
     reopenedForResubmission,
     resubmissionRequested,

@@ -20,7 +20,7 @@ import {
 import { importCsvSingle, importCsvBulk, CSV_ENTITY_MAP, CSV_BULK_FIELD_MAP } from "../../api/csv-import.js";
 
 /* ───── entity config ───── */
-
+              <FileSpreadsheet size={28} className="mx-auto text-[rgb(var(--muted))] mb-2" />
 const ENTITY_OPTIONS = [
   { key: "employees", label: "Employees", icon: Users, hint: "employeeId, employeeName, email, empRole, band, stream", color: "text-blue-500" },
   { key: "bands", label: "Bands", icon: Layers, hint: "code", color: "text-purple-500" },
@@ -281,7 +281,7 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
               disabled={!singleFile || loading}
               className="rt-btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? <><Loader2 size={14} className="animate-spin" /> Importing…</> : <><Upload size={14} /> Import {activeEntityOption.label}</>}
+              {loading ? <><Loader2 size={14} className="animate-spin" /> Importing…</> : <><FileSpreadsheet size={14} /> Import {activeEntityOption.label}</>}
             </button>
           </div>
         </div>

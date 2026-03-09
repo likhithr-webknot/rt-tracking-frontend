@@ -367,7 +367,37 @@ export function normalizeAdminNotification(raw) {
 }
 
 export function normalizeManagerNotification(raw) {
-  return normalizeNotification(raw, MANAGER_ALLOWED_NOTIFICATION_TYPES, buildManagerTitle, buildManagerMessage);
+  const isProjectSelection = (obj = {}) => {
+    const typeText = toTrimmedString(obj.type ?? obj.eventType ?? obj.notificationType ?? obj.kind).toUpperCase();
+    if (typeText.includes("PROJECT") && (typeText.includes("SELECT") || typeText.includes("ASSIGN"))) return true;
+
+    const payload = isPlainObject(obj.payload) ? obj.payload : {};
+    const payloadType = toTrimmedString(
+      payload.type ?? payload.eventType ?? payload.notificationType ?? payload.kind ?? payload.eventName
+    ).toUpperCase();
+    if (payloadType.includes("PROJECT") && (payloadType.includes("SELECT") || payloadType.includes("ASSIGN"))) return true;
+
+    const message = toTrimmedString(obj.message || payload.message || obj.text || payload.text).toLowerCase();
+    if (message.includes("selected") && message.includes("project")) return true;
+    return false;
+  };
+
+  if (isProjectSelection(raw)) return null;
+
+  const first = normalizeNotification(raw, MANAGER_ALLOWED_NOTIFICATION_TYPES, buildManagerTitle, buildManagerMessage);
+  if (first) return first;
+
+  const obj = isPlainObject(raw) ? raw : {};
+  const type = toTrimmedString(obj.type ?? obj.eventType ?? obj.notificationType ?? obj.kind) || "MANAGER_GENERIC";
+  if (isProjectSelection(obj)) return null;
+
+  const fallback = normalizeNotification(
+    { ...obj, type },
+    new Set([type, ...MANAGER_ALLOWED_NOTIFICATION_TYPES]),
+    buildManagerTitle,
+    buildManagerMessage
+  );
+  return fallback;
 }
 
 export function normalizeAdminNotificationPage(data) {
@@ -384,7 +414,8 @@ export async function fetchAdminNotifications({ types = null, ...opts } = {}) {
 }
 
 export async function fetchManagerNotifications(opts = {}) {
-  return fetchNotifications("/notifications", Object.values(MANAGER_NOTIFICATION_TYPES), opts);
+  // Allow all types by default so admin rejections or new server events are not filtered out
+  return fetchNotifications("/notifications", null, opts);
 }
 
 export async function markAdminNotificationRead(notificationId, { signal } = {}) {
@@ -421,7 +452,8 @@ export function subscribeAdminNotificationsStream({ onNotification, onError } = 
 export function subscribeManagerNotificationsStream({ onNotification, onError } = {}) {
   return subscribeNotificationsStream({
     path: "/notifications/stream",
-    types: Object.values(MANAGER_NOTIFICATION_TYPES),
+    // Allow all types to pass through so admins can notify managers about rejections, etc.
+    types: null,
     normalizer: normalizeManagerNotification,
     customEventNames: ["manager-notification"],
     onNotification,

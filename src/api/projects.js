@@ -33,11 +33,22 @@ function authHeaders(extra = {}) {
 
 export function normalizeProject(raw) {
   if (!raw || typeof raw !== "object") return null;
+  const code = String(raw.code ?? raw.projectCode ?? "").trim();
+  const description = String(
+    raw.description ??
+    raw.projectDescription ??
+    raw.desc ??
+    raw.details ??
+    raw.summary ??
+    ""
+  ).trim();
   return {
-    id: String(raw.id ?? raw.projectId ?? raw._id ?? "").trim(),
+    id: String(raw.id ?? raw.projectId ?? raw._id ?? code ?? "").trim(),
+    code,
     name: String(raw.name ?? raw.projectName ?? raw.title ?? "").trim(),
-    description: String(raw.description ?? "").trim(),
+    description,
     managerId: String(raw.managerId ?? raw.manager?.id ?? raw.manager?.employeeId ?? "").trim(),
+    managerEmployeeId: String(raw.managerEmployeeId ?? raw.managerEmployeeID ?? raw.managerEmployeeId ?? "").trim(),
     managerName: String(raw.managerName ?? raw.manager?.name ?? raw.manager?.employeeName ?? "").trim(),
     managerEmail: String(raw.managerEmail ?? raw.manager?.email ?? "").trim(),
     active: raw.active !== false && raw.status !== "INACTIVE",
@@ -81,13 +92,14 @@ export async function fetchProjects({ signal } = {}) {
   return res.json().catch(() => ({}));
 }
 
-export async function addProject({ id, name, description = "", managerId }, { signal } = {}) {
+export async function addProject({ code, name, description = "", managerEmployeeId, active = true }, { signal } = {}) {
   const payload = {
+    code: String(code || name || "").trim(),
     name: String(name || "").trim(),
     description: String(description || "").trim(),
-    managerId: String(managerId || "").trim(),
+    managerEmployeeId: String(managerEmployeeId || "").trim(),
+    active: Boolean(active),
   };
-  if (id) payload.id = String(id).trim();
   const res = await fetch(buildApiUrl("/projects/add"), {
     method: "POST",
     signal,
@@ -104,7 +116,12 @@ export async function updateProject(id, { name, description, managerId, active }
   const safeId = encodeURIComponent(String(id));
   const payload = {};
   if (name != null) payload.name = String(name).trim();
-  if (description != null) payload.description = String(description).trim();
+  if (description != null) {
+    const desc = String(description).trim();
+    payload.description = desc;
+    payload.projectDescription = desc; // backend variants
+    payload.details = desc;
+  }
   if (managerId != null) payload.managerId = String(managerId).trim();
   if (active != null) payload.active = Boolean(active);
 
@@ -167,6 +184,7 @@ export async function fetchMyProjectRatings({ signal } = {}) {
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
   });
+  if (res.status === 403 || res.status === 404) return [];
   if (!res.ok) throw await toHttpError(res);
   return res.json().catch(() => ({}));
 }
@@ -265,12 +283,24 @@ export async function updateSelectedProjects(projectIds, { signal } = {}) {
 
 /** GET /employee-portal/profile/projects/ratings — get ratings for employee's projects */
 export async function fetchSelectedProjectRatings({ signal } = {}) {
-  const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/employee-portal/profile/projects/ratings"), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
+  // Prefer legacy stable endpoint; treat auth/availability failures as empty so UI does not break
+  try {
+    return await fetchMyProjectRatings({ signal });
+  } catch (legacyErr) {
+    if (legacyErr?.status === 403 || legacyErr?.status === 404) return [];
+    const auth = getAuthHeader();
+    try {
+      const res = await fetch(buildApiUrl("/employee-portal/profile/projects/ratings"), {
+        signal,
+        credentials: "include",
+        headers: auth ? { Authorization: auth } : undefined,
+      });
+      if (res.status === 403 || res.status === 404) return [];
+      if (!res.ok) throw await toHttpError(res);
+      return res.json().catch(() => ({}));
+    } catch (profileErr) {
+      if (profileErr?.status === 500) return [];
+      throw profileErr;
+    }
+  }
 }

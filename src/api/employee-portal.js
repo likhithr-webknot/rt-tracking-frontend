@@ -99,10 +99,13 @@ export async function fetchEmployeePortalWebknotValues({ limit = 10, cursor = nu
   const qs = new URLSearchParams();
   if (limit != null) qs.set("limit", String(limit));
   if (cursor) qs.set("cursor", String(cursor));
+  qs.set("activeOnly", "true");
+  qs.set("_ts", Date.now().toString());
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   const res = await fetch(buildApiUrl(`/employee-portal/webknot-values${suffix}`), {
     signal,
     credentials: "include",
+    cache: "no-store",
     headers: auth ? { Authorization: auth } : undefined,
   });
   if (!res.ok) throw await toHttpError(res);
@@ -184,6 +187,15 @@ export function normalizeWebknotValues(items) {
   for (let i = 0; i < arr.length; i++) {
     const raw = arr[i];
     const obj = raw && typeof raw === "object" ? raw : {};
+
+    const inactive =
+      obj.active === false ||
+      obj.isActive === false ||
+      obj.deleted === true ||
+      obj.isDeleted === true ||
+      String(obj.status || "").toLowerCase() === "inactive";
+    if (inactive) continue;
+
     const id =
       pickDeep(obj, ["id", "valueId", "webknotValueId", "code", "key"]) ||
       toCleanString(raw);
@@ -193,6 +205,9 @@ export function normalizeWebknotValues(items) {
 
     const pillar =
       pickDeep(obj, [
+        "evaluationCriteria",
+        "evaluation_criteria",
+        "evaluationcriteria",
         "pillar",
         "valuePillar",
         "valuePillarName",

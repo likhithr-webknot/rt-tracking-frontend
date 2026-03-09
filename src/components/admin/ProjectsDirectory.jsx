@@ -22,6 +22,7 @@ import {
   updateProject,
   deleteProject,
 } from "../../api/projects.js";
+import { fetchManagers, normalizeManagers } from "../../api/employees.js";
 import ModalOverlay from "../shared/ModalOverlay.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 import Toast from "../shared/Toast.jsx";
@@ -36,6 +37,7 @@ function getManagersList(employees) {
     })
     .map((e) => ({
       id: String(e?.id ?? e?.employeeId ?? "").trim(),
+      employeeId: String(e?.employeeId ?? e?.id ?? "").trim(),
       name: String(e?.name ?? e?.employeeName ?? "").trim() || String(e?.email ?? "").trim() || "Unknown",
       email: String(e?.email ?? "").trim(),
     }))
@@ -55,16 +57,30 @@ function getAllEmployeesList(employees) {
     .filter((e) => e.id);
 }
 
+function deriveProjectCode(codeInput, nameInput) {
+  const code = String(codeInput || "").trim();
+  if (code) return code;
+  const fromName = String(nameInput || "").trim();
+  if (fromName) {
+    const normalized = fromName
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toUpperCase();
+    if (normalized) return normalized;
+  }
+  return `PRJ-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+}
+
 export default function ProjectsDirectory({ employees }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [expandedRow, setExpandedRow] = useState(null);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
+  const [formCode, setFormCode] = useState("");
   const [formName, setFormName] = useState("");
   const [formDesc, setFormDesc] = useState("");
   const [formManagerId, setFormManagerId] = useState("");
@@ -78,8 +94,17 @@ export default function ProjectsDirectory({ employees }) {
   const [toast, setToast] = useState(null);
   const showToast = useCallback((t) => setToast(t), []);
 
-  const managers = useMemo(() => getManagersList(employees), [employees]);
+  const [managers, setManagers] = useState([]);
+  const [managersLoading, setManagersLoading] = useState(false);
+  const [managersError, setManagersError] = useState("");
+
+  const managersFromEmployees = useMemo(() => getManagersList(employees), [employees]);
   const allEmps = useMemo(() => getAllEmployeesList(employees), [employees]);
+
+  const managerOptions = useMemo(() => {
+    if (managers.length) return managers;
+    return managersFromEmployees;
+  }, [managers, managersFromEmployees]);
 
   /* ── load ── */
   const loadProjects = useCallback(async (opts = {}) => {
@@ -101,6 +126,38 @@ export default function ProjectsDirectory({ employees }) {
     loadProjects({ signal: controller.signal });
     return () => controller.abort();
   }, [loadProjects]);
+
+  /* ── load managers list when form opens ── */
+  useEffect(() => {
+    if (!formOpen) return undefined;
+    let mounted = true;
+    const controller = new AbortController();
+
+    (async () => {
+      setManagersError("");
+      setManagersLoading(true);
+      try {
+        const data = await fetchManagers({ signal: controller.signal });
+        const list = normalizeManagers(data)
+          .filter((m) => String(m?.id || "").trim())
+          .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
+        if (!mounted) return;
+        setManagers(list);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        setManagers([]);
+        setManagersError(err?.message || "Failed to load managers.");
+      } finally {
+        if (mounted) setManagersLoading(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [formOpen]);
 
   /* ── filtered ── */
   const filtered = useMemo(() => {
@@ -124,37 +181,11 @@ export default function ProjectsDirectory({ employees }) {
     return { total: projects.length, active, inactive: projects.length - active, uniqueManagers: new Set(projects.map((p) => p.managerId).filter(Boolean)).size };
   }, [projects]);
 
-  /* ── employees per project (matched by emp.project field) ── */
-  const empsByProject = useMemo(() => {
-    const map = new Map();
-    for (const p of projects) map.set(p.id, []);
-    for (const emp of allEmps) {
-      const projField = emp.project.toLowerCase();
-      if (!projField) continue;
-      for (const p of projects) {
-        if (p.name.toLowerCase() === projField || p.id === projField) {
-          map.get(p.id)?.push(emp);
-        }
-      }
-    }
-    return map;
-  }, [projects, allEmps]);
-
-  /* ── auto-generate next sequential project ID ── */
-  const nextProjectId = useMemo(() => {
-    const numericIds = projects
-      .map((p) => {
-        const match = String(p.id || "").match(/(\d+)/);
-        return match ? Number.parseInt(match[1], 10) : 0;
-      })
-      .filter(Number.isFinite);
-    const max = numericIds.length ? Math.max(...numericIds) : 0;
-    return `PRJ-${String(max + 1).padStart(3, "0")}`;
-  }, [projects]);
 
   /* ── form actions ── */
   function openAddForm() {
     setEditingProject(null);
+    setFormCode("");
     setFormName("");
     setFormDesc("");
     setFormManagerId("");
@@ -165,6 +196,7 @@ export default function ProjectsDirectory({ employees }) {
 
   function openEditForm(project) {
     setEditingProject(project);
+    setFormCode(project.id || project.code || "");
     setFormName(project.name);
     setFormDesc(project.description);
     setFormManagerId(project.managerId);
@@ -181,18 +213,34 @@ export default function ProjectsDirectory({ employees }) {
   async function handleFormSubmit(e) {
     e.preventDefault();
     const name = formName.trim();
+    const code = deriveProjectCode(formCode, name);
     if (!name) { setFormError("Project name is required."); return; }
     if (!formManagerId) { setFormError("Please assign a manager."); return; }
+
+    const selectedManager = managerOptions.find((m) => String(m.id) === String(formManagerId));
+    const managerEmployeeId = selectedManager?.employeeId || selectedManager?.id || formManagerId;
 
     setFormBusy(true);
     setFormError("");
     try {
       if (editingProject) {
-        await updateProject(editingProject.id, { name, description: formDesc.trim(), managerId: formManagerId, active: formActive });
+        await updateProject(editingProject.id, {
+          name,
+          description: formDesc.trim(),
+          managerId: formManagerId,
+          managerEmployeeId,
+          active: formActive,
+        });
         showToast({ title: "Project updated", message: `${name} has been updated.` });
       } else {
-        await addProject({ id: nextProjectId, name, description: formDesc.trim(), managerId: formManagerId });
-        showToast({ title: "Project created", message: `${nextProjectId} — ${name} has been added.` });
+        await addProject({
+          code,
+          name,
+          description: formDesc.trim(),
+          managerEmployeeId,
+          active: true,
+        });
+        showToast({ title: "Project created", message: `${code} — ${name} has been added.` });
       }
       closeForm();
       await loadProjects();
@@ -230,9 +278,9 @@ export default function ProjectsDirectory({ employees }) {
 
   const managerNameById = useMemo(() => {
     const map = new Map();
-    for (const m of managers) map.set(m.id, m.name);
+    for (const m of managerOptions) map.set(m.id, m.name);
     return map;
-  }, [managers]);
+  }, [managerOptions]);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -320,11 +368,9 @@ export default function ProjectsDirectory({ employees }) {
           <table className="w-full text-left">
             <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="py-3 px-3 font-semibold w-8"></th>
                 <th className="py-3 px-4 font-semibold">Project</th>
                 <th className="py-3 px-4 font-semibold">Description</th>
                 <th className="py-3 px-4 font-semibold">Manager</th>
-                <th className="py-3 px-4 font-semibold">Members</th>
                 <th className="py-3 px-4 font-semibold">Status</th>
                 <th className="py-3 px-4 font-semibold text-right">Actions</th>
               </tr>
@@ -349,8 +395,6 @@ export default function ProjectsDirectory({ employees }) {
               ) : (
                 <AnimatePresence>
                   {filtered.map((project) => {
-                    const members = empsByProject.get(project.id) || [];
-                    const isExpanded = expandedRow === project.id;
                     return (
                       <React.Fragment key={project.id}>
                         <motion.tr
@@ -359,15 +403,6 @@ export default function ProjectsDirectory({ employees }) {
                           exit={{ opacity: 0 }}
                           className="hover:bg-[rgb(var(--surface-2)/.5)] transition-colors"
                         >
-                          <td className="py-3.5 px-3">
-                            <button
-                              onClick={() => setExpandedRow(isExpanded ? null : project.id)}
-                              className="p-1 rounded text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] transition-colors"
-                              title={isExpanded ? "Collapse" : "Expand"}
-                            >
-                              {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                            </button>
-                          </td>
                           <td className="py-3.5 px-4">
                             <div className="flex items-center gap-3">
                               <div className="h-9 w-9 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center flex-shrink-0">
@@ -386,12 +421,6 @@ export default function ProjectsDirectory({ employees }) {
                                 {managerNameById.get(project.managerId) || project.managerName || project.managerId || "Unassigned"}
                               </span>
                             </div>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <span className="inline-flex items-center gap-1.5 text-sm text-[rgb(var(--text))]">
-                              <Users size={13} className="text-[rgb(var(--muted))]" />
-                              {members.length}
-                            </span>
                           </td>
                           <td className="py-3.5 px-4">
                             <button
@@ -418,7 +447,7 @@ export default function ProjectsDirectory({ employees }) {
                               </button>
                               <button
                                 onClick={() => setDeleteConfirm(project)}
-                                className="p-1.5 rounded-md hover:bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] hover:text-red-500 transition-colors"
+                                className="p-1.5 rounded-md text-red-500 hover:bg-red-500/10 transition-colors"
                                 title="Delete"
                               >
                                 <Trash2 size={15} />
@@ -426,37 +455,6 @@ export default function ProjectsDirectory({ employees }) {
                             </div>
                           </td>
                         </motion.tr>
-
-                        {/* expanded row — team members */}
-                        {isExpanded && (
-                          <tr>
-                            <td colSpan={7} className="bg-[rgb(var(--surface-2)/.25)] px-4 py-4">
-                              <div className="ml-8 max-w-2xl">
-                                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))] mb-2">
-                                  Team Members ({members.length})
-                                </div>
-                                {members.length > 0 ? (
-                                  <div className="space-y-1.5">
-                                    {members.map((emp) => (
-                                      <div key={emp.id} className="flex items-center gap-3 text-sm py-1.5 px-3 rounded-lg hover:bg-[rgb(var(--surface))] transition-colors">
-                                        <div className="h-7 w-7 rounded-full bg-[rgb(var(--primary)/.1)] flex items-center justify-center text-xs font-bold text-[rgb(var(--primary))]">
-                                          {(emp.name || "?")[0]?.toUpperCase()}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                          <span className="font-medium text-[rgb(var(--text))]">{emp.name}</span>
-                                          <span className="ml-2 text-[rgb(var(--muted))] text-xs">{emp.email}</span>
-                                        </div>
-                                        <span className="text-[10px] uppercase font-semibold text-[rgb(var(--muted))]">{emp.role}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <div className="text-xs text-[rgb(var(--muted))] py-2">No employees assigned to this project.</div>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
                       </React.Fragment>
                     );
                   })}
@@ -471,21 +469,21 @@ export default function ProjectsDirectory({ employees }) {
           <span>{filtered.length} project{filtered.length !== 1 ? "s" : ""}{statusFilter !== "all" ? ` (${statusFilter})` : ""}</span>
           <span className="flex items-center gap-1.5">
             <Users size={13} />
-            {managers.length} available manager{managers.length !== 1 ? "s" : ""}
+            {managerOptions.length} available manager{managerOptions.length !== 1 ? "s" : ""}
           </span>
         </div>
       </section>
 
       {/* add / edit modal */}
       <AnimatePresence>
-        {formOpen && (
-          <ModalOverlay onClose={closeForm}>
+            {formOpen && (
+          <ModalOverlay open={formOpen} onClose={closeForm} showClose={false} maxWidth="max-w-xl">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
               transition={{ duration: 0.2 }}
-              className="rt-panel w-full max-w-lg mx-4 overflow-hidden"
+              className="rt-panel w-full max-w-xl mx-4"
             >
               <div className="px-6 py-5 border-b border-[rgb(var(--border))] flex items-center justify-between">
                 <div>
@@ -502,15 +500,17 @@ export default function ProjectsDirectory({ employees }) {
               </div>
 
               <form onSubmit={handleFormSubmit} className="px-6 py-5 space-y-4">
-                {!editingProject && (
-                  <div>
-                    <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-1.5">Project ID</label>
-                    <div className="rt-input w-full bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] cursor-not-allowed px-3 py-2 text-sm font-mono">
-                      {nextProjectId}
-                    </div>
-                    <p className="text-[10px] text-[rgb(var(--muted))] mt-1">Auto-assigned sequential ID</p>
-                  </div>
-                )}
+                <div>
+                  <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-1.5">Project Code</label>
+                  <input
+                    type="text"
+                    value={formCode}
+                    onChange={(e) => setFormCode(e.target.value)}
+                    placeholder="Optional — will derive from name"
+                    className="rt-input w-full font-mono"
+                  />
+                  <p className="text-[10px] text-[rgb(var(--muted))] mt-1">Code must be unique; defaults to a name-based code if left blank.</p>
+                </div>
                 <div>
                   <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-1.5">Project Title *</label>
                   <input
@@ -542,17 +542,23 @@ export default function ProjectsDirectory({ employees }) {
                     className="rt-input w-full"
                   >
                     <option value="">Select a manager…</option>
-                    {managers.map((m) => (
+                    {managerOptions.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name}{m.email ? ` (${m.email})` : ""}
                       </option>
                     ))}
                   </select>
-                  {!managers.length && (
+                  {managersLoading ? (
+                    <p className="mt-1 text-[11px] text-[rgb(var(--muted))]">Loading managers…</p>
+                  ) : null}
+                  {managersError ? (
+                    <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">{managersError}</p>
+                  ) : null}
+                  {!managerOptions.length && !managersLoading && !managersError ? (
                     <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
                       No managers found. Add employees with manager role first.
                     </p>
-                  )}
+                  ) : null}
                 </div>
 
                 {/* active toggle — only in edit mode */}

@@ -37,6 +37,7 @@ function CelestialIcon({ isDark, size = 20 }) {
       {/* ambient glow */}
       <Motion.circle
         cx="12" cy="12"
+        initial={{ r: isDark ? 10 : 11.5, opacity: isDark ? 0.3 : 0.5 }}
         animate={{ r: isDark ? 10 : 11.5, opacity: isDark ? 0.3 : 0.5 }}
         fill={`url(#${gradId}-glow)`}
         transition={{ duration: 0.5, ease: "easeInOut" }}
@@ -45,6 +46,11 @@ function CelestialIcon({ isDark, size = 20 }) {
       {/* main body */}
       <Motion.circle
         cx="12" cy="12"
+        initial={{
+          r: isDark ? 5.5 : 5,
+          fill: isDark ? "rgb(199,210,254)" : "rgb(250,204,21)",
+          stroke: isDark ? "rgb(165,180,252)" : "rgb(234,179,8)",
+        }}
         animate={{
           r: isDark ? 5.5 : 5,
           fill: isDark ? "rgb(199,210,254)" : "rgb(250,204,21)",
@@ -57,6 +63,10 @@ function CelestialIcon({ isDark, size = 20 }) {
       {/* moon crater mask: slides in for dark mode */}
       <Motion.circle
         cx="15" cy="10"
+        initial={{
+          r: isDark ? 4.5 : 0,
+          opacity: isDark ? 1 : 0,
+        }}
         animate={{
           r: isDark ? 4.5 : 0,
           opacity: isDark ? 1 : 0,
@@ -76,6 +86,14 @@ function CelestialIcon({ isDark, size = 20 }) {
           <Motion.line
             key={angle}
             x1={12} y1={12} x2={12} y2={12}
+            initial={{
+              x1: isDark ? 12 : x1,
+              y1: isDark ? 12 : y1,
+              x2: isDark ? 12 : x2,
+              y2: isDark ? 12 : y2,
+              opacity: isDark ? 0 : 0.9,
+              stroke: isDark ? "rgb(165,180,252)" : "rgb(234,179,8)",
+            }}
             animate={{
               x1: isDark ? 12 : x1,
               y1: isDark ? 12 : y1,
@@ -107,6 +125,10 @@ function CelestialIcon({ isDark, size = 20 }) {
           cx={star.cx}
           cy={star.cy}
           fill="currentColor"
+          initial={{
+            r: isDark ? star.r : 0,
+            opacity: isDark ? 0.6 : 0,
+          }}
           animate={{
             r: isDark ? star.r : 0,
             opacity: isDark ? 0.6 : 0,

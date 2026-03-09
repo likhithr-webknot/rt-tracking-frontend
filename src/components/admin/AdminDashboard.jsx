@@ -296,7 +296,9 @@ function AnimatedCounter({ value, decimals = 0, duration = 1.2, prefix = "", suf
 function RadialGauge({ value, size = 88, strokeWidth = 7, color = "#2563eb", trackColor, label }) {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-20px" });
-  const radius = (size - strokeWidth) / 2;
+  const safeSize = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 88;
+  const safeStroke = Number.isFinite(Number(strokeWidth)) && Number(strokeWidth) > 0 ? Number(strokeWidth) : 7;
+  const radius = Math.max(1, (safeSize - safeStroke) / 2);
   const circumference = 2 * Math.PI * radius;
   const springPct = useSpring(0, { duration: 1400, bounce: 0 });
   const dashOffset = useTransform(springPct, (v) => circumference - (v / 100) * circumference);
@@ -309,12 +311,12 @@ function RadialGauge({ value, size = 88, strokeWidth = 7, color = "#2563eb", tra
   const resolvedTrack = trackColor || "rgb(var(--border))";
 
   return (
-    <div ref={ref} className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={resolvedTrack} strokeWidth={strokeWidth} />
+    <div ref={ref} className="relative inline-flex items-center justify-center" style={{ width: safeSize, height: safeSize }}>
+      <svg width={safeSize} height={safeSize} className="-rotate-90">
+        <circle cx={safeSize / 2} cy={safeSize / 2} r={radius} fill="none" stroke={resolvedTrack} strokeWidth={safeStroke} />
         <motion.circle
-          cx={size / 2} cy={size / 2} r={radius} fill="none"
-          stroke={color} strokeWidth={strokeWidth} strokeLinecap="round"
+          cx={safeSize / 2} cy={safeSize / 2} r={radius} fill="none"
+          stroke={color} strokeWidth={safeStroke} strokeLinecap="round"
           strokeDasharray={circumference}
           style={{ strokeDashoffset: dashOffset }}
         />
@@ -849,7 +851,8 @@ export default function AdminDashboard({
     const deptRows = departmentBreakdown.filter((d) => d.group && d.group !== "Unassigned");
     if (deptRows.length > 0) {
       for (const d of deptRows.slice(0, 8)) {
-        base.push({ metric: d.group, employees: d.headcount || 0 });
+        const employees = Number.isFinite(d.headcount) ? d.headcount : 0;
+        base.push({ metric: d.group, employees });
       }
     } else {
       base.push({ metric: "No Departments", employees: 0 });
@@ -858,13 +861,37 @@ export default function AdminDashboard({
     return base.map((d) => ({ ...d, fullMark: maxVal }));
   }, [stats, departmentBreakdown]);
 
+  const hasRadarData = useMemo(
+    () => orgHealthRadarData.some((d) => Number.isFinite(d.employees)),
+    [orgHealthRadarData]
+  );
+
+  const safeAbility6m = useMemo(
+    () => (Array.isArray(ability6m) ? ability6m.map((row) => ({
+      month: String(row?.month ?? ""),
+      avg: Number.isFinite(Number(row?.avg)) ? Number(row.avg) : 0,
+    })) : []),
+    [ability6m]
+  );
+
   const cycleComparisonData = useMemo(() => {
     const entries = Object.entries(submissionCycleMap || {}).sort(([a], [b]) => a.localeCompare(b));
-    return entries.slice(-6).map(([key, entry]) => {
-      const total = entry?.totalEligible || entry?.total || employees.length || 0;
-      const submitted = Array.isArray(entry?.submittedIds) ? entry.submittedIds.length : 0;
-      return { cycle: key, submitted, pending: Math.max(0, total - submitted), rate: total > 0 ? Math.round((submitted / total) * 100) : 0 };
-    });
+    return entries
+      .slice(-6)
+      .map(([key, entry]) => {
+        const totalRaw = entry?.totalEligible ?? entry?.total ?? employees.length ?? 0;
+        const total = Number.isFinite(Number(totalRaw)) ? Number(totalRaw) : 0;
+        const submittedRaw = Array.isArray(entry?.submittedIds)
+          ? entry.submittedIds.length
+          : (Number.isFinite(Number(entry?.submitted)) ? Number(entry.submitted) : 0);
+        const submitted = Number.isFinite(submittedRaw) ? submittedRaw : 0;
+        const pending = Math.max(0, total - submitted);
+        const rate = total > 0 && Number.isFinite(total)
+          ? Math.max(0, Math.min(100, Math.round((submitted / total) * 100)))
+          : 0;
+        return { cycle: key || "—", submitted, pending, rate };
+      })
+      .filter((row) => Number.isFinite(row.submitted) && Number.isFinite(row.pending) && Number.isFinite(row.rate));
   }, [submissionCycleMap, employees.length]);
 
   /* ── performance distribution (histogram) ── */
@@ -1197,12 +1224,12 @@ export default function AdminDashboard({
           </div>
           <div className="mt-4 w-full" style={{ height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={ability6m} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+              <AreaChart data={safeAbility6m} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
                 <XAxis dataKey="month" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                 <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} domain={[0, 5]} />
                 <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
-                <Area type="monotone" dataKey="avg" stroke="#2563eb" strokeWidth={2.5} fill="#2563eb" fillOpacity={0.1} dot={{ r: 4, strokeWidth: 2, fill: "rgb(var(--surface))", stroke: "#2563eb" }} activeDot={{ r: 6, strokeWidth: 2, fill: "#2563eb" }} animationDuration={1200} />
+                <Area type="monotone" dataKey="avg" stroke="#2563eb" strokeWidth={2.5} fill="#2563eb" fillOpacity={0.1} dot={false} activeDot={false} animationDuration={1200} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -1217,15 +1244,19 @@ export default function AdminDashboard({
             </div>
           </div>
           <div className="mt-4 w-full" style={{ height: 320 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <RadarChart outerRadius="65%" data={orgHealthRadarData}>
-                <PolarGrid stroke="rgb(var(--border))" strokeDasharray="3 3" />
-                <PolarAngleAxis dataKey="metric" tick={{ fontSize: 9, fill: "rgb(var(--muted))" }} />
-                <PolarRadiusAxis angle={90} domain={[0, 'dataMax']} tick={{ fontSize: 9, fill: "rgb(var(--muted))" }} axisLine={false} />
-                <Radar name="Employees" dataKey="employees" stroke="#7c3aed" fill="#7c3aed" fillOpacity={0.12} strokeWidth={2} dot={{ r: 3, fill: "#7c3aed" }} animationDuration={1200} />
-                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(value) => [`${value} employee${value !== 1 ? 's' : ''}`, 'Headcount']} />
-              </RadarChart>
-            </ResponsiveContainer>
+            {hasRadarData ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <RadarChart outerRadius="65%" data={orgHealthRadarData}>
+                  <PolarGrid stroke="rgb(var(--border))" strokeDasharray="3 3" />
+                  <PolarAngleAxis dataKey="metric" tick={{ fontSize: 9, fill: "rgb(var(--muted))" }} />
+                  <PolarRadiusAxis angle={90} domain={[0, 'dataMax']} tick={{ fontSize: 9, fill: "rgb(var(--muted))" }} axisLine={false} />
+                  <Radar name="Employees" dataKey="employees" stroke="#7c3aed" fill="#7c3aed" fillOpacity={0.12} strokeWidth={2} dot={false} animationDuration={1200} />
+                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(value) => [`${value} employee${value !== 1 ? 's' : ''}`, 'Headcount']} />
+                </RadarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full grid place-items-center text-[rgb(var(--muted))] text-sm">No department data yet.</div>
+            )}
           </div>
         </div>
       </section>
@@ -1271,7 +1302,7 @@ export default function AdminDashboard({
                   <XAxis dataKey="cycle" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
                   <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" />
                   <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} formatter={(value) => [`${value}%`, "Completion Rate"]} />
-                  <Line type="monotone" dataKey="rate" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4, strokeWidth: 2, fill: "rgb(var(--surface))", stroke: "#2563eb" }} activeDot={{ r: 6, strokeWidth: 2, fill: "#2563eb" }} animationDuration={1200} />
+                  <Line type="monotone" dataKey="rate" stroke="#2563eb" strokeWidth={2.5} dot={false} activeDot={false} animationDuration={1200} />
                 </LineChart>
               </ResponsiveContainer>
             </div>

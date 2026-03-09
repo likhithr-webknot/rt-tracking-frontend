@@ -32,15 +32,20 @@ function normalizeCursorToken(value) {
 
 function normalizePage(data) {
   const root = data && typeof data === "object" ? data : {};
-  const items = Array.isArray(root.items)
-    ? root.items
-    : Array.isArray(root.data)
-      ? root.data
-      : Array.isArray(root.results)
-        ? root.results
-        : Array.isArray(data)
-          ? data
-          : [];
+  const items =
+    Array.isArray(root.items)
+      ? root.items
+      : Array.isArray(root.data)
+        ? root.data
+        : Array.isArray(root.results)
+          ? root.results
+          : Array.isArray(root.streams)
+            ? root.streams
+            : Array.isArray(root.bands)
+              ? root.bands
+              : Array.isArray(data)
+                ? data
+                : [];
   const nextCursor = normalizeCursorToken(root.nextCursor ?? root.next ?? null);
   return { items, nextCursor };
 }
@@ -50,11 +55,13 @@ function normalizeDirectoryRows(data) {
   return arr
     .map((raw) => {
       const obj = raw && typeof raw === "object" ? raw : {};
-      const code = String(obj.code ?? obj.id ?? "").trim();
+      const code = [obj.code, obj.stream, obj.band, obj.name]
+        .map((v) => String(v ?? "").trim())
+        .find((v) => v);
       if (!code) return null;
       return {
         code,
-        label: String(obj.label ?? obj.name ?? code).trim() || code,
+        label: String(obj.label ?? obj.name ?? obj.stream ?? obj.band ?? code).trim() || code,
         active: Boolean(obj.active ?? true),
         sortOrder: Number.isFinite(Number(obj.sortOrder)) ? Number(obj.sortOrder) : null,
         createdAt: obj.createdAt ? String(obj.createdAt) : null,
