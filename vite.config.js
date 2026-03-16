@@ -39,7 +39,9 @@ export default defineConfig(({ mode }) => {
 
     /* ── Development server ─────────────────────────── */
     server: {
+      port: 3000,
       proxy: {
+        '/api':                 { ...base },
         '/submission-window':   { ...base },
         '/employees':           { ...base },
         '/kpi-definitions':     { ...base },

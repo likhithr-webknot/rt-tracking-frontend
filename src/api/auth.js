@@ -252,18 +252,7 @@ export function getAuthHeader() {
   const type = auth.tokenType || "Bearer";
   return `${type} ${auth.accessToken}`;
 }
-export async function login({ email, password }) {
-  const res = await fetch(buildApiUrl("/auth/login"), {
-    method: "POST",
-    credentials: "include",
-    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ email, password }),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  const data = await res.json().catch(() => ({}));
-  if (!data || typeof data !== "object") throw new Error("Login failed.");
-  return data;
-}
+
 export async function fetchMe({ signal } = {}) {
   const auth = getAuthHeader();
   const res = await fetch(buildApiUrl("/auth/me"), {
@@ -274,45 +263,4 @@ export async function fetchMe({ signal } = {}) {
   if (res.status === 401) return null;
   if (!res.ok) throw new Error(await readError(res));
   return res.json().catch(() => ({}));
-}
-export async function forgotPassword({ email }) {
-  const res = await fetch(buildApiUrl("/auth/forgot-password"), {
-    method: "POST",
-    credentials: "include",
-    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ email }),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
-}
-
-export async function resetPassword({ token, newPassword }) {
-  const res = await fetch(buildApiUrl("/auth/reset-password"), {
-    method: "POST",
-    credentials: "include",
-    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ token, newPassword }),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json();
-  return res.text().catch(() => "");
-}
-
-export async function adminResetPassword({ requestId, adminCode, newPassword }, { signal } = {}) {
-  const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/auth/admin/reset-password"), {
-    method: "POST",
-    signal,
-    credentials: "include",
-    headers: withCsrfHeaders({
-      "Content-Type": "application/json",
-      ...(auth ? { Authorization: auth } : {}),
-    }),
-    body: JSON.stringify({ requestId, adminCode, newPassword }),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json();
-  return res.text().catch(() => "");
 }

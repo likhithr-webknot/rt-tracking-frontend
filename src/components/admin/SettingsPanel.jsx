@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Calendar, ChevronDown, ChevronRight, Clock, Info, Play, RotateCcw, Save, Search, Shield, Sliders, Square, UserCheck, Users, Wrench } from "lucide-react";
 import Toast from "../shared/Toast.jsx";
-import { adminResetPassword } from "../../api/auth.js";
 import {
   APP_SETTINGS_DEFAULTS,
   getAppSettings,
@@ -228,13 +227,6 @@ function WindowCard({ icon: Icon, iconColor, title, win, setWin, isOpen, busy, o
 export default function SettingsPanel() {
   const [settings, setSettings] = useState(() => getAppSettings());
   const [toast, setToast] = useState(null);
-  const [resetDraft, setResetDraft] = useState({
-    requestId: "",
-    adminCode: "",
-    newPassword: "",
-    confirmPassword: "",
-  });
-  const [resetBusy, setResetBusy] = useState(false);
   const [hasUnsaved, setHasUnsaved] = useState(false);
 
   /* ── Submission Window state ── */
@@ -432,38 +424,6 @@ export default function SettingsPanel() {
     setSettings(next);
     setHasUnsaved(false);
     setToast({ title: "Reset complete", message: "All settings restored to defaults." });
-  }
-
-  async function onAdminPasswordReset(e) {
-    e.preventDefault();
-    const requestId = String(resetDraft.requestId || "").trim();
-    const adminCode = String(resetDraft.adminCode || "").trim();
-    const newPassword = String(resetDraft.newPassword || "");
-    const confirmPassword = String(resetDraft.confirmPassword || "");
-
-    if (!requestId || !adminCode || !newPassword || !confirmPassword) {
-      setToast({ title: "Missing fields", message: "Fill all reset fields." });
-      return;
-    }
-    if (newPassword.length < 8) {
-      setToast({ title: "Weak password", message: "Password must be at least 8 characters." });
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setToast({ title: "Mismatch", message: "New password and confirm password must match." });
-      return;
-    }
-
-    setResetBusy(true);
-    try {
-      await adminResetPassword({ requestId, adminCode, newPassword });
-      setToast({ title: "Password reset complete", message: "Employee password updated successfully." });
-      setResetDraft({ requestId: "", adminCode: "", newPassword: "", confirmPassword: "" });
-    } catch (err) {
-      setToast({ title: "Reset failed", message: err?.message || "Please try again." });
-    } finally {
-      setResetBusy(false);
-    }
   }
 
   return (
@@ -772,71 +732,6 @@ export default function SettingsPanel() {
           </button>
         </div>
       </div>
-
-      {/* ── Security: Admin Password Reset ── */}
-      <SectionCard icon={Shield} title="Security" description="Admin password reset approval">
-        <p className="text-sm text-[rgb(var(--muted))]">
-          Enter the reset request ID, admin verification code, and the approved new password to complete an employee password reset.
-        </p>
-
-        <form onSubmit={onAdminPasswordReset} className="space-y-5 pt-2">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div>
-              <FieldLabel>Reset Request ID</FieldLabel>
-              <input
-                value={resetDraft.requestId}
-                onChange={(e) => setResetDraft((prev) => ({ ...prev, requestId: e.target.value }))}
-                className="rt-input text-sm font-mono"
-                placeholder="Paste request ID"
-              />
-            </div>
-
-            <div>
-              <FieldLabel>Admin Verification Code</FieldLabel>
-              <input
-                value={resetDraft.adminCode}
-                onChange={(e) => setResetDraft((prev) => ({ ...prev, adminCode: e.target.value }))}
-                className="rt-input text-sm font-mono"
-                placeholder="6-digit code"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div>
-              <FieldLabel hint="Minimum 8 characters">New Password</FieldLabel>
-              <input
-                type="password"
-                value={resetDraft.newPassword}
-                onChange={(e) => setResetDraft((prev) => ({ ...prev, newPassword: e.target.value }))}
-                className="rt-input text-sm"
-                placeholder="Enter new password"
-              />
-            </div>
-
-            <div>
-              <FieldLabel>Confirm Password</FieldLabel>
-              <input
-                type="password"
-                value={resetDraft.confirmPassword}
-                onChange={(e) => setResetDraft((prev) => ({ ...prev, confirmPassword: e.target.value }))}
-                className="rt-input text-sm"
-                placeholder="Repeat new password"
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center justify-end">
-            <button
-              type="submit"
-              disabled={resetBusy}
-              className={["rt-btn-primary text-sm", resetBusy ? " opacity-60 cursor-not-allowed" : ""].join("")}
-            >
-              <Shield size={14} /> {resetBusy ? "Resetting\u2026" : "Approve & Reset Password"}
-            </button>
-          </div>
-        </form>
-      </SectionCard>
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </div>

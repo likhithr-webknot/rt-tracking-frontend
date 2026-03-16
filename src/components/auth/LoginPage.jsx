@@ -1,8 +1,6 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useRef } from "react";
 import { motion as Motion, AnimatePresence } from "framer-motion";
 import {
-  Eye,
-  EyeOff,
   Headset,
   Copy,
   Check,
@@ -15,27 +13,27 @@ import {
   TrendingUp,
   UserCircle2,
 } from "lucide-react";
-import { fetchMe, getAuth, login, setAuth, forgotPassword } from "../../api/auth.js";
-import { fetchPortalAdmin, fetchPortalEmployee, fetchPortalManager } from "../../api/portal.js";
+
 import Toast from "../shared/Toast.jsx";
 
-export default function LoginPage({ onLoginSuccess }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+function GoogleIcon() {
+  return (
+    <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-5 h-5">
+      <g>
+        <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
+        <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+        <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
+        <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
+        <path fill="none" d="M0 0h48v48H0z"></path>
+      </g>
+    </svg>
+  );
+}
+
+
+export default function LoginPage() {
   const [showAdminModal, setShowAdminModal] = useState(false);
-  const [showResetModal, setShowResetModal] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState("");
-  const [submitSuccess, setSubmitSuccess] = useState("");
-
-  const [resetEmail, setResetEmail] = useState("");
-  const [resetRequestId, setResetRequestId] = useState("");
-  const [resetLoading, setResetLoading] = useState(false);
-  const [resetError, setResetError] = useState("");
-  const [resetSuccess, setResetSuccess] = useState("");
-
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
   const showToast = useCallback((next) => {
@@ -43,11 +41,6 @@ export default function LoginPage({ onLoginSuccess }) {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3000);
   }, []);
-
-  useEffect(() => { if (submitError) showToast({ title: "Login Failed", message: submitError, tone: "error" }); }, [submitError, showToast]);
-  useEffect(() => { if (resetError) showToast({ title: "Reset Failed", message: resetError, tone: "error" }); }, [resetError, showToast]);
-  useEffect(() => { if (submitSuccess) showToast({ title: "Success", message: submitSuccess, tone: "success" }); }, [submitSuccess, showToast]);
-  useEffect(() => { if (resetSuccess) showToast({ title: "Reset Sent", message: resetSuccess, tone: "success" }); }, [resetSuccess, showToast]);
 
 
   const hrEmail = "hr@webknot.in";
@@ -172,9 +165,6 @@ export default function LoginPage({ onLoginSuccess }) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const canSubmit = email.trim().length >= 5 && password.length >= 8;
-  const canRequestReset = resetEmail.trim().toLowerCase().endsWith("@webknot.in");
-
   return (
     <div className="rt-login-shell relative w-full grid grid-cols-1 xl:grid-cols-[minmax(360px,480px)_1fr] text-[rgb(var(--text))] bg-[rgb(var(--bg))]">
       <section className="rt-login-panel relative z-20 grid grid-rows-[auto_1fr_auto] border-r border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-4 py-4 sm:px-8 sm:py-6 lg:px-10 lg:py-8">
@@ -208,173 +198,27 @@ export default function LoginPage({ onLoginSuccess }) {
             <span className="block text-[rgb(var(--muted))]">performance workspace</span>
           </h1>
           <p className="rt-login-subcopy mt-2 sm:mt-3 text-sm text-[rgb(var(--muted))] leading-relaxed">
-            Structured access for employee submissions, manager evaluations, and admin review workflows.
+            Single Sign-On via Google. Use your corporate account to access employee submissions, manager evaluations, and admin workflows.
           </p>
 
-          <div className="rt-login-micro mt-5 sm:mt-6 grid grid-cols-3 gap-3">
-            <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5 text-center">
-              <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-[rgb(var(--muted))]">Cycles</div>
-              <div className="mt-1 text-sm font-semibold">2 / Year</div>
-            </div>
-            <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5 text-center">
-              <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-[rgb(var(--muted))]">Reviews</div>
-              <div className="mt-1 text-sm font-semibold">Monthly</div>
-            </div>
-            <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5 text-center">
-              <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-[rgb(var(--muted))]">Security</div>
-              <div className="mt-1 text-sm font-semibold">SSO Ready</div>
-            </div>
-          </div>
-
-          <div className="relative mt-5 sm:mt-6">
-            <Motion.form
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, ease: "easeOut" }}
-              className="rt-login-form relative rt-panel rounded-lg p-4 sm:p-5 space-y-4 sm:space-y-5"
-              onSubmit={async (e) => {
-              e.preventDefault();
-              if (!canSubmit || submitting) return;
-              setSubmitError("");
-              setSubmitSuccess("");
-              setSubmitting(true);
-              try {
-                const emailValue = email.trim().toLowerCase();
-                const authRes = await login({ email: emailValue, password });
-                setAuth({ ...authRes, email: emailValue });
-
-                const inferPortalKind = (obj) => {
-                  const rawPortal = String(obj?.portal ?? "").trim().toLowerCase();
-                  const rawRole = String(obj?.role ?? obj?.empRole ?? obj?.userRole ?? "").trim().toLowerCase();
-                  if (rawPortal.includes("admin") || rawRole === "admin") return "admin";
-                  if (rawPortal.includes("manager") || rawRole === "manager") return "manager";
-                  return "employee";
-                };
-                const me = await fetchMe().catch(() => null);
-                if (me) {
-                  setAuth({ ...me, email: emailValue });
-                  onLoginSuccess?.(getAuth() || me);
-                  return;
-                }
-
-                const kind = inferPortalKind(authRes);
-                const fetchPortal =
-                  kind === "admin"
-                    ? fetchPortalAdmin
-                    : kind === "manager"
-                      ? fetchPortalManager
-                      : fetchPortalEmployee;
-
-                let portal;
-                try {
-                  portal = await fetchPortal();
-                } catch (err) {
-                  if (err?.status === 403) {
-                    throw new Error("Your account is not authorized for this portal.");
-                  }
-                  throw err;
-                }
-
-                const root =
-                  portal?.data && typeof portal.data === "object" && !Array.isArray(portal.data)
-                    ? portal.data
-                    : portal;
-                const account =
-                  root?.account ||
-                  root?.employee ||
-                  root?.me ||
-                  root?.user ||
-                  root?.profile ||
-                  null;
-
-                setAuth({
-                  ...(account && typeof account === "object" ? account : {}),
-                  email: emailValue,
-                  portal: kind,
-                  role:
-                    (account && (account.role || account.empRole || account.userRole)) ||
-                    authRes?.role ||
-                    authRes?.empRole ||
-                    (kind === "admin" ? "Admin" : kind === "manager" ? "Manager" : "Employee"),
-                });
-                const finalAuth = getAuth();
-                onLoginSuccess?.(
-                  finalAuth || {
-                    email: emailValue,
-                    portal: kind,
-                    role: kind === "admin" ? "Admin" : kind === "manager" ? "Manager" : "Employee",
-                  }
-                );
-              } catch (err) {
-                const status = err?.status;
-                if (status === 401) {
-                  setSubmitError("Invalid credentials or session not established.");
-                } else {
-                  setSubmitError(err?.message || "Login failed. Please try again.");
-                }
-              } finally {
-                setSubmitting(false);
-              }
-              }}
-            >
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-[rgb(var(--muted))]">Corporate Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="rt-input"
-                placeholder="name@webknot.in"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-[rgb(var(--muted))]">Password</label>
-              <div className="relative">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="rt-input pr-12 text-base"
-                  placeholder="••••••••"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))] transition-colors"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  title={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-
-            <button
-              disabled={!canSubmit || submitting}
-              className="w-full rt-btn-primary disabled:opacity-40 transition-all"
-            >
-              {submitting ? "Signing in…" : "Sign In"}
-            </button>
-
-            <div className="flex items-center justify-between gap-2 pt-1">
-              <div className="text-xs text-[rgb(var(--muted))]">Use corporate credentials</div>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowResetModal(true);
-                  setResetError("");
-                  setResetSuccess("");
-                  setResetRequestId("");
-                  setResetEmail(email.trim() || "");
-                }}
-                className="text-xs font-medium text-[rgb(var(--primary))] hover:text-[rgb(var(--text))] transition-colors"
+          <div className="relative mt-8">
+             <Motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, ease: "easeOut" }}
+                className="rt-login-form relative"
               >
-                Forgot password?
-              </button>
-            </div>
-
-            </Motion.form>
+                <a
+                  href="/api/v1/google-signin"
+                  className="w-full rt-btn-primary flex items-center justify-center gap-3 transition-all text-base"
+                >
+                  <GoogleIcon />
+                  Sign in with Google
+                </a>
+                <p className="mt-4 text-center text-xs text-[rgb(var(--muted))]">
+                  You will be redirected to Google for authentication.
+                </p>
+            </Motion.div>
           </div>
         </div>
 
@@ -561,100 +405,6 @@ export default function LoginPage({ onLoginSuccess }) {
               >
                 Close
               </button>
-            </Motion.div>
-          </div>
-        ) : null}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {showResetModal ? (
-          <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
-            <Motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowResetModal(false)}
-              className="absolute inset-0 bg-black/80 backdrop-blur-md"
-            />
-            <Motion.div
-              initial={{ scale: 0.96, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.96, opacity: 0 }}
-              className="relative w-full max-w-lg rounded-lg rt-panel p-5 sm:p-6 my-6 max-h-[90vh] overflow-y-auto"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-xl font-bold tracking-tight">Reset Password</h3>
-                  <p className="mt-1.5 text-sm text-[rgb(var(--muted))]">
-                    Submit a reset request. A verification code is sent to admins for approval.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowResetModal(false)}
-                  className="rounded-md p-1.5 text-[rgb(var(--muted))] hover:text-[rgb(var(--text))] hover:bg-[rgb(var(--surface-2))] transition"
-                  aria-label="Close"
-                  title="Close"
-                >
-                  ×
-                </button>
-              </div>
-
-              <div className="mt-5 space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-[rgb(var(--muted))]">Email</label>
-                  <input
-                    type="email"
-                    value={resetEmail}
-                    onChange={(e) => setResetEmail(e.target.value)}
-                    className="rt-input py-2.5 px-3 text-sm"
-                    placeholder="name@webknot.in"
-                  />
-                </div>
-
-                {resetRequestId ? (
-                  <div className="text-xs text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-md p-3">
-                    Request ID: <span className="font-mono">{resetRequestId}</span>
-                  </div>
-                ) : null}
-
-                {resetSuccess ? (
-                  <div className="text-sm text-emerald-700 dark:text-emerald-200 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-md p-3">
-                    {resetSuccess}
-                  </div>
-                ) : null}
-
-                <button
-                  type="button"
-                  disabled={!canRequestReset || resetLoading}
-                  onClick={async () => {
-                    if (!canRequestReset || resetLoading) return;
-                    setResetError("");
-                    setResetSuccess("");
-                    setResetRequestId("");
-                    setResetLoading(true);
-                    try {
-                      const res = await forgotPassword({ email: resetEmail.trim() });
-                      const requestId = String(res?.requestId ?? "").trim();
-                      if (requestId) setResetRequestId(requestId);
-                      setResetSuccess(
-                        String(res?.message || "").trim() ||
-                        "Reset request submitted. Please contact admin for approval."
-                      );
-                      setSubmitError("");
-                      setSubmitSuccess("Reset request submitted. Admin approval is required.");
-                      setEmail(resetEmail.trim());
-                    } catch (err) {
-                      setResetError(err?.message || "Password reset request failed.");
-                    } finally {
-                      setResetLoading(false);
-                    }
-                  }}
-                  className="w-full rt-btn-primary disabled:opacity-40 transition-all"
-                >
-                  {resetLoading ? "Submitting…" : "Send Reset Request"}
-                </button>
-              </div>
             </Motion.div>
           </div>
         ) : null}
