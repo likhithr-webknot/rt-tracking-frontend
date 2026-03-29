@@ -1,8 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App.jsx";
+import RootRouter from "./RootRouter.jsx";
 import "./index.css";
-import AppErrorBoundary from "./components/shared/AppErrorBoundary.jsx";
 
 function applyInitialTheme() {
     try {
@@ -14,10 +13,4 @@ function applyInitialTheme() {
 }
 applyInitialTheme();
 
-ReactDOM.createRoot(document.getElementById("root")).render(
-    <React.StrictMode>
-        <AppErrorBoundary>
-            <App />
-        </AppErrorBoundary>
-    </React.StrictMode>
-);
+ReactDOM.createRoot(document.getElementById("root")).render(<RootRouter />);

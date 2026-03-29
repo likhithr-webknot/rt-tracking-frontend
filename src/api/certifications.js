@@ -1,22 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl, withCsrfHeaders } from "./http.js";
-
-async function readError(res) {
-  const text = await res.text().catch(() => "");
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.message) return String(parsed.message);
-    if (parsed?.error) return String(parsed.error);
-  } catch { void 0; }
-  return text || `Request failed: ${res.status} ${res.statusText}`;
-}
-
-async function toHttpError(res) {
-  const message = await readError(res);
-  const err = new Error(message);
-  err.status = res.status;
-  return err;
-}
+import { getApiBaseUrl, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
 
 function toNullableBoolean(value) {
   if (value == null) return null;
@@ -28,16 +11,6 @@ function toNullableBoolean(value) {
   if (s.includes("inactive") || s.includes("disabled")) return false;
   if (s.includes("active") || s.includes("enabled") || s.includes("listed")) return true;
   return null;
-}
-
-function withQueryParams({ activeOnly = null, limit = null, cursor = null } = {}) {
-  const qs = new URLSearchParams();
-  const active = toNullableBoolean(activeOnly);
-  if (active != null) qs.set("activeOnly", String(active));
-  else if (activeOnly === false) qs.set("activeOnly", "false");
-  if (limit != null) qs.set("limit", String(limit));
-  if (cursor != null && String(cursor).trim()) qs.set("cursor", String(cursor).trim());
-  return qs.toString();
 }
 
 function extractCertificationName(raw) {
@@ -115,40 +88,111 @@ export function normalizeCertifications(data) {
     .filter(Boolean);
 }
 
-export async function fetchCertifications({ activeOnly = null, limit = null, cursor = null, signal } = {}) {
-  const auth = getAuthHeader();
-  const query = withQueryParams({ activeOnly, limit, cursor });
+function extractItemsArrayFromResponse(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (!raw || typeof raw !== "object") return [];
 
-  const path = query ? `/certifications/list?${query}` : "/certifications/list";
-  const res = await fetch(buildApiUrl(path), {
+  const root = raw;
+  const nested = root?.data && typeof root.data === "object" ? root.data : null;
+
+  const candidates = [
+    root?.items,
+    root?.results,
+    root?.content,
+    root?.list,
+    root?.certifications,
+    nested?.data,
+    nested?.items,
+    nested?.results,
+    nested?.content,
+    nested?.list,
+    nested?.certifications,
+  ];
+
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+
+  // Some backends wrap list directly under data without further nesting.
+  if (Array.isArray(root?.data)) return root.data;
+
+  return [];
+}
+
+function buildCertificationsUrl(path) {
+  const base = getApiBaseUrl();
+  const normalizedPath = String(path || "").startsWith("/") ? String(path) : `/${path}`;
+  if (!base) return normalizedPath;
+
+  // Some backend endpoints are mounted at `/certifications` (no `/api/v1`),
+  // while our app setting may include `/api/v1`. Strip `/api/v1` when present.
+  const suffix = "/api/v1";
+  const baseNoApiV1 = base.endsWith(suffix) ? base.slice(0, -suffix.length) : base;
+  return `${baseNoApiV1}${normalizedPath}`;
+}
+
+export async function fetchCertifications({ limit = null, cursor = null, signal } = {}) {
+  const auth = getAuthHeader();
+
+  // Your backend mapping uses: GET /certifications?limit={limit}&offset={offset}
+  // The UI pager passes `cursor`, so we interpret cursor as `offset`.
+  const fallbackLimit = 20;
+  const resolvedLimit = limit != null ? Number.parseInt(String(limit), 10) : fallbackLimit;
+  const safeLimit = Number.isFinite(resolvedLimit) && resolvedLimit > 0 ? resolvedLimit : fallbackLimit;
+  const resolvedOffset = cursor != null ? Number.parseInt(String(cursor), 10) : 0;
+  const safeOffset = Number.isFinite(resolvedOffset) && resolvedOffset >= 0 ? resolvedOffset : 0;
+
+  const suffix = `?limit=${encodeURIComponent(String(safeLimit))}&offset=${encodeURIComponent(String(safeOffset))}`;
+  const res = await fetch(buildCertificationsUrl(`/certifications${suffix}`), {
+    signal,
+    credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+
+  if (!res.ok) {
+    throw await toHttpError(res);
+  }
+
+  const raw = await res.json().catch(() => ({}));
+  const items = extractItemsArrayFromResponse(raw);
+  const nextCursor = items.length === safeLimit ? String(safeOffset + safeLimit) : null;
+  return { items, nextCursor };
+}
+
+export async function fetchCertification(id, { signal } = {}) {
+  const safeId = encodeURIComponent(String(id ?? "").trim());
+  if (!safeId) throw new Error("Certification id is required.");
+
+  const auth = getAuthHeader();
+  const res = await fetch(buildCertificationsUrl(`/certifications/get/${safeId}`), {
     signal,
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
   });
   if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
+  return parseResponse(res, {});
 }
 
 export async function addCertification({ name, listed = true }, { signal } = {}) {
   const auth = getAuthHeader();
   const active = toNullableBoolean(listed);
-  const res = await fetch(buildApiUrl("/certifications/add"), {
+  const headers = withCsrfHeaders({
+    "Content-Type": "application/json",
+    ...(auth ? { Authorization: auth } : {}),
+  });
+  const body = JSON.stringify({
+    name: String(name || "").trim(),
+    ...(active != null ? { active } : {}),
+  });
+  const res = await fetch(buildCertificationsUrl("/certifications/add-certification"), {
     method: "POST",
     signal,
     credentials: "include",
-    headers: withCsrfHeaders({
-      "Content-Type": "application/json",
-      ...(auth ? { Authorization: auth } : {}),
-    }),
-    body: JSON.stringify({
-      name: String(name || "").trim(),
-      ...(active != null ? { active } : {}),
-    }),
+    headers,
+    body,
   });
   if (!res.ok) throw await toHttpError(res);
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json().catch(() => ({}));
-  return res.text().catch(() => "");
+  return parseResponse(res, "");
 }
 
 export async function updateCertification(id, { name, listed = true }, { signal } = {}) {
@@ -174,51 +218,27 @@ export async function updateCertification(id, { name, listed = true }, { signal 
     ...(auth ? { Authorization: auth } : {}),
   });
 
-  const methods = ["PUT", "PATCH", "POST"];
-  const endpoints = [
-    `/certifications/update/${safeId}`,
-    `/certifications/${safeId}`,
-    `/certifications/edit/${safeId}`,
-    `/certifications/set-active/${safeId}`,
-    `/certifications/set-listed/${safeId}`,
-    `/certifications/${safeId}/active`,
-  ];
-  let lastErr = null;
-  for (const endpoint of endpoints) {
-    for (const method of methods) {
-      const res = await fetch(buildApiUrl(endpoint), {
-        method,
-        signal,
-        credentials: "include",
-        headers,
-        body,
-      });
-      if (res.ok) {
-        const contentType = res.headers.get("content-type") || "";
-        if (contentType.includes("application/json")) return res.json().catch(() => ({}));
-        return res.text().catch(() => "");
-      }
-      const err = await toHttpError(res);
-      if (res.status === 404 || res.status === 405) {
-        lastErr = err;
-        continue;
-      }
-      throw err;
-    }
-  }
+  const res = await fetch(buildCertificationsUrl(`/certifications/update/${safeId}`), {
+    method: "PUT",
+    signal,
+    credentials: "include",
+    headers,
+    body,
+  });
+  if (!res.ok) throw await toHttpError(res);
+  return parseResponse(res, "");
 }
 
 export async function deleteCertification(id, { signal } = {}) {
   const safeId = encodeURIComponent(String(id));
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(`/certifications/delete/${safeId}`), {
+  const headers = withCsrfHeaders(auth ? { Authorization: auth } : {});
+  const res = await fetch(buildCertificationsUrl(`/certifications/delete/${safeId}`), {
     method: "DELETE",
     signal,
     credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
+    headers,
   });
   if (!res.ok) throw await toHttpError(res);
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json().catch(() => ({}));
-  return res.text().catch(() => "");
+  return parseResponse(res, "");
 }

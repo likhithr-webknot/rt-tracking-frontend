@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { setAuth, fetchMe } from "../api/auth.js";
+import {
+  setAuth,
+  fetchMe,
+  clearAuth,
+  clearManualLogoutMark,
+  getOAuthTokenFromWindow,
+  getAuth,
+} from "../../api/auth.js";
 import { Activity } from "lucide-react";
 
 export default function GoogleCallbackPage() {
@@ -9,31 +16,43 @@ export default function GoogleCallbackPage() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    const token = searchParams.get("token");
-
-    if (!token) {
-      setError("Authentication failed. No token provided.");
-      setTimeout(() => navigate("/"), 4000);
-      return;
-    }
-
-    // Set the token first so that fetchMe can use it for authentication
-    setAuth({ token });
+    let cancelled = false;
 
     const completeAuth = async () => {
       try {
+        const token = getOAuthTokenFromWindow() ||
+          searchParams.get("token") ||
+          searchParams.get("accessToken") ||
+          searchParams.get("access_token") ||
+          searchParams.get("jwt") ||
+          "";
+
+        if (token) {
+          clearAuth();
+          setAuth({ token });
+        }
+
         const user = await fetchMe();
-        // Now set the full auth object with user details
-        setAuth({ token, ...user });
-        // Navigate to home, App.jsx will handle showing the correct portal
-        window.location.href = "/";
+        if (cancelled) return;
+        if (!user) throw new Error("Not authenticated.");
+
+        clearManualLogoutMark();
+        /* Spread user first so URL/hash token wins over null/empty accessToken from API */
+        setAuth(token ? { ...user, token } : user);
+        console.log("[oauth] signed-in user role:", getAuth()?.role || "(not resolved)");
+        navigate("/", { replace: true });
       } catch (err) {
-        setError(`Authentication failed: ${err.message}. Redirecting to login...`);
-        setTimeout(() => navigate("/"), 4000);
+        if (cancelled) return;
+        const message = err?.message || "Unable to complete authentication.";
+        setError(`Authentication failed: ${message}. Redirecting to login...`);
+        setTimeout(() => navigate("/", { replace: true }), 4000);
       }
     };
 
     completeAuth();
+    return () => {
+      cancelled = true;
+    };
   }, [searchParams, navigate]);
 
   return (

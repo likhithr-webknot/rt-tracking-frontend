@@ -35,7 +35,8 @@ import {
   saveMonthlyDraft,
   submitMonthlySubmission
 } from "../../api/monthly-submissions.js";
-import { fetchPortalEmployee } from "../../api/portal.js";
+import { fetchPortalEmployee, updatePortalEmployee } from "../../api/portal.js";
+import { fetchDesignations } from "../../api/designations.js";
 import {
   fetchEmployeePortalKpiDefinitions,
   fetchEmployeePortalWebknotValues,
@@ -446,7 +447,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
       className={[
         "rt-sidebar fixed left-0 top-0 h-full z-50 flex flex-col",
         "md:translate-x-0 will-change-transform transition-[transform,width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
-        isOpen ? "translate-x-0 w-64" : "-translate-x-full md:translate-x-0 md:w-[72px]",
+        isOpen ? "translate-x-0 w-[280px]" : "-translate-x-full md:translate-x-0 md:w-[84px]",
       ].join(" ")}
     >
       <div className="p-5 flex items-center justify-between">
@@ -540,13 +541,16 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
   );
 };
 
-function InfoRow({ label, value }) {
+function InfoRow({ label, value, action }) {
   return (
     <div className="flex items-center justify-between gap-6 py-3.5 border-b border-[rgb(var(--border)/.5)] last:border-b-0 group hover:bg-[rgb(var(--surface-2)/.3)] -mx-4 px-4 rounded-lg transition-colors">
       <div className="text-xs font-medium text-[rgb(var(--muted))] uppercase tracking-wider">
         {label}
       </div>
-      <div className="text-sm text-[rgb(var(--text))] font-medium text-right break-all">{value}</div>
+      <div className="flex items-center gap-3 shrink-0">
+        <div className="text-sm text-[rgb(var(--text))] font-medium text-right break-all">{value}</div>
+        {action || null}
+      </div>
     </div>
   );
 }
@@ -606,9 +610,52 @@ function SubmissionStepper({ activeTab, steps, onNavigate }) {
   );
 }
 
-function ProfileTab({ employee, authEmail }) {
+function ProfileTab({ employee, authEmail, onUpdateEmployee }) {
   const display = employee || null;
   const email = authEmail || display?.email || "—";
+
+  /* ── designation selection state ── */
+  const [designations, setDesignations] = useState([]);
+  const [designationsLoading, setDesignationsLoading] = useState(false);
+  const [isUpdatingDesignation, setIsUpdatingDesignation] = useState(false);
+  const [designationError, setDesignationError] = useState("");
+
+  const loadDesignations = useCallback(async () => {
+    if (!display?.band || !display?.stream) return;
+    setDesignationsLoading(true);
+    setDesignationError("");
+    try {
+      const list = await fetchDesignations({
+        bandId: display.band,
+        department: normalizeStreamKey(display.stream),
+      });
+      setDesignations(Array.isArray(list) ? list : []);
+    } catch (err) {
+      setDesignationError(err?.message || "Failed to load designations.");
+    } finally {
+      setDesignationsLoading(false);
+    }
+  }, [display?.band, display?.stream]);
+
+  const handleDesignationSelect = async (newDesignation) => {
+    if (!newDesignation || newDesignation === display?.designation) {
+      setIsUpdatingDesignation(false);
+      return;
+    }
+    setDesignationsLoading(true);
+    setDesignationError("");
+    try {
+      const updated = await updatePortalEmployee({ designation: newDesignation });
+      if (onUpdateEmployee) {
+        onUpdateEmployee({ ...display, designation: newDesignation });
+      }
+      setIsUpdatingDesignation(false);
+    } catch (err) {
+      setDesignationError(err?.message || "Failed to update designation.");
+    } finally {
+      setDesignationsLoading(false);
+    }
+  };
 
   /* ── project selection state ── */
   const [allProjects, setAllProjects] = useState([]);
@@ -758,146 +805,90 @@ function ProfileTab({ employee, authEmail }) {
         <div className="px-6 sm:px-8 py-6">
           <InfoRow label="Email" value={email} />
           <InfoRow label="Role" value={display?.role || "Employee"} />
-          <InfoRow label="Designation" value={display?.designation || "—"} />
+          <InfoRow
+            label="Designation"
+            value={display?.designation || "—"}
+            action={
+              isUpdatingDesignation ? (
+                <button
+                  type="button"
+                  onClick={() => setIsUpdatingDesignation(false)}
+                  className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-[rgb(var(--surface-2))] border border-[rgb(var(--border))] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+                >
+                  Cancel
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsUpdatingDesignation(true);
+                    loadDesignations();
+                  }}
+                  className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-[rgb(var(--primary)/.1)] border border-[rgb(var(--primary)/.2)] text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary)/.2)]"
+                >
+                  {display?.designation ? "Change" : "Select"}
+                </button>
+              )
+            }
+          />
+
+          <AnimatePresence>
+            {isUpdatingDesignation && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="mt-2 pb-4 pt-2 px-4 rounded-xl bg-[rgb(var(--surface-2)/.5)] border border-[rgb(var(--border)/.5)]">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-[rgb(var(--muted))] mb-3">
+                    Available Designations
+                  </div>
+                  {designationsLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-[rgb(var(--muted))] py-2">
+                      <RefreshCw size={12} className="animate-spin" /> Loading…
+                    </div>
+                  ) : designationError ? (
+                    <div className="text-xs text-red-500 py-2">{designationError}</div>
+                  ) : !designations.length ? (
+                    <div className="text-xs text-[rgb(var(--muted))] py-2 italic">
+                      No designations found for your band ({display?.band}) and stream ({display?.stream}).
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {designations.map((d) => {
+                        const dValue = typeof d === "string" ? d : d?.name || d?.title || d?.designation;
+                        if (!dValue) return null;
+                        const isCurrent = dValue === display?.designation;
+                        return (
+                          <button
+                            key={dValue}
+                            type="button"
+                            disabled={isCurrent}
+                            onClick={() => handleDesignationSelect(dValue)}
+                            className={[
+                              "px-3 py-1.5 rounded-lg text-xs font-medium transition-all border",
+                              isCurrent
+                                ? "bg-[rgb(var(--primary)/.05)] border-[rgb(var(--primary)/.3)] text-[rgb(var(--primary))] opacity-60 cursor-default"
+                                : "bg-[rgb(var(--surface))] border-[rgb(var(--border))] text-[rgb(var(--text))] hover:border-[rgb(var(--primary)/.4)] hover:shadow-sm"
+                            ].join(" ")}
+                          >
+                            {dValue}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <InfoRow label="Stream" value={display?.stream || "—"} />
           <InfoRow label="Band" value={display?.band || "—"} />
         </div>
       </section>
 
-      {/* ── Project Selection ── */}
-      <section className="rt-panel rounded-2xl overflow-hidden">
-        <div className="px-6 sm:px-8 pt-6 pb-4 border-b border-[rgb(var(--border)/.5)]">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="h-8 w-8 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center">
-              <FolderKanban size={16} />
-            </div>
-            <div className="flex-1">
-              <h3 className="text-base font-bold text-[rgb(var(--text))]">My Projects</h3>
-              <p className="text-xs text-[rgb(var(--muted))]">Select the projects you have worked on. Respective project managers will be notified.</p>
-            </div>
-            {selectedProjectIds.size > 0 && (
-              <span className="text-[10px] font-bold uppercase px-2.5 py-1 rounded-full bg-[rgb(var(--primary)/.1)] text-[rgb(var(--primary))] border border-[rgb(var(--primary)/.2)]">
-                {selectedProjectIds.size} selected
-              </span>
-            )}
-          </div>
-          {/* search */}
-          {allProjects.length > 4 && (
-            <div className="relative mt-3">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
-              <input
-                type="text"
-                value={projectSearch}
-                onChange={(e) => setProjectSearch(e.target.value)}
-                placeholder="Search projects…"
-                className="rt-input pl-9 py-2 text-sm w-full"
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="px-6 sm:px-8 py-5">
-          {projectsLoading ? (
-            <div className="flex items-center gap-2 text-sm text-[rgb(var(--muted))] py-4">
-              <RefreshCw size={14} className="animate-spin" /> Loading projects…
-            </div>
-          ) : !allProjects.length ? (
-            <div className="text-sm text-[rgb(var(--muted))] py-4">
-              No projects available yet. Projects will appear here once created by an admin.
-            </div>
-          ) : (
-            <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
-              {filteredAllProjects.map((project) => {
-                const isSelected = selectedProjectIds.has(project.id);
-                const rating = ratingsMap.get(project.id);
-                return (
-                  <div
-                    key={project.id}
-                    onClick={() => toggleProject(project.id)}
-                    className={[
-                      "group relative flex items-center gap-4 p-4 rounded-xl border cursor-pointer transition-all duration-200",
-                      isSelected
-                        ? "border-[rgb(var(--primary)/.4)] bg-[rgb(var(--primary)/.05)] shadow-sm"
-                        : "border-[rgb(var(--border))] hover:border-[rgb(var(--primary)/.2)] hover:bg-[rgb(var(--surface-2)/.3)]",
-                    ].join(" ")}
-                  >
-                    {/* checkbox */}
-                    <div className={[
-                      "h-5 w-5 rounded-md border-2 flex-shrink-0 flex items-center justify-center transition-all",
-                      isSelected
-                        ? "bg-[rgb(var(--primary))] border-[rgb(var(--primary))]"
-                        : "border-[rgb(var(--border))] group-hover:border-[rgb(var(--primary)/.4)]",
-                    ].join(" ")}>
-                      {isSelected && <CheckCircle2 size={13} className="text-white" strokeWidth={3} />}
-                    </div>
-
-                    {/* project info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-sm text-[rgb(var(--text))]">{project.name}</div>
-                      {project.description && (
-                        <div className="mt-0.5 text-xs text-[rgb(var(--muted))] line-clamp-1">{project.description}</div>
-                      )}
-                      <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">
-                        Manager: <span className="font-medium text-[rgb(var(--text))]">{project.managerName || "—"}</span>
-                      </div>
-                    </div>
-
-                    {/* avg rating */}
-                    {rating && rating.averageRating > 0 && (
-                      <div className="flex-shrink-0 text-right">
-                        <div className="flex items-center gap-1.5">
-                          <Star size={14} className="text-amber-500 fill-amber-500" />
-                          <span className="text-lg font-bold text-[rgb(var(--text))]">{rating.averageRating.toFixed(1)}</span>
-                        </div>
-                        <div className="text-[10px] text-[rgb(var(--muted))]">
-                          avg from {rating.ratingsCount} manager{rating.ratingsCount !== 1 ? "s" : ""}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* feedback messages */}
-          {projectsError && (
-            <div className="mt-3 text-sm text-red-600 dark:text-red-400 bg-red-500/5 rounded-lg px-3 py-2 border border-red-500/20">
-              {projectsError}
-            </div>
-          )}
-          {projectsSuccess && (
-            <div className="mt-3 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 rounded-lg px-3 py-2 border border-emerald-500/20 flex items-center gap-2">
-              <CheckCircle2 size={14} /> {projectsSuccess}
-            </div>
-          )}
-
-          {/* save button */}
-          {allProjects.length > 0 && (
-            <div className="mt-5 flex items-center justify-between">
-              <div className="text-xs text-[rgb(var(--muted))]">
-                {selectedProjectIds.size} project{selectedProjectIds.size !== 1 ? "s" : ""} selected
-              </div>
-              <button
-                onClick={saveProjects}
-                disabled={!projectsDirty || projectsSaving}
-                className={[
-                  "rt-btn-primary transition-all",
-                  (!projectsDirty || projectsSaving)
-                    ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
-                    : "",
-                ].join(" ")}
-              >
-                {projectsSaving ? (
-                  <><RefreshCw size={14} className="animate-spin" /> Saving…</>
-                ) : (
-                  "Save Projects"
-                )}
-              </button>
-            </div>
-          )}
-        </div>
-      </section>
     </div>
   );
 }
@@ -3257,7 +3248,11 @@ export default function EmployeePortal({ onLogout, auth }) {
               Loading profile…
             </div>
           ) : null}
-          <ProfileTab employee={employee} authEmail={authEmail} />
+          <ProfileTab
+            employee={employee}
+            authEmail={authEmail}
+            onUpdateEmployee={(upd) => setEmployee(upd)}
+          />
         </>
       );
     }
@@ -3401,7 +3396,7 @@ export default function EmployeePortal({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-64" : "md:ml-[72px]"} p-4 pt-20 md:pt-6 lg:p-8`}>
+      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-[280px]" : "md:ml-[84px]"} p-4 pt-20 md:p-6 md:pt-8 lg:p-10`}>
         <div className="max-w-4xl mx-auto mb-8">
           <div className="flex items-center gap-3 mb-2">
           </div>

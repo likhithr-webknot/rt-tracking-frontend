@@ -86,7 +86,6 @@ export default function EmployeeDirectory({
   globalWindowOpen = false,
 }) {
   const [query, setQuery] = useState("");
-  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState([]); // string[]
   const [roleFilter, setRoleFilter] = useState("all"); // "all" | role value
   const [designationFilter, setDesignationFilter] = useState("all"); // "all" | designation value
   const [bandFilter, setBandFilter] = useState("all"); // "all" | band value
@@ -97,7 +96,6 @@ export default function EmployeeDirectory({
   const [mutating, setMutating] = useState(false);
   const [promotingId, setPromotingId] = useState(null);
   const [windowUpdatingId, setWindowUpdatingId] = useState(null);
-  const [pendingBulkDeleteCount, setPendingBulkDeleteCount] = useState(0);
   const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState(null);
   const [pendingPromoteEmployee, setPendingPromoteEmployee] = useState(null);
 
@@ -229,31 +227,6 @@ export default function EmployeeDirectory({
 
   const visibleEmployees = filtered;
 
-  /* ── Clear stale selections when the employee list changes (pagination, reload) ── */
-  const employeeIdFingerprint = useMemo(() => searchUniverse.map((e) => e.id).join(","), [searchUniverse]);
-  useEffect(() => {
-    setSelectedEmployeeIds([]);
-  }, [employeeIdFingerprint]);
-
-  const selectedIdSet = useMemo(() => new Set(selectedEmployeeIds), [selectedEmployeeIds]);
-  const filteredIdSet = useMemo(() => new Set(filtered.map((e) => e.id)), [filtered]);
-  const employeeIdSet = useMemo(() => new Set(searchUniverse.map((e) => e.id)), [searchUniverse]);
-  const allVisibleSelected = useMemo(() => {
-    if (visibleEmployees.length === 0) return false;
-    for (const emp of visibleEmployees) {
-      if (isSelf(emp)) continue;
-      if (!selectedIdSet.has(emp.id)) return false;
-    }
-    return true;
-  }, [visibleEmployees, isSelf, selectedIdSet]);
-
-  const deletableSelectedCount = useMemo(() => {
-    // Only count IDs that exist in the current employee set (guards against stale selections)
-    const validSelected = selectedEmployeeIds.filter((id) => employeeIdSet.has(id));
-    if (!currentEmployeeId) return validSelected.length;
-    return validSelected.filter((id) => String(id) !== String(currentEmployeeId)).length;
-  }, [selectedEmployeeIds, currentEmployeeId, employeeIdSet]);
-
   const nextEmployeeId = useMemo(() => computeNextEmployeeId(searchUniverse), [searchUniverse]);
   const roleOptions = useMemo(() => buildOptionStats(searchUniverse, "role"), [searchUniverse]);
   const designationOptions = useMemo(
@@ -288,7 +261,7 @@ export default function EmployeeDirectory({
       .filter((row) => Boolean(row?.active))
       .map((row) => ({
         value: String(row?.code || "").trim(),
-        label: String(row?.label || row?.name || row?.code || "").trim() || String(row?.code || ""),
+        label: String(row?.code || "").trim(),
       }))
       .filter((row) => Boolean(row.value));
     if (fromDirectory.length) return fromDirectory;
@@ -562,7 +535,6 @@ export default function EmployeeDirectory({
       await deleteEmployee(employeeId);
       const reloaded = await safeReloadEmployees();
       if (!reloaded) {
-        setSelectedEmployeeIds((prev) => prev.filter((id) => id !== employeeId));
         setEmployees((prev) => prev.filter((e) => e.id !== employeeId));
       }
       showToast({ title: "Employee removed", message: `Removed ${employeeName || employeeId}` });
@@ -579,82 +551,6 @@ export default function EmployeeDirectory({
       await removeEmployee(pendingDeleteEmployee.id, pendingDeleteEmployee.name);
     } finally {
       setPendingDeleteEmployee(null);
-    }
-  }
-
-  function toggleRowSelected(employeeId) {
-    setSelectedEmployeeIds((prev) => {
-      const set = new Set(prev);
-      if (set.has(employeeId)) set.delete(employeeId);
-      else set.add(employeeId);
-      return Array.from(set);
-    });
-  }
-
-  function toggleSelectAllVisible() {
-    setSelectedEmployeeIds((prev) => {
-      const set = new Set(prev);
-      const shouldSelectAll = !allVisibleSelected;
-      if (shouldSelectAll) {
-        for (const emp of visibleEmployees) {
-          if (isSelf(emp)) continue;
-          set.add(emp.id);
-        }
-      } else {
-        for (const emp of visibleEmployees) set.delete(emp.id);
-      }
-      return Array.from(set);
-    });
-  }
-
-  function deleteSelected() {
-    const ids = selectedEmployeeIds
-      .filter((id) => filteredIdSet.has(id) || employees.some((e) => e.id === id))
-      .filter((id) => !currentEmployeeId || String(id) !== String(currentEmployeeId));
-    if (ids.length === 0) return;
-    setPendingBulkDeleteCount(ids.length);
-  }
-
-  async function confirmDeleteSelected() {
-    const ids = selectedEmployeeIds
-      .filter((id) => filteredIdSet.has(id) || employees.some((e) => e.id === id))
-      .filter((id) => !currentEmployeeId || String(id) !== String(currentEmployeeId));
-    if (ids.length === 0) {
-      setPendingBulkDeleteCount(0);
-      return;
-    }
-
-    try {
-      setMutating(true);
-      const results = await Promise.allSettled(ids.map((id) => deleteEmployee(id)));
-      const successCount = results.filter((r) => r.status === "fulfilled").length;
-      const failedCount = results.length - successCount;
-
-      const reloaded = await safeReloadEmployees();
-      if (!reloaded && successCount > 0) {
-        const succeededIds = new Set(
-          results
-            .map((r, idx) => ({ r, id: ids[idx] }))
-            .filter((x) => x.r.status === "fulfilled")
-            .map((x) => x.id)
-        );
-        setEmployees((prev) => prev.filter((e) => !succeededIds.has(e.id)));
-        setSelectedEmployeeIds((prev) => prev.filter((id) => !succeededIds.has(id)));
-      }
-
-      if (successCount > 0 && failedCount === 0) {
-        showToast({ title: "Employees removed", message: `Removed ${successCount} employee(s).` });
-      } else if (successCount > 0) {
-        showToast({ title: "Partial delete", message: `Removed ${successCount}, failed ${failedCount}.` });
-      } else {
-        const firstError = results.find((r) => r.status === "rejected");
-        showToast({ title: "Delete failed", message: firstError?.reason?.message || "Please try again." });
-      }
-    } catch (err) {
-      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
-    } finally {
-      setMutating(false);
-      setPendingBulkDeleteCount(0);
     }
   }
 
@@ -857,17 +753,6 @@ export default function EmployeeDirectory({
             <Plus size={15} />Add Employee
           </button>
 
-          <button
-            onClick={deleteSelected}
-            disabled={deletableSelectedCount === 0 || mutating}
-            className={[
-              "rt-btn-danger transition-all text-sm",
-              deletableSelectedCount === 0 || mutating ? "opacity-60 cursor-not-allowed" : "",
-            ].join(" ")}
-            title="Delete selected employees"
-          >
-            <Trash2 size={15} /> Delete{deletableSelectedCount ? ` (${deletableSelectedCount})` : ""}
-          </button>
         </div>
       </header>
 
@@ -967,44 +852,24 @@ export default function EmployeeDirectory({
           <table className="w-full text-left">
             <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="px-4 py-3 font-semibold w-[48px]">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    onChange={toggleSelectAllVisible}
-                    disabled={visibleEmployees.length === 0 || visibleEmployees.every((emp) => isSelf(emp))}
-                    className="h-4 w-4 accent-[rgb(var(--primary))]"
-                    aria-label="Select all visible employees"
-                    title="Select all visible"
-                  />
-                </th>
+                <th className="px-4 py-3 font-semibold">Emp ID</th>
                 <th className="px-4 py-3 font-semibold">Employee</th>
+                <th className="px-4 py-3 font-semibold">Email</th>
                 <th className="px-4 py-3 font-semibold">Role</th>
                 <th className="px-4 py-3 font-semibold">Designation</th>
                 <th className="px-4 py-3 font-semibold">Band</th>
                 <th className="px-4 py-3 font-semibold">Stream</th>
-                <th className="px-4 py-3 font-semibold">Submission Window</th>
                 <th className="px-4 py-3 text-right font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
               {visibleEmployees.map((emp) => (
                 <tr key={emp.id} className="hover:bg-[rgb(var(--surface-2))]/60 transition-colors group">
-                  <td className="px-4 py-3">
-                    <input
-                      type="checkbox"
-                      checked={selectedIdSet.has(emp.id)}
-                      onChange={() => toggleRowSelected(emp.id)}
-                      disabled={isSelf(emp)}
-                      className="h-4 w-4 accent-[rgb(var(--primary))]"
-                      aria-label={`Select ${emp.name}`}
-                      title="Select"
-                    />
-                  </td>
+                  <td className="px-4 py-3 text-sm font-mono text-[rgb(var(--text))]">{emp.id || "—"}</td>
                   <td className="px-4 py-3">
                     <div className="font-semibold text-[rgb(var(--text))]">{emp.name}</div>
-                    <div className="text-[11px] text-[rgb(var(--muted))] font-mono mt-0.5">{emp.id}</div>
                   </td>
+                  <td className="px-4 py-3 text-sm text-[rgb(var(--text))]">{emp.email || "—"}</td>
                   <td className="px-4 py-3">
                     <span className={[
                       "inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold border",
@@ -1027,26 +892,6 @@ export default function EmployeeDirectory({
                     {emp.stream && streamLabelMap.get(emp.stream) && streamLabelMap.get(emp.stream) !== emp.stream ? (
                       <div className="text-[11px] text-[rgb(var(--muted))]">{streamLabelMap.get(emp.stream)}</div>
                     ) : null}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => setEmployeeSubmissionWindow(emp, "open")}
-                        disabled={windowUpdatingId === emp.id || globalWindowOpen}
-                        className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-300 transition-all hover:bg-emerald-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                        title={globalWindowOpen ? "Cannot open while global window is active" : "Open submission window for this employee"}
-                      >
-                        <Play size={12} /> Open
-                      </button>
-                      <button
-                        onClick={() => setEmployeeSubmissionWindow(emp, "close")}
-                        disabled={windowUpdatingId === emp.id || !globalWindowOpen || emp.submissionWindowForceClosed}
-                        className="inline-flex items-center gap-1 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2 py-1 text-[11px] font-semibold text-[rgb(var(--muted))] transition-all hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30 disabled:cursor-not-allowed disabled:opacity-40"
-                        title={globalWindowOpen ? "Close submission for this employee" : "Global window is already closed"}
-                      >
-                        <Square size={11} /> Close
-                      </button>
-                    </div>
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex justify-end gap-2">
@@ -1097,34 +942,12 @@ export default function EmployeeDirectory({
 
       {/* ── Mobile Card View (visible below lg) ── */}
       <div className="lg:hidden space-y-3">
-        {visibleEmployees.length > 0 ? (
-          <label className="flex items-center gap-2 text-xs text-[rgb(var(--muted))] px-1">
-            <input
-              type="checkbox"
-              checked={allVisibleSelected}
-              onChange={toggleSelectAllVisible}
-              disabled={visibleEmployees.length === 0 || visibleEmployees.every((emp) => isSelf(emp))}
-              className="h-3.5 w-3.5 accent-[rgb(var(--primary))]"
-            />
-            Select all ({visibleEmployees.length})
-          </label>
-        ) : null}
-
         {visibleEmployees.map((emp) => (
           <div key={emp.id} className="rt-panel rounded-xl p-4 space-y-3">
             <div className="flex items-start justify-between gap-3">
-              <div className="flex items-start gap-3 min-w-0">
-                <input
-                  type="checkbox"
-                  checked={selectedIdSet.has(emp.id)}
-                  onChange={() => toggleRowSelected(emp.id)}
-                  disabled={isSelf(emp)}
-                  className="h-4 w-4 mt-1 shrink-0 accent-[rgb(var(--primary))]"
-                />
-                <div className="min-w-0">
-                  <div className="font-semibold text-[rgb(var(--text))] truncate">{emp.name}</div>
-                  <div className="text-[11px] text-[rgb(var(--muted))] font-mono">{emp.id}</div>
-                </div>
+              <div className="min-w-0">
+                <div className="font-semibold text-[rgb(var(--text))] truncate">{emp.name}</div>
+                <div className="text-[11px] text-[rgb(var(--muted))] truncate">{emp.email || "—"}</div>
               </div>
               <span className={[
                 "shrink-0 inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold border",
@@ -1236,23 +1059,11 @@ export default function EmployeeDirectory({
       ) : null}
 
       <ConfirmDialog
-        open={pendingBulkDeleteCount > 0}
-        title="Remove Employees"
-        message={`Delete ${pendingBulkDeleteCount} employee(s)? This action is permanent and also removes linked monthly submissions.`}
-        confirmText="Delete"
-        cancelText="Cancel"
-        confirmVariant="danger"
-        busy={mutating}
-        onCancel={() => setPendingBulkDeleteCount(0)}
-        onConfirm={confirmDeleteSelected}
-      />
-
-      <ConfirmDialog
         open={Boolean(pendingDeleteEmployee)}
         title="Remove Employee"
         message={
           pendingDeleteEmployee
-            ? `Delete ${pendingDeleteEmployee.name}? This action is permanent and also removes linked monthly submissions.`
+            ? `Delete ${pendingDeleteEmployee.name}? Warning: once this employee is deleted, they will be deleted from the WebTrak application as well.`
             : "Delete this employee?"
         }
         confirmText="Delete"
@@ -1375,6 +1186,8 @@ export default function EmployeeDirectory({
                   >
                     <option value="Employee">Employee</option>
                     <option value="Manager">Manager</option>
+                    <option value="HR">HR</option>
+                    <option value="Finance">Finance</option>
                     <option value="Admin">Admin</option>
                   </select>
                 </div>
@@ -1566,6 +1379,8 @@ export default function EmployeeDirectory({
                     >
                       <option value="Employee">Employee</option>
                       <option value="Manager">Manager</option>
+                      <option value="HR">HR</option>
+                      <option value="Finance">Finance</option>
                       <option value="Admin">Admin</option>
                     </select>
                   </div>

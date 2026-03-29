@@ -1,22 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl } from "./http.js";
-
-async function readError(res) {
-  const text = await res.text().catch(() => "");
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.message) return String(parsed.message);
-    if (parsed?.error) return String(parsed.error);
-  } catch { void 0; }
-  return text || `Request failed: ${res.status} ${res.statusText}`;
-}
-
-async function toHttpError(res) {
-  const message = await readError(res);
-  const err = new Error(message);
-  err.status = res.status;
-  return err;
-}
+import { buildApiUrl, toHttpError } from "./http.js";
 
 export async function fetchPortalEmployee({ signal } = {}) {
   const auth = getAuthHeader();
@@ -24,6 +7,22 @@ export async function fetchPortalEmployee({ signal } = {}) {
     signal,
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
+  });
+  if (!res.ok) throw await toHttpError(res);
+  return res.json().catch(() => ({}));
+}
+
+export async function updatePortalEmployee(payload, { signal } = {}) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl("/portal/employee"), {
+    method: "PUT",
+    signal,
+    credentials: "include",
+    headers: {
+      ...(auth ? { Authorization: auth } : {}),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload && typeof payload === "object" ? payload : {}),
   });
   if (!res.ok) throw await toHttpError(res);
   return res.json().catch(() => ({}));
@@ -50,4 +49,3 @@ export async function fetchPortalAdmin({ signal } = {}) {
   if (!res.ok) throw await toHttpError(res);
   return res.json().catch(() => ({}));
 }
-

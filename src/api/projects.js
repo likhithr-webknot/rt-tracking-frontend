@@ -1,24 +1,7 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
 
 /* ── helpers ── */
-
-async function readError(res) {
-  const text = await res.text().catch(() => "");
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.message) return String(parsed.message);
-    if (parsed?.error) return String(parsed.error);
-  } catch { void 0; }
-  return text || `Request failed: ${res.status} ${res.statusText}`;
-}
-
-async function toHttpError(res) {
-  const message = await readError(res);
-  const err = new Error(message);
-  err.status = res.status;
-  return err;
-}
 
 function authHeaders(extra = {}) {
   const auth = getAuthHeader();
@@ -75,21 +58,28 @@ export function normalizeProjects(data) {
 
 export async function fetchProjects({ signal } = {}) {
   const auth = getAuthHeader();
-  /* try /projects/list first, fall back to /projects */
-  let res = await fetch(buildApiUrl("/projects/list"), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (res.status === 404 || res.status === 403) {
-    res = await fetch(buildApiUrl("/projects"), {
+  const endpoints = [
+    "/api/v1/getAllprojects",
+    "/api/v1/projects",
+    "/projects/list",
+    "/projects",
+  ];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
       signal,
       credentials: "include",
       headers: auth ? { Authorization: auth } : undefined,
     });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 403 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
   }
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
+  throw lastRouteErr || new Error("Projects list endpoint not found.");
 }
 
 export async function addProject({ code, name, description = "", managerEmployeeId, active = true }, { signal } = {}) {
@@ -100,16 +90,26 @@ export async function addProject({ code, name, description = "", managerEmployee
     managerEmployeeId: String(managerEmployeeId || "").trim(),
     active: Boolean(active),
   };
-  const res = await fetch(buildApiUrl("/projects/add"), {
-    method: "POST",
-    signal,
-    credentials: "include",
-    headers: authHeaders(),
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  const ct = res.headers.get("content-type") || "";
-  return ct.includes("application/json") ? res.json().catch(() => ({})) : res.text().catch(() => "");
+  const body = JSON.stringify(payload);
+  const endpoints = ["/api/v1/projects", "/projects/add"];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      method: "POST",
+      signal,
+      credentials: "include",
+      headers: authHeaders(),
+      body,
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Project create endpoint not found.");
 }
 
 export async function updateProject(id, { name, description, managerId, active }, { signal } = {}) {
@@ -155,26 +155,50 @@ export async function deleteProject(id, { signal } = {}) {
 
 export async function fetchMyProjects({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/projects/my"), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
+  const endpoints = ["/api/v1/project", "/projects/my"];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("My projects endpoint not found.");
 }
 
 export async function updateMyProjects(projectIds, { signal } = {}) {
-  const res = await fetch(buildApiUrl("/projects/my"), {
-    method: "PUT",
-    signal,
-    credentials: "include",
-    headers: authHeaders(),
-    body: JSON.stringify({ projectIds: Array.isArray(projectIds) ? projectIds.map(String) : [] }),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  const ct = res.headers.get("content-type") || "";
-  return ct.includes("application/json") ? res.json().catch(() => ({})) : res.text().catch(() => "");
+  const normalizedIds = Array.isArray(projectIds) ? projectIds.map(String) : [];
+  const payload = { projectIds: normalizedIds, selectedProjectIds: normalizedIds };
+  const endpoints = [
+    { method: "POST", path: "/api/v1/client-proj-status" },
+    { method: "PUT", path: "/projects/my" },
+  ];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint.path), {
+      method: endpoint.method,
+      signal,
+      credentials: "include",
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Project update endpoint not found.");
 }
 
 export async function fetchMyProjectRatings({ signal } = {}) {
@@ -246,39 +270,74 @@ export async function submitProjectRating(projectId, { employeeId, rating, comme
 /** GET /employee-portal/profile/projects/available — list projects available for selection */
 export async function fetchAvailableProjects({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/employee-portal/profile/projects/available"), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
+  const endpoints = ["/api/v1/getAllprojects", "/employee-portal/profile/projects/available", "/projects/list"];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Available projects endpoint not found.");
 }
 
 /** GET /employee-portal/profile/projects/selected — list employee's selected projects */
 export async function fetchSelectedProjects({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/employee-portal/profile/projects/selected"), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
+  const endpoints = ["/api/v1/project", "/employee-portal/profile/projects/selected", "/projects/my"];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Selected projects endpoint not found.");
 }
 
 /** PUT /employee-portal/profile/projects/update — update employee's project selections */
 export async function updateSelectedProjects(projectIds, { signal } = {}) {
-  const res = await fetch(buildApiUrl("/employee-portal/profile/projects/update"), {
-    method: "PUT",
-    signal,
-    credentials: "include",
-    headers: authHeaders(),
-    body: JSON.stringify({ projectIds: Array.isArray(projectIds) ? projectIds.map(String) : [] }),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  const ct = res.headers.get("content-type") || "";
-  return ct.includes("application/json") ? res.json().catch(() => ({})) : res.text().catch(() => "");
+  const normalizedIds = Array.isArray(projectIds) ? projectIds.map(String) : [];
+  const payload = { projectIds: normalizedIds, selectedProjectIds: normalizedIds };
+  const endpoints = [
+    { method: "POST", path: "/api/v1/client-proj-status" },
+    { method: "PUT", path: "/employee-portal/profile/projects/update" },
+    { method: "PUT", path: "/projects/my" },
+  ];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint.path), {
+      method: endpoint.method,
+      signal,
+      credentials: "include",
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Selected project update endpoint not found.");
 }
 
 /** GET /employee-portal/profile/projects/ratings — get ratings for employee's projects */

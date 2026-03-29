@@ -87,7 +87,7 @@ export default function Toast({ toast, onDismiss, durationMs = 2600 }) {
 
   const displayTitle = useMemo(() => {
     if (!toast) return "";
-    if (toneKey === "error") return toast.friendlyTitle || "Something went wrong";
+    if (toneKey === "error") return toast.title || toast.friendlyTitle || "Something went wrong";
     return toast.title || "";
   }, [toast, toneKey]);
 
@@ -95,8 +95,7 @@ export default function Toast({ toast, onDismiss, durationMs = 2600 }) {
     if (!toast) return "";
     const raw = String(toast.message || "").trim();
     if (toneKey === "error") {
-      if (raw) console.debug("Suppressed error message", raw);
-      return toast.friendlyMessage || "Please try again in a moment.";
+      return raw || toast.friendlyMessage || "Please try again in a moment.";
     }
     return raw;
   }, [toast, toneKey]);

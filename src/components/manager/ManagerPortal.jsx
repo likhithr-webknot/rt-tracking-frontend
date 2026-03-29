@@ -52,6 +52,7 @@ import {
 import { getAppSettings } from "../../utils/appSettings.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
 import { playNotificationSound } from "../../utils/notificationSound.js";
+import { safeJsonParse } from "../../utils/json.js";
 import {
   fetchManagerNotifications,
   markAllManagerNotificationsRead,
@@ -69,14 +70,6 @@ const MANAGER_SIDEBAR_PREF_KEY = "rt_tracking_manager_sidebar_open_v1";
 const TEAM_PAGE_SIZE = 12;
 const MANAGER_NOTIFICATION_PAGE_SIZE = 25;
 const MANAGER_NOTIFICATION_POLL_MS = 30_000;
-
-function safeJsonParse(raw) {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
 
 function loadManagerReviewDrafts() {
   if (typeof window === "undefined") return {};
@@ -605,7 +598,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
       className={[
         "rt-sidebar fixed left-0 top-0 h-full z-50 flex flex-col",
         "md:translate-x-0 will-change-transform transition-[transform,width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
-        isOpen ? "translate-x-0 w-64" : "-translate-x-full md:translate-x-0 md:w-[72px]",
+        isOpen ? "translate-x-0 w-[280px]" : "-translate-x-full md:translate-x-0 md:w-[84px]",
       ].join(" ")}
     >
       <div className="p-5 flex items-center justify-between">
@@ -985,6 +978,32 @@ export default function ManagerPortal({ onLogout, auth }) {
     () => notifications.reduce((count, item) => (item?.read ? count : count + 1), 0),
     [notifications]
   );
+  const notificationUserId = useMemo(() => {
+    const candidates = [
+      managerId,
+      auth?.id,
+      auth?.userId,
+      auth?.employeeId,
+      auth?.empId,
+      auth?.claims?.userId,
+      auth?.claims?.uid,
+      auth?.claims?.sub,
+    ];
+    for (const candidate of candidates) {
+      const text = String(candidate ?? "").trim();
+      if (text) return text;
+    }
+    return "";
+  }, [
+    managerId,
+    auth?.claims?.sub,
+    auth?.claims?.uid,
+    auth?.claims?.userId,
+    auth?.empId,
+    auth?.employeeId,
+    auth?.id,
+    auth?.userId,
+  ]);
 
   const reloadNotifications = useCallback(async ({
     signal,
@@ -992,12 +1011,20 @@ export default function ManagerPortal({ onLogout, auth }) {
     append = false,
     silent = false,
   } = {}) => {
+    if (!notificationUserId) {
+      setNotifications([]);
+      setNotificationsNextCursor(null);
+      setNotificationsError("");
+      notificationsLoadedRef.current = false;
+      return { items: [], nextCursor: null, unreadCount: 0 };
+    }
     if (!silent || !notificationsLoadedRef.current) {
       setNotificationsLoading(true);
     }
     setNotificationsError("");
     try {
       const data = await fetchManagerNotifications({
+        userId: notificationUserId,
         limit: MANAGER_NOTIFICATION_PAGE_SIZE,
         cursor,
         unreadOnly: false,
@@ -1018,7 +1045,7 @@ export default function ManagerPortal({ onLogout, auth }) {
     } catch (err) {
       if (err?.name === "AbortError") return null;
       if (err?.status === 401) {
-        showToast({ title: "Session expired", message: "Please login again." });
+        showToast({ title: "Session expired", message: "Please login again.", tone: "error" });
         onLogout?.();
         return null;
       }
@@ -1027,7 +1054,7 @@ export default function ManagerPortal({ onLogout, auth }) {
     } finally {
       setNotificationsLoading(false);
     }
-  }, [onLogout, showToast]);
+  }, [notificationUserId, onLogout, showToast]);
 
   const pushIncomingNotification = useCallback((incoming) => {
     if (!incoming) return;
@@ -1059,25 +1086,26 @@ export default function ManagerPortal({ onLogout, auth }) {
         onLogout?.();
         return;
       }
-      showToast({ title: "Unable to mark read", message: err?.message || "Please try again." });
+      showToast({ title: "Unable to mark read", message: err?.message || "Please try again.", tone: "error" });
     }
   }, [onLogout, showToast]);
 
   const markEveryNotificationRead = useCallback(async () => {
     try {
-      await markAllManagerNotificationsRead();
+      await markAllManagerNotificationsRead({ notifications });
       setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
     } catch (err) {
       if (err?.status === 401) {
-        showToast({ title: "Session expired", message: "Please login again." });
+        showToast({ title: "Session expired", message: "Please login again.", tone: "error" });
         onLogout?.();
         return;
       }
-      showToast({ title: "Unable to mark all read", message: err?.message || "Please try again." });
+      showToast({ title: "Unable to mark all read", message: err?.message || "Please try again.", tone: "error" });
     }
-  }, [onLogout, showToast]);
+  }, [notifications, onLogout, showToast]);
 
   useEffect(() => {
+    if (!notificationUserId) return;
     const controller = new AbortController();
     reloadNotifications({ signal: controller.signal }).catch(() => {});
 
@@ -1089,10 +1117,12 @@ export default function ManagerPortal({ onLogout, auth }) {
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [reloadNotifications]);
+  }, [notificationUserId, reloadNotifications]);
 
   useEffect(() => {
+    if (!notificationUserId) return;
     const unsubscribe = subscribeManagerNotificationsStream({
+      userId: notificationUserId,
       onNotification: (item) => {
         pushIncomingNotification(item);
       },
@@ -1101,7 +1131,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       },
     });
     return () => unsubscribe?.();
-  }, [pushIncomingNotification, reloadNotifications]);
+  }, [notificationUserId, pushIncomingNotification, reloadNotifications]);
 
   useEffect(() => {
     if (!notificationsOpen) return;
@@ -1214,7 +1244,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       showToast({ title: "Enhanced", message: "Updated your self review text." });
     } catch (err) {
       const status = err?.status ? ` [${err.status}]` : "";
-      showToast({ title: "AI failed", message: `${err?.message || "Please try again."}${status}` });
+      showToast({ title: "AI failed", message: `${err?.message || "Please try again."}${status}`, tone: "error" });
     } finally {
       setAiEnhancingSelfReview(false);
     }
@@ -1238,7 +1268,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       showToast({ title: "Enhanced", message: "Updated manager comments." });
     } catch (err) {
       const status = err?.status ? ` [${err.status}]` : "";
-      showToast({ title: "AI failed", message: `${err?.message || "Please try again."}${status}` });
+      showToast({ title: "AI failed", message: `${err?.message || "Please try again."}${status}`, tone: "error" });
     } finally {
       setAiEnhancingManagerNotes(false);
     }
@@ -1353,7 +1383,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       await reloadTeam();
       await reloadTeamInsights();
     } catch (err) {
-      showToast({ title: "Reject failed", message: err?.message || "Please try again." });
+      showToast({ title: "Reject failed", message: err?.message || "Please try again.", tone: "error" });
     } finally {
       setQuickRejectBusy(false);
     }
@@ -2202,7 +2232,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       showToast({ title: "Draft saved", message: "Manager self review saved." });
     } catch (err) {
       setManagerDraftError(err?.message || "Please try again.");
-      showToast({ title: "Save failed", message: err?.message || "Please try again." });
+      showToast({ title: "Save failed", message: err?.message || "Please try again.", tone: "error" });
     } finally {
       setSavingSelfReview(false);
     }
@@ -2279,7 +2309,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       );
       showToast({ title: "Submitted", message: "Manager self review submitted." });
     } catch (err) {
-      showToast({ title: "Submit failed", message: err?.message || "Please try again." });
+      showToast({ title: "Submit failed", message: err?.message || "Please try again.", tone: "error" });
     } finally {
       setSavingSelfReview(false);
     }
@@ -2348,7 +2378,7 @@ export default function ManagerPortal({ onLogout, auth }) {
 
     const check = validateManagerReview(action);
     if (!check.ok) {
-      showToast({ title: "Validation failed", message: check.message || "Please review the input." });
+      showToast({ title: "Validation failed", message: check.message || "Please review the input.", tone: "error" });
       return;
     }
 
@@ -2370,6 +2400,7 @@ export default function ManagerPortal({ onLogout, auth }) {
     const employeeCertifications = normalizeCertificationsForState(employeePayload.certifications);
     const cycleMeta = buildCycleMeta(m);
     const payload = {
+      submissionId: selectedRow?.submissionId ?? selectedRow?.id ?? null,
       month: m,
       monthKey: m,
       cycleKey: cycleMeta.cycleKey,
@@ -2465,7 +2496,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       await reloadTeam();
       await reloadTeamInsights();
     } catch (err) {
-      showToast({ title: `${reviewAction === "REJECT" ? "Reject" : "Submit"} failed`, message: err?.message || "Please try again." });
+      showToast({ title: `${reviewAction === "REJECT" ? "Reject" : "Submit"} failed`, message: err?.message || "Please try again.", tone: "error" });
     } finally {
       setSavingReview(false);
     }
@@ -2619,7 +2650,7 @@ export default function ManagerPortal({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-64" : "md:ml-[72px]"} p-4 pt-20 md:pt-6 lg:p-8`}>
+      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? "md:ml-[280px]" : "md:ml-[84px]"} p-4 pt-20 md:p-6 md:pt-8 lg:p-10`}>
         <header className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-end md:justify-between gap-6 mb-8">
           <div>
             <div className="flex items-center gap-3 mb-2">
@@ -3118,231 +3149,6 @@ export default function ManagerPortal({ onLogout, auth }) {
               ))}
             </div>
           </section>
-        </motion.section>
-      ) : null}
-
-      {/* ── Project Ratings Tab ── */}
-      {activeTab === "project-ratings" ? (
-        <motion.section
-          key="project-ratings-tab"
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-          className="max-w-5xl mx-auto mt-10 space-y-6"
-        >
-          {/* projects header */}
-          <section className="rt-panel p-6 sm:p-8">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="h-9 w-9 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center">
-                <FolderKanban size={18} strokeWidth={1.8} />
-              </div>
-              <div className="flex-1">
-                <h2 className="text-xl font-bold tracking-tight text-[rgb(var(--text))]">
-                  Rate Employee on Project
-                </h2>
-                <p className="text-sm text-[rgb(var(--muted))] mt-0.5">
-                  Select a project and an employee to submit a project performance rating.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => loadMgrProjects()}
-                disabled={mgrProjectsLoading}
-                className="rt-btn-ghost text-xs"
-              >
-                <RefreshCw size={14} className={mgrProjectsLoading ? "animate-spin" : ""} /> Refresh
-              </button>
-            </div>
-            {/* search */}
-            {myManagedProjects.length > 3 && (
-              <div className="relative mt-3">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
-                <input
-                  type="text"
-                  value={prSearch}
-                  onChange={(e) => setPrSearch(e.target.value)}
-                  placeholder="Search projects…"
-                  className="rt-input pl-9 py-2 text-sm w-full"
-                />
-              </div>
-            )}
-          </section>
-
-          {mgrProjectsError && (
-            <div className="rt-panel p-4 border-l-4 border-red-500 bg-red-500/5 text-sm text-red-600 dark:text-red-400">
-              {mgrProjectsError}
-            </div>
-          )}
-
-          {mgrProjectsLoading && !mgrProjects.length ? (
-            <div className="rt-panel p-12 text-center text-[rgb(var(--muted))]">
-              <RefreshCw size={20} className="animate-spin inline-block mr-2" />
-              Loading projects…
-            </div>
-          ) : !myManagedProjects.length ? (
-            <div className="rt-panel p-12 text-center text-[rgb(var(--muted))]">
-              <FolderKanban size={32} className="inline-block mb-2 opacity-40" />
-              <div className="text-sm">No projects assigned to you yet.</div>
-            </div>
-          ) : (
-            <section className="rt-panel overflow-hidden">
-              <div className="p-6 sm:p-8 space-y-5">
-                {/* select project */}
-                <div>
-                  <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-1.5">Project *</label>
-                  <select
-                    value={prSelectedProject || ""}
-                    onChange={(e) => {
-                      setPrSelectedProject(e.target.value || null);
-                      setPrSuccess("");
-                      setPrError("");
-                    }}
-                    className="rt-input w-full"
-                  >
-                    <option value="">Select a project…</option>
-                    {myManagedProjects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* select employee */}
-                <div>
-                  <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-1.5">Employee *</label>
-                  <select
-                    value={prSelectedEmployee || ""}
-                    onChange={(e) => {
-                      setPrSelectedEmployee(e.target.value || null);
-                      setPrSuccess("");
-                      setPrError("");
-                    }}
-                    className="rt-input w-full"
-                  >
-                    <option value="">Select an employee…</option>
-                    {queueEmployeeList.map((emp) => (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.name || emp.email || emp.id}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* star rating */}
-                <div>
-                  <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-2">Rating *</label>
-                  <div className="flex items-center gap-1.5">
-                    {[1, 2, 3, 4, 5].map((v) => (
-                      <button
-                        key={v}
-                        type="button"
-                        onClick={() => { setPrRating(v); setPrSuccess(""); setPrError(""); }}
-                        className="p-1 transition-transform hover:scale-110"
-                        title={`${v} star${v !== 1 ? "s" : ""}`}
-                      >
-                        <Star
-                          size={28}
-                          fill={v <= prRating ? "rgb(var(--primary))" : "none"}
-                          className={v <= prRating ? "text-[rgb(var(--primary))]" : "text-[rgb(var(--muted)/.3)]"}
-                          strokeWidth={1.5}
-                        />
-                      </button>
-                    ))}
-                    {prRating > 0 && (
-                      <span className="ml-3 text-sm font-semibold text-[rgb(var(--text))]">
-                        {prRating}/5
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* comments */}
-                <div>
-                  <label className="text-xs font-semibold text-[rgb(var(--text))] block mb-1.5">Comments</label>
-                  <textarea
-                    value={prComments}
-                    onChange={(e) => setPrComments(e.target.value)}
-                    placeholder="Optional feedback on the employee's project contribution…"
-                    rows={3}
-                    className="rt-input w-full resize-none"
-                  />
-                </div>
-
-                {prError && (
-                  <div className="text-sm text-red-600 dark:text-red-400 bg-red-500/5 rounded-lg px-3 py-2 border border-red-500/20">
-                    {prError}
-                  </div>
-                )}
-                {prSuccess && (
-                  <div className="text-sm text-emerald-700 dark:text-emerald-300 bg-emerald-500/5 rounded-lg px-3 py-2 border border-emerald-500/20 flex items-center gap-2">
-                    <CheckCircle2 size={14} /> {prSuccess}
-                  </div>
-                )}
-
-                <div className="flex items-center justify-end pt-2">
-                  <button
-                    type="button"
-                    onClick={handleSubmitProjectRating}
-                    disabled={prSubmitting || !prSelectedProject || !prSelectedEmployee || !prRating}
-                    className={[
-                      "rt-btn-primary transition-all",
-                      prSubmitting || !prSelectedProject || !prSelectedEmployee || !prRating
-                        ? "opacity-50 cursor-not-allowed"
-                        : "",
-                    ].join(" ")}
-                  >
-                    {prSubmitting ? (
-                      <><RefreshCw size={14} className="animate-spin" /> Submitting…</>
-                    ) : (
-                      <><Star size={14} /> Submit Rating</>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* managed projects list */}
-              <div className="border-t border-[rgb(var(--border))]">
-                <div className="px-6 sm:px-8 py-4 bg-[rgb(var(--surface-2)/.3)]">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
-                    Your Projects ({myManagedProjects.length})
-                  </h3>
-                </div>
-                <div className="divide-y divide-[rgb(var(--border))]">
-                  {filteredMgrProjects.map((p) => (
-                    <div
-                      key={p.id}
-                      className={[
-                        "px-6 sm:px-8 py-3.5 flex items-center justify-between transition-colors cursor-pointer",
-                        prSelectedProject === p.id
-                          ? "bg-[rgb(var(--primary)/.06)]"
-                          : "hover:bg-[rgb(var(--surface-2)/.4)]",
-                      ].join(" ")}
-                      onClick={() => { setPrSelectedProject(p.id); setPrSuccess(""); setPrError(""); }}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="h-9 w-9 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center flex-shrink-0">
-                          <FolderKanban size={16} />
-                        </div>
-                        <div>
-                          <div className="text-sm font-semibold text-[rgb(var(--text))]">{p.name}</div>
-                          {p.description && (
-                            <div className="text-xs text-[rgb(var(--muted))] mt-0.5 truncate max-w-xs">{p.description}</div>
-                          )}
-                        </div>
-                      </div>
-                      {prSelectedProject === p.id && (
-                        <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-[rgb(var(--primary)/.1)] text-[rgb(var(--primary))] border border-[rgb(var(--primary)/.2)]">
-                          Selected
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-          )}
         </motion.section>
       ) : null}
 

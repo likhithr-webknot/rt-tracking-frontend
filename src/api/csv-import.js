@@ -1,4 +1,4 @@
-import { buildApiUrl, ensureCsrfCookie, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, ensureCsrfCookie, toHttpError, withCsrfHeaders } from "./http.js";
 
 /**
  * Supported entity types for single-entity CSV import.
@@ -56,17 +56,7 @@ export async function importCsvSingle(entity, file, opts = {}) {
     signal: opts.signal,
   });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let msg = `Import failed (${res.status})`;
-    try {
-      const json = JSON.parse(text);
-      msg = json?.message || json?.error || msg;
-    } catch {
-      if (text) msg = text.slice(0, 300);
-    }
-    throw new Error(msg);
-  }
+  if (!res.ok) throw await toHttpError(res);
 
   return res.json().catch(() => ({ success: true }));
 }
@@ -107,17 +97,7 @@ export async function importCsvBulk(filesByField, opts = {}) {
     signal: opts.signal,
   });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let msg = `Bulk import failed (${res.status})`;
-    try {
-      const json = JSON.parse(text);
-      msg = json?.message || json?.error || msg;
-    } catch {
-      if (text) msg = text.slice(0, 300);
-    }
-    throw new Error(msg);
-  }
+  if (!res.ok) throw await toHttpError(res);
 
   return res.json().catch(() => ({ success: true }));
 }

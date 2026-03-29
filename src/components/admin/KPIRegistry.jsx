@@ -14,7 +14,6 @@ export default function KPIRegistry({
   onEditKpi,
   onDeleteKpi,
   loading,
-  error,
   onReload,
   onReloadAll = null,
   pager,
@@ -229,12 +228,6 @@ export default function KPIRegistry({
         </div>
       </div>
 
-      {error ? (
-        <div className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
-          Failed to load KPIs: <span className="font-mono">{error}</span>
-        </div>
-      ) : null}
-
       <div className="rt-panel-subtle p-4 sm:p-5 space-y-3">
         <div className="relative group">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 dark:text-slate-400" size={20} />
@@ -318,7 +311,7 @@ export default function KPIRegistry({
             <tr>
               <th className="p-4 sm:p-5 font-semibold w-14">#</th>
               <th className="p-4 sm:p-5 font-semibold">Objective</th>
-              <th className="p-4 sm:p-5 font-semibold">Stream</th>
+              <th className="p-4 sm:p-5 font-semibold">Department</th>
               <th className="p-4 sm:p-5 font-semibold">Band</th>
               <th className="p-4 sm:p-5 text-right font-semibold px-8">Actions</th>
             </tr>

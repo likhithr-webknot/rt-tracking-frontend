@@ -13,7 +13,9 @@ import {
   clearManualLogoutMark,
   fetchMe,
   getAuth,
+  getOAuthTokenFromWindow,
   hasManualLogoutMark,
+  logout as logoutApi,
   markManualLogout,
   setAuth,
 } from "./api/auth.js";
@@ -41,6 +43,61 @@ function withWindowSource(data, source) {
   };
 }
 
+function normalizeRoleKey(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  return raw.startsWith("role_") ? raw.slice(5) : raw;
+}
+
+function resolveRoleFromCandidates(candidates) {
+  const keys = [];
+  for (const candidate of candidates) {
+    if (candidate == null) continue;
+    if (Array.isArray(candidate)) {
+      for (const entry of candidate) {
+        if (entry == null) continue;
+        if (typeof entry === "string") {
+          const key = normalizeRoleKey(entry);
+          if (key) keys.push(key);
+        } else if (typeof entry === "object") {
+          const key = normalizeRoleKey(
+            String(entry?.role || entry?.authority || entry?.name || entry?.value || "")
+          );
+          if (key) keys.push(key);
+        }
+      }
+      continue;
+    }
+    const key = normalizeRoleKey(candidate);
+    if (key) keys.push(key);
+  }
+
+  if (keys.some((k) => k.includes("admin") || k === "hr")) return "Admin";
+  if (keys.some((k) => k.includes("manager"))) return "Manager";
+  if (keys.some((k) => k.includes("employee") || k.includes("user"))) return "Employee";
+  return null;
+}
+
+function resolvePortalRole(auth) {
+  const obj = auth && typeof auth === "object" ? auth : {};
+  const claims = obj?.claims && typeof obj.claims === "object" ? obj.claims : {};
+  return resolveRoleFromCandidates([
+    obj?.role,
+    obj?.roleName,
+    obj?.roleType,
+    obj?.empRole,
+    obj?.userRole,
+    obj?.roles,
+    obj?.authorities,
+    obj?.grantedAuthorities,
+    claims?.role,
+    claims?.roles,
+    claims?.authorities,
+    claims?.grantedAuthorities,
+    obj?.portal,
+  ]);
+}
+
 export default function App() {
   const [auth, setAuthState] = useState(() => getAuth());
   const [authChecking, setAuthChecking] = useState(() => !getAuth());
@@ -50,28 +107,14 @@ export default function App() {
   const [windowError, setWindowError] = useState("");
   const [windowRefreshNonce, setWindowRefreshNonce] = useState(0);
 
-  const roleLabel = useMemo(() => {
-    const role = String(auth?.role ?? "").trim();
-    if (role) {
-      const key = role.toLowerCase();
-      if (key === "admin") return "Admin";
-      if (key === "manager") return "Manager";
-      return role;
-    }
-
-    const portal = String(auth?.portal ?? "").trim().toLowerCase();
-    if (portal.includes("admin")) return "Admin";
-    if (portal.includes("manager")) return "Manager";
-    if (portal.includes("employee")) return "Employee";
-    return "Employee";
-  }, [auth?.portal, auth?.role]);
+  const roleLabel = useMemo(() => resolvePortalRole(auth), [auth]);
 
   useEffect(() => {
     if (!auth) {
       setHasReportees(null);
       return;
     }
-    if (roleLabel === "Admin") {
+    if (roleLabel === "Admin" || roleLabel === "Manager" || roleLabel === "Employee") {
       setHasReportees(false);
       return;
     }
@@ -94,7 +137,7 @@ export default function App() {
         setHasReportees(list.length > 0);
       } catch (err) {
         if (!alive || err?.name === "AbortError") return;
-        setHasReportees(roleLabel === "Manager");
+        setHasReportees(false);
       }
     })();
 
@@ -106,11 +149,13 @@ export default function App() {
 
   const effectivePortalRole = useMemo(() => {
     if (roleLabel === "Admin") return "Admin";
+    if (roleLabel === "Manager") return "Manager";
+    if (roleLabel === "Employee") return "Employee";
     if (hasReportees === true) return "Manager";
-    return "Employee";
+    return "Admin";
   }, [hasReportees, roleLabel]);
 
-  const roleProbeLoading = Boolean(auth) && roleLabel !== "Admin" && hasReportees === null;
+  const roleProbeLoading = Boolean(auth) && !roleLabel && hasReportees === null;
 
   useEffect(() => {
     let alive = true;
@@ -118,23 +163,41 @@ export default function App() {
 
     async function run() {
       setAuthChecking(true);
-      if (hasManualLogoutMark()) {
-        clearAuth();
-        setAuthState(null);
-        setAuthChecking(false);
-        return;
-      }
 
       try {
+        const path = typeof window !== "undefined" ? String(window.location.pathname || "") : "";
+        const callbackToken = getOAuthTokenFromWindow();
+        const isAuthCallbackPath = path === "/auth/callback";
+        const hadManualLogoutMark = hasManualLogoutMark();
+
+        if (callbackToken) {
+          clearAuth();
+          setAuth({ token: callbackToken });
+        }
+
         const me = await fetchMe({ signal: controller.signal });
         if (!alive) return;
         if (!me) {
           clearAuth();
           setAuthState(null);
+          if (hadManualLogoutMark) {
+            // Keep user logged out when backend session is absent.
+            return;
+          }
+          if ((isAuthCallbackPath || callbackToken) && typeof window !== "undefined") {
+            window.history.replaceState({}, "", "/");
+          }
           return;
         }
-        setAuth(me);
+        clearManualLogoutMark();
+        setAuth(callbackToken ? { ...me, token: callbackToken } : me);
         setAuthState(getAuth() || me);
+        if (callbackToken) {
+          console.log("[auth] signed-in user role:", getAuth()?.role || "(not resolved)");
+        }
+        if ((isAuthCallbackPath || callbackToken) && typeof window !== "undefined") {
+          window.history.replaceState({}, "", "/");
+        }
       } catch {
         if (!alive) return;
         setAuthState(getAuth());
@@ -219,6 +282,7 @@ export default function App() {
 
   const logout = useCallback(() => {
     markManualLogout();
+    void logoutApi().catch(() => {});
     clearAuth();
     setAuthState(null);
     setAuthChecking(false);
@@ -242,18 +306,12 @@ export default function App() {
   if (!auth) {
     return (
       <Suspense fallback={<PortalLoader />}>
-        <LoginPage
-          onLoginSuccess={(nextAuth) => {
-            clearManualLogoutMark();
-            setAuthState(nextAuth);
-            setWindowRefreshNonce((n) => n + 1);
-          }}
-        />
+        <LoginPage />
       </Suspense>
     );
   }
 
-  if (roleLabel === "Admin") {
+  if (roleLabel === "Admin" || effectivePortalRole === "Admin") {
     return <Suspense fallback={<PortalLoader />}><AdminControlCenter onLogout={logout} auth={auth} /></Suspense>;
   }
 

@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl } from "./http.js";
+import { buildApiUrl, ensureCsrfCookie, safeJsonParse, toHttpError, withCsrfHeaders } from "./http.js";
 
 export const ADMIN_NOTIFICATION_TYPES = Object.freeze({
   MANAGER_EMPLOYEE_PAIR_SUBMITTED: "MANAGER_EMPLOYEE_PAIR_SUBMITTED",
@@ -211,79 +211,83 @@ function normalizePage(data, normalizeItem) {
   };
 }
 
-async function readError(res) {
-  const text = await res.text().catch(() => "");
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.message) return String(parsed.message);
-    if (parsed?.error) return String(parsed.error);
-  } catch {
-    void 0;
-  }
-  return text || `Request failed: ${res.status} ${res.statusText}`;
-}
-
-async function toHttpError(res) {
-  const err = new Error(await readError(res));
-  err.status = res.status;
-  return err;
-}
-
-async function fetchNotifications(path, types, { limit = 25, cursor = null, unreadOnly = false, signal } = {}) {
+async function fetchNotifications(pathOrPaths, types, { limit = 25, cursor = null, unreadOnly = false, signal } = {}) {
   const auth = getAuthHeader();
   const qs = new URLSearchParams();
   if (Array.isArray(types) && types.length) qs.set("types", types.join(","));
   if (limit != null) qs.set("limit", String(limit));
   if (cursor) qs.set("cursor", String(cursor));
   if (unreadOnly) qs.set("unreadOnly", "true");
+  const paths = Array.isArray(pathOrPaths) ? pathOrPaths : [pathOrPaths];
+  let lastRouteErr = null;
 
-  const res = await fetch(buildApiUrl(`${path}?${qs.toString()}`), {
-    method: "GET",
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
+  for (const path of paths) {
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const res = await fetch(buildApiUrl(`${path}${suffix}`), {
+      method: "GET",
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
 
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
+    if (res.ok) return res.json().catch(() => ({}));
+
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+
+  throw lastRouteErr || new Error("Notifications endpoint not found.");
 }
 
-async function callMarkReadEndpoint(path, { signal } = {}) {
+async function callMarkReadEndpoint(pathOrPaths, { signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(path), {
-    method: "POST",
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
+  const paths = Array.isArray(pathOrPaths) ? pathOrPaths : [pathOrPaths];
+  const methods = ["PUT", "POST"];
+  let lastRouteErr = null;
 
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
+  for (const path of paths) {
+    for (const method of methods) {
+      const res = await fetch(buildApiUrl(path), {
+        method,
+        signal,
+        credentials: "include",
+        headers: auth ? { Authorization: auth } : undefined,
+      });
+
+      if (res.ok) return res.json().catch(() => ({}));
+      const err = await toHttpError(res);
+      if (res.status === 404 || res.status === 405) {
+        lastRouteErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastRouteErr || new Error("Notifications update endpoint not found.");
 }
 
 function parseSsePayloadWithNormalizer(text, normalizer) {
   const rawText = toTrimmedString(text);
   if (!rawText) return [];
 
-  try {
-    const parsed = JSON.parse(rawText);
-
-    if (Array.isArray(parsed)) {
-      return parsed.map((item) => normalizer(item)).filter(Boolean);
+  const parsed = safeJsonParse(rawText, undefined, null);
+  if (Array.isArray(parsed)) {
+    return parsed.map((item) => normalizer(item)).filter(Boolean);
+  }
+  if (isPlainObject(parsed)) {
+    if (Array.isArray(parsed.items)) {
+      return parsed.items.map((item) => normalizer(item)).filter(Boolean);
     }
+    const maybeDirect = normalizer(parsed);
+    if (maybeDirect) return [maybeDirect];
 
-    if (isPlainObject(parsed)) {
-      if (Array.isArray(parsed.items)) {
-        return parsed.items.map((item) => normalizer(item)).filter(Boolean);
-      }
-      const maybeDirect = normalizer(parsed);
-      if (maybeDirect) return [maybeDirect];
-
-      const maybeWrapped = normalizer(parsed.notification ?? parsed.payload ?? parsed.data);
-      if (maybeWrapped) return [maybeWrapped];
-    }
-  } catch {
-    void 0;
+    const maybeWrapped = normalizer(parsed.notification ?? parsed.payload ?? parsed.data);
+    if (maybeWrapped) return [maybeWrapped];
   }
 
   return [];
@@ -408,54 +412,181 @@ export function normalizeManagerNotificationPage(data) {
   return normalizePage(data, normalizeManagerNotification);
 }
 
-export async function fetchAdminNotifications({ types = null, ...opts } = {}) {
-  // Allow all types by default to ensure password reset codes or new server events are not filtered out
-  return fetchNotifications("/admin/notifications", types, opts);
+function toUserId(value) {
+  const text = toTrimmedString(value);
+  return text || "";
 }
 
-export async function fetchManagerNotifications(opts = {}) {
-  // Allow all types by default so admin rejections or new server events are not filtered out
-  return fetchNotifications("/notifications", null, opts);
+function isNumericToken(value) {
+  return /^\d+$/.test(toTrimmedString(value));
+}
+
+function userIdCandidates(value) {
+  const raw = toUserId(value);
+  if (!raw) return [];
+  const out = [];
+  const seen = new Set();
+  const push = (v) => {
+    const text = toTrimmedString(v);
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    out.push(text);
+  };
+  push(raw);
+  if (isNumericToken(raw)) push(raw);
+  const numeric = out.filter((v) => isNumericToken(v));
+  const nonNumeric = out.filter((v) => !isNumericToken(v));
+  return [...numeric, ...nonNumeric];
+}
+
+async function fetchNotificationsByUserId(userId, { signal } = {}) {
+  const candidates = userIdCandidates(userId);
+  if (!candidates.length) return [];
+  const auth = getAuthHeader();
+  let lastRouteErr = null;
+  for (const candidate of candidates) {
+    const safeUserId = encodeURIComponent(candidate);
+    const numericCandidate = isNumericToken(candidate);
+    const paths = numericCandidate
+      ? [
+          `/api/v1/notifications/${safeUserId}`,
+          `/api/v1/notifications/user/${safeUserId}`,
+          `/api/v1/notifications?userId=${safeUserId}`,
+          `/api/v1/notifications?employeeId=${safeUserId}`,
+        ]
+      : [
+          `/api/v1/notifications?employeeId=${safeUserId}`,
+          `/api/v1/notifications?employeeCode=${safeUserId}`,
+          `/api/v1/notifications?userId=${safeUserId}`,
+        ];
+    for (const path of paths) {
+      const res = await fetch(buildApiUrl(path), {
+        method: "GET",
+        signal,
+        credentials: "include",
+        headers: auth ? { Authorization: auth } : undefined,
+      });
+      if (res.ok) return res.json().catch(() => []);
+      const err = await toHttpError(res);
+      if (res.status === 400 || res.status === 404 || res.status === 405) {
+        lastRouteErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  if (lastRouteErr?.status === 400 || lastRouteErr?.status === 404 || lastRouteErr?.status === 405) {
+    return [];
+  }
+  if (lastRouteErr) throw lastRouteErr;
+  return [];
+}
+
+async function markNotificationReadById(notificationId, { signal } = {}) {
+  const id = toTrimmedString(notificationId);
+  if (!id) throw new Error("notificationId is required.");
+  const auth = getAuthHeader();
+  const safeId = encodeURIComponent(id);
+  const paths = [
+    `/api/v1/notifications/${safeId}/read`,
+    `/api/v1/notifications/read/${safeId}`,
+    `/api/v1/notifications/${safeId}`,
+  ];
+  const methods = ["PUT", "POST", "PATCH"];
+  let lastRouteErr = null;
+  for (const path of paths) {
+    for (const method of methods) {
+      let res = await fetch(buildApiUrl(path), {
+        method,
+        signal,
+        credentials: "include",
+        headers: withCsrfHeaders(auth ? { Authorization: auth } : undefined),
+      });
+      if (res.status === 403) {
+        await ensureCsrfCookie({
+          signal,
+          headers: auth ? { Authorization: auth } : undefined,
+          forceRefresh: true,
+        }).catch(() => {});
+        res = await fetch(buildApiUrl(path), {
+          method,
+          signal,
+          credentials: "include",
+          headers: withCsrfHeaders(auth ? { Authorization: auth } : undefined),
+        });
+      }
+      if (res.ok) return true;
+      const err = await toHttpError(res);
+      if (res.status === 400 || res.status === 404 || res.status === 405) {
+        lastRouteErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastRouteErr || new Error("Notifications read endpoint not found.");
+}
+
+export async function fetchAdminNotifications({ userId, signal } = {}) {
+  return fetchNotificationsByUserId(userId, { signal });
+}
+
+export async function fetchManagerNotifications({ userId, signal } = {}) {
+  return fetchNotificationsByUserId(userId, { signal });
 }
 
 export async function markAdminNotificationRead(notificationId, { signal } = {}) {
-  const id = toTrimmedString(notificationId);
-  if (!id) throw new Error("notificationId is required.");
-  return callMarkReadEndpoint(`/admin/notifications/${encodeURIComponent(id)}/read`, { signal });
-}
-
-export async function markAllAdminNotificationsRead({ signal } = {}) {
-  return callMarkReadEndpoint("/admin/notifications/read-all", { signal });
+  return markNotificationReadById(notificationId, { signal });
 }
 
 export async function markManagerNotificationRead(notificationId, { signal } = {}) {
-  const id = toTrimmedString(notificationId);
-  if (!id) throw new Error("notificationId is required.");
-  return callMarkReadEndpoint(`/notifications/${encodeURIComponent(id)}/read`, { signal });
+  return markNotificationReadById(notificationId, { signal });
 }
 
-export async function markAllManagerNotificationsRead({ signal } = {}) {
-  return callMarkReadEndpoint("/notifications/read-all", { signal });
+async function markAllByIterating(notifications, { signal } = {}) {
+  const list = Array.isArray(notifications) ? notifications : [];
+  const unreadIds = list
+    .filter((item) => item && item.read !== true)
+    .map((item) => toTrimmedString(item.id))
+    .filter(Boolean);
+  for (const id of unreadIds) {
+    await markNotificationReadById(id, { signal });
+  }
+  return true;
 }
 
-export function subscribeAdminNotificationsStream({ onNotification, onError } = {}) {
+export async function markAllAdminNotificationsRead({ notifications = [], signal } = {}) {
+  return markAllByIterating(notifications, { signal });
+}
+
+export async function markAllManagerNotificationsRead({ notifications = [], signal } = {}) {
+  return markAllByIterating(notifications, { signal });
+}
+
+export function subscribeAdminNotificationsStream({ userId, onNotification, onError } = {}) {
+  const candidates = userIdCandidates(userId);
+  const streamId = candidates.find((x) => isNumericToken(x)) || "";
+  if (!streamId) return () => {};
   return subscribeNotificationsStream({
-    path: "/admin/notifications/stream",
+    path: `/api/v1/notifications/subscribe/${encodeURIComponent(streamId)}`,
     types: null,
     normalizer: normalizeAdminNotification,
-    customEventNames: ["admin-notification"],
+    customEventNames: ["admin-notification", "notification"],
     onNotification,
     onError,
   });
 }
 
-export function subscribeManagerNotificationsStream({ onNotification, onError } = {}) {
+export function subscribeManagerNotificationsStream({ userId, onNotification, onError } = {}) {
+  const candidates = userIdCandidates(userId);
+  const streamId = candidates.find((x) => isNumericToken(x)) || "";
+  if (!streamId) return () => {};
   return subscribeNotificationsStream({
-    path: "/notifications/stream",
+    path: `/api/v1/notifications/subscribe/${encodeURIComponent(streamId)}`,
     // Allow all types to pass through so admins can notify managers about rejections, etc.
     types: null,
     normalizer: normalizeManagerNotification,
-    customEventNames: ["manager-notification"],
+    customEventNames: ["manager-notification", "notification"],
     onNotification,
     onError,
   });

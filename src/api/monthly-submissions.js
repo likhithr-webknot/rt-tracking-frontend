@@ -1,23 +1,6 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl, ensureCsrfCookie, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, ensureCsrfCookie, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
 import { buildCycleMeta, formatYearMonth as formatYearMonthFromCycle, normalizeYearMonth } from "../utils/reviewCycles.js";
-
-async function readError(res) {
-  const text = await res.text().catch(() => "");
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.message) return String(parsed.message);
-    if (parsed?.error) return String(parsed.error);
-  } catch { void 0; }
-  return text || `Request failed: ${res.status} ${res.statusText}`;
-}
-
-async function toHttpError(res) {
-  const message = await readError(res);
-  const err = new Error(message);
-  err.status = res.status;
-  return err;
-}
 
 export function formatYearMonth(date) {
   return formatYearMonthFromCycle(date);
@@ -465,6 +448,12 @@ export async function saveMonthlyDraft(payload, { signal } = {}) {
     });
     res = await attempt();
   }
+
+  // New controller integration: /draft might not exist anymore.
+  if (res.status === 404 || res.status === 405) {
+    return submitMonthlySubmission(payload, { signal });
+  }
+
   if (!res.ok) {
     const err = await toHttpError(res);
     if (res.status === 400) {
@@ -485,9 +474,35 @@ export async function submitMonthlySubmission(payload, { signal } = {}) {
     ...(auth ? { Authorization: auth } : {}),
   };
 
-  async function attempt() {
-    return fetch(buildApiUrl("/monthly-submissions/submit"), {
-      method: "POST",
+  const submissionIdRaw = payload?.submissionId ?? payload?.id ?? payload?.submissionID ?? null;
+  const submissionId = submissionIdRaw != null ? String(submissionIdRaw).trim() : "";
+
+  const actorRole = String(payload?.actorRole ?? "").trim().toUpperCase();
+  const targetRole = String(payload?.targetRole ?? "").trim().toUpperCase();
+  const hasManagerReview = Boolean(payload?.managerReview || payload?.managerEvaluation || payload?.managerSubmittedAt);
+
+  const isManagerEmployeeReview =
+    actorRole === "MANAGER" &&
+    targetRole === "EMPLOYEE" &&
+    hasManagerReview &&
+    Boolean(submissionId);
+
+  const requestCandidates = isManagerEmployeeReview
+    ? [
+        {
+          method: "PUT",
+          path: `/monthly-submissions/${encodeURIComponent(submissionId)}/manager-review`,
+        },
+      ]
+    : [
+        { method: "POST", path: "/monthly-submissions/self" },
+        // Backward-compat fallback (in case older backend is still deployed).
+        { method: "POST", path: "/monthly-submissions/submit" },
+      ];
+
+  async function attempt({ method, path }) {
+    return fetch(buildApiUrl(path), {
+      method,
       signal,
       credentials: "include",
       headers: withCsrfHeaders(baseHeaders),
@@ -495,25 +510,45 @@ export async function submitMonthlySubmission(payload, { signal } = {}) {
     });
   }
 
-  let res = await attempt();
-  if (!res.ok && res.status === 403) {
-    await ensureCsrfCookie({
-      signal,
-      headers: auth ? { Authorization: auth } : undefined,
-      forceRefresh: true,
+  let lastErr = null;
+  for (const candidate of requestCandidates) {
+    let res = await attempt(candidate).catch((err) => {
+      lastErr = err;
+      return null;
     });
-    res = await attempt();
-  }
-  if (!res.ok) {
-    const err = await toHttpError(res);
-    if (res.status === 400) {
-      err.message = `${err.message} [payload-shape kpiRatings=${Array.isArray(preparedPayload?.kpiRatings)} certifications=${Array.isArray(preparedPayload?.certifications)} webknotValueResponses=${Array.isArray(preparedPayload?.webknotValueResponses)}]`;
+    if (!res) continue;
+
+    if (!res.ok && res.status === 403) {
+      await ensureCsrfCookie({
+        signal,
+        headers: auth ? { Authorization: auth } : undefined,
+        forceRefresh: true,
+      });
+      res = await attempt(candidate).catch((err) => {
+        lastErr = err;
+        return null;
+      });
     }
-    throw err;
+
+    if (!res) continue;
+
+    if (!res.ok) {
+      // Try next fallback path only for not-found-ish errors.
+      if (res.status === 404 || res.status === 405) continue;
+      const err = await toHttpError(res);
+      if (res.status === 400) {
+        err.message = `${err.message} [payload-shape kpiRatings=${Array.isArray(preparedPayload?.kpiRatings)} certifications=${Array.isArray(preparedPayload?.certifications)} webknotValueResponses=${Array.isArray(preparedPayload?.webknotValueResponses)}]`;
+      }
+      throw err;
+    }
+
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) return res.json().catch(() => ({}));
+    return res.text().catch(() => "");
   }
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json().catch(() => ({}));
-  return res.text().catch(() => "");
+
+  if (lastErr) throw lastErr;
+  throw new Error("Monthly submission endpoint not found.");
 }
 
 export async function fetchMyMonthlySubmission({ month, signal } = {}) {
@@ -529,8 +564,46 @@ export async function fetchMyMonthlySubmission({ month, signal } = {}) {
   if (res.status === 404) return null;
   if (!res.ok) throw await toHttpError(res);
   const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json().catch(() => ({}));
-  return res.text().catch(() => "");
+  if (!contentType.includes("application/json")) return res.text().catch(() => "");
+
+  const raw = await res.json().catch(() => ({}));
+  // Backend returns GenericResponseDTO, where `data` is usually a list.
+  const container = raw?.data ?? raw;
+  if (Array.isArray(container)) {
+    if (month) {
+      const wanted = String(month);
+      const found = container.find(
+        (x) =>
+          x &&
+          (String(x.month ?? x.monthKey ?? x.cycleMonth ?? "") === wanted ||
+            String(x.monthKey ?? "") === wanted)
+      );
+      if (found) return found;
+    }
+    return container[0] ?? null;
+  }
+
+  if (container && typeof container === "object") {
+    const maybe =
+      (Array.isArray(container?.submissions) && container.submissions) ||
+      (Array.isArray(container?.items) && container.items) ||
+      null;
+    if (maybe) {
+      if (month) {
+        const wanted = String(month);
+        const found = maybe.find(
+          (x) =>
+            x &&
+            (String(x.month ?? x.monthKey ?? x.cycleMonth ?? "") === wanted || String(x.monthKey ?? "") === wanted)
+        );
+        if (found) return found;
+      }
+      return maybe[0] ?? null;
+    }
+    return container;
+  }
+
+  return raw;
 }
 
 export async function fetchMyMonthlySubmissionHistory({ signal } = {}) {
@@ -597,13 +670,174 @@ export async function deleteAdminMonthlySubmission(submissionId, { signal } = {}
  */
 export async function fetchSubmissionCycles({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/monthly-submissions/cycles"), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
+  const endpoints = [
+    "/api/v1/list-submission-cycles",
+    "/monthly-submissions/cycles",
+  ];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) return parseResponse(res, []);
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Submission cycle list endpoint not found.");
+}
+
+export async function fetchSubmissionCycleById(id, { signal } = {}) {
+  const safeId = encodeURIComponent(String(id ?? "").trim());
+  if (!safeId) throw new Error("Submission cycle id is required.");
+  const auth = getAuthHeader();
+  const endpoints = [
+    `/api/v1/get-submission-cycle/${safeId}`,
+    `/monthly-submissions/cycles/${safeId}`,
+  ];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Submission cycle get-by-id endpoint not found.");
+}
+
+export async function fetchSubmissionCycleByKey({ cycleKey, scope = null, signal } = {}) {
+  const key = String(cycleKey ?? "").trim();
+  if (!key) throw new Error("cycleKey is required.");
+  const auth = getAuthHeader();
+  const qs = new URLSearchParams();
+  qs.set("cycleKey", key);
+  if (scope != null && String(scope).trim()) qs.set("scope", String(scope).trim());
+  const endpoints = [`/api/v1/get-submission-cycle?${qs.toString()}`];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Submission cycle get-by-key endpoint not found.");
+}
+
+export async function addSubmissionCycle(payload, { signal } = {}) {
+  const auth = getAuthHeader();
+  const headers = withCsrfHeaders({
+    "Content-Type": "application/json",
+    ...(auth ? { Authorization: auth } : {}),
   });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json();
+  const endpoints = ["/api/v1/add-submission-cycle"];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      method: "POST",
+      signal,
+      credentials: "include",
+      headers,
+      body: JSON.stringify(payload ?? {}),
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Submission cycle add endpoint not found.");
+}
+
+export async function updateSubmissionCycle(payload, { signal } = {}) {
+  const bodyPayload = payload && typeof payload === "object" ? payload : {};
+  const idRaw = bodyPayload.id ?? bodyPayload.submissionCycleId ?? bodyPayload.cycleId ?? null;
+  const safeId = encodeURIComponent(String(idRaw ?? "").trim());
+  const auth = getAuthHeader();
+  const headers = withCsrfHeaders({
+    "Content-Type": "application/json",
+    ...(auth ? { Authorization: auth } : {}),
+  });
+  const endpoints = [
+    { method: "PUT", path: "/api/v1/update-submission-cycle" },
+    { method: "POST", path: "/api/v1/update-submission-cycle" },
+  ];
+  if (safeId) {
+    endpoints.unshift(
+      { method: "PUT", path: `/api/v1/update-submission-cycle/${safeId}` },
+      { method: "PATCH", path: `/api/v1/update-submission-cycle/${safeId}` },
+      { method: "POST", path: `/api/v1/update-submission-cycle/${safeId}` },
+      { method: "PUT", path: `/api/v1/edit-submission-cycle/${safeId}` },
+      { method: "PATCH", path: `/api/v1/edit-submission-cycle/${safeId}` },
+      { method: "POST", path: `/api/v1/edit-submission-cycle/${safeId}` },
+    );
+  }
+
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint.path), {
+      method: endpoint.method,
+      signal,
+      credentials: "include",
+      headers,
+      body: JSON.stringify(bodyPayload),
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Submission cycle update endpoint not found.");
+}
+
+export async function deleteSubmissionCycle(id, { signal } = {}) {
+  const safeId = encodeURIComponent(String(id ?? "").trim());
+  if (!safeId) throw new Error("Submission cycle id is required.");
+  const auth = getAuthHeader();
+  const headers = withCsrfHeaders(auth ? { Authorization: auth } : undefined);
+  const endpoints = [`/api/v1/delete-submission-cycle/${safeId}`];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      method: "DELETE",
+      signal,
+      credentials: "include",
+      headers,
+    });
+    if (res.ok) return parseResponse(res, true);
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Submission cycle delete endpoint not found.");
 }
 
 export async function submitAdminReviewDecision(payload, { signal } = {}) {

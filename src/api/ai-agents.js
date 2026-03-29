@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, toHttpError, withCsrfHeaders } from "./http.js";
 
 function toCleanString(value) {
   if (value == null) return "";
@@ -45,23 +45,6 @@ export function normalizeAiAgents(data) {
       };
     })
     .filter((item) => Boolean(item.id) && Boolean(item.apiKey));
-}
-
-async function readError(res) {
-  const text = await res.text().catch(() => "");
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.message) return String(parsed.message);
-    if (parsed?.error) return String(parsed.error);
-  } catch { void 0; }
-  return text || `Request failed: ${res.status} ${res.statusText}`;
-}
-
-async function toHttpError(res) {
-  const message = await readError(res);
-  const err = new Error(message);
-  err.status = res.status;
-  return err;
 }
 
 export async function fetchAiAgents({ activeOnly = null, limit = 50, cursor = null, signal } = {}) {

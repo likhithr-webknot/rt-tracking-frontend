@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import Toast from "../shared/Toast.jsx";
+import { getGoogleSignInUrl } from "../../api/auth.js";
 
 function GoogleIcon() {
   return (
@@ -35,6 +36,17 @@ export default function LoginPage() {
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState(null);
+  const googleSignInUrl = getGoogleSignInUrl() || "/api/v1/google-signin";
+  const authErrorKey =
+    typeof window === "undefined"
+      ? ""
+      : String(new URLSearchParams(window.location.search || "").get("error") || "")
+          .trim()
+          .toLowerCase();
+  const authErrorMessage =
+    authErrorKey === "unregistered_user"
+      ? "Your Google account is not registered. Contact HR/admin to get access."
+      : "";
   const toastTimerRef = useRef(null);
   const showToast = useCallback((next) => {
     setToast(next);
@@ -208,8 +220,16 @@ export default function LoginPage() {
                 transition={{ duration: 0.3, ease: "easeOut" }}
                 className="rt-login-form relative"
               >
+                {authErrorMessage ? (
+                  <div
+                    role="alert"
+                    className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200"
+                  >
+                    {authErrorMessage}
+                  </div>
+                ) : null}
                 <a
-                  href="/api/v1/google-signin"
+                  href={googleSignInUrl}
                   className="w-full rt-btn-primary flex items-center justify-center gap-3 transition-all text-base"
                 >
                   <GoogleIcon />

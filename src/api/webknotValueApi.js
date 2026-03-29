@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl, withCsrfHeaders } from "./http.js";
+import { getApiBaseUrl, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
 
 function toCleanString(value, depth = 0) {
     if (value == null) return "";
@@ -57,6 +57,19 @@ function pickDeep(obj, keys, depth = 0) {
         if (s) return s;
     }
     return "";
+}
+
+function buildWebknotValueUrl(path) {
+    const p = String(path || "");
+    const normalizedPath = p.startsWith("/") ? p : `/${p}`;
+    const base = getApiBaseUrl();
+    if (!base) return normalizedPath;
+
+    // Backend controller is mounted at `/webknot-value/*` (no `/api/v1`),
+    // but our app base URL may be configured as `.../api/v1`.
+    const suffix = "/api/v1";
+    const baseNoApiV1 = base.endsWith(suffix) ? base.slice(0, -suffix.length) : base;
+    return `${baseNoApiV1}${normalizedPath}`;
 }
 
 function makeFallbackId(title, index) {
@@ -133,42 +146,94 @@ export function normalizeWebknotValuesList(data) {
     return out;
 }
 
-async function readError(res) {
-    const text = await res.text().catch(() => "");
-    try {
-        const parsed = JSON.parse(text);
-        if (parsed?.message) return String(parsed.message);
-        if (parsed?.error) return String(parsed.error);
-    } catch { void 0; }
-    return text || `Request failed: ${res.status} ${res.statusText}`;
-}
-
-async function toHttpError(res) {
-    const message = await readError(res);
-    const err = new Error(message);
-    err.status = res.status;
-    return err;
-}
-
-export async function fetchValues(activeOnly = true, { limit = null, cursor = null, signal } = {}) {
+export async function fetchValues(activeOnly = true, { limit = null, cursor = null, offset = null, signal } = {}) {
     const auth = getAuthHeader();
+
+    // This backend controller paginates using `limit` + `offset`.
+    // Our UI code historically passes `cursor`, so we treat `cursor` as an offset.
+    const resolvedOffset =
+        offset != null ? Number.parseInt(String(offset), 10) :
+        cursor != null ? Number.parseInt(String(cursor), 10) :
+        0;
+    const safeLimit = limit != null ? Number.parseInt(String(limit), 10) : 200;
+    const safeOffset = Number.isFinite(resolvedOffset) && resolvedOffset >= 0 ? resolvedOffset : 0;
+
     const qs = new URLSearchParams();
     qs.set("activeOnly", String(activeOnly));
-    if (limit != null) qs.set("limit", String(limit));
-    if (cursor) qs.set("cursor", String(cursor));
+    if (Number.isFinite(safeLimit)) qs.set("limit", String(safeLimit));
+    if (Number.isFinite(safeLimit)) qs.set("offset", String(safeOffset));
+    // Compatibility: some older endpoints may accept `cursor` instead of `offset`.
+    if (Number.isFinite(safeLimit)) qs.set("cursor", String(safeOffset));
     qs.set("_ts", Date.now().toString()); // cache-buster
-    const res = await fetch(buildApiUrl(`/webknot-values/list?${qs.toString()}`), {
-        signal,
-        credentials: "include",
-        cache: "no-store",
-        headers: {
-            ...(auth ? { Authorization: auth } : {}),
-            "Cache-Control": "no-store, no-cache, must-revalidate",
-            Pragma: "no-cache",
-        },
-    });
-    if (!res.ok) throw await toHttpError(res);
-    return res.json().catch(() => ([]));
+
+    const endpoints = [
+        // Actual controller routes in this backend are mounted at `/webknot-value/*` (no `/api/v1`, no plural).
+        `/webknot-value/list?${qs.toString()}`,
+        // Backwards compatibility: older deployments might be mounted at `/api/v1`.
+        `/api/v1/webknot-value/list?${qs.toString()}`,
+    ];
+
+    let lastRouteErr = null;
+    for (const endpoint of endpoints) {
+        const res = await fetch(buildWebknotValueUrl(endpoint), {
+            signal,
+            credentials: "include",
+            cache: "no-store",
+            headers: {
+                ...(auth ? { Authorization: auth } : {}),
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                Pragma: "no-cache",
+            },
+        });
+        if (!res.ok) {
+            const err = await toHttpError(res);
+            if (res.status === 404 || res.status === 405) {
+                lastRouteErr = err;
+                continue;
+            }
+            throw err;
+        }
+
+        const raw = await res.json().catch(() => ({}));
+        const root = raw && typeof raw === "object" ? raw : {};
+        const nested = root?.data && typeof root.data === "object" ? root.data : null;
+
+        const items =
+            (Array.isArray(root?.items) && root.items) ||
+            (Array.isArray(root?.results) && root.results) ||
+            (Array.isArray(root?.content) && root.content) ||
+            (Array.isArray(root?.list) && root.list) ||
+            (Array.isArray(nested?.data) && nested.data) ||
+            (Array.isArray(nested?.items) && nested.items) ||
+            (Array.isArray(nested?.results) && nested.results) ||
+            (Array.isArray(nested?.content) && nested.content) ||
+            (Array.isArray(nested?.list) && nested.list) ||
+            (Array.isArray(nested?.values) && nested.values) ||
+            [];
+
+        const totalElement =
+            (Number.isFinite(root?.totalElement) ? root.totalElement : null) ??
+            (Number.isFinite(nested?.totalElement) ? nested.totalElement : null) ??
+            (Number.isFinite(root?.totalElements) ? root.totalElements : null) ??
+            (Number.isFinite(nested?.totalElements) ? nested.totalElements : null) ??
+            null;
+
+        const pageSize =
+            (Number.isFinite(nested?.pageSize) ? nested.pageSize : null) ??
+            (Number.isFinite(nested?.size) ? nested.size : null) ??
+            safeLimit ??
+            null;
+
+        // Generate a next "cursor" compatible with existing pagination loops.
+        const nextCursor =
+            totalElement != null && pageSize != null && Number.isFinite(totalElement) && Number.isFinite(pageSize)
+                ? (safeOffset + items.length < totalElement ? String(safeOffset + items.length) : null)
+                : (items.length > 0 && safeLimit != null && items.length === safeLimit ? String(safeOffset + items.length) : null);
+
+        return { items, nextCursor };
+    }
+
+    throw lastRouteErr || new Error("Webknot values list endpoint not found.");
 }
 
 export async function addValue(data) {
@@ -183,6 +248,7 @@ export async function addValue(data) {
         name: title,
         valueName: title,
         pillar,
+        evaluation_criteria: pillar,
         evaluationCriteria: pillar,
         criteria: pillar,
         valuePillar: pillar,
@@ -193,18 +259,30 @@ export async function addValue(data) {
         details: description,
         desc: description,
     };
-    const res = await fetch(buildApiUrl("/webknot-values/add"), {
-        method: "POST",
-        credentials: "include",
-        headers: withCsrfHeaders({
-            "Content-Type": "application/json",
-            ...(auth ? { Authorization: auth } : {}),
-        }),
-        body: JSON.stringify(payload),
+    const headers = withCsrfHeaders({
+        "Content-Type": "application/json",
+        ...(auth ? { Authorization: auth } : {}),
     });
+    const endpoints = ["/webknot-value/add", "/api/v1/webknot-value/add"];
+    let lastRouteErr = null;
 
-    if (!res.ok) throw await toHttpError(res);
-    return res.json().catch(() => ({}));
+    for (const endpoint of endpoints) {
+        const res = await fetch(buildWebknotValueUrl(endpoint), {
+            method: "POST",
+            credentials: "include",
+            headers,
+            body: JSON.stringify(payload),
+        });
+        if (res.ok) return parseResponse(res, {});
+        const err = await toHttpError(res);
+        if (res.status === 404 || res.status === 405) {
+            lastRouteErr = err;
+            continue;
+        }
+        throw err;
+    }
+
+    throw lastRouteErr || new Error("Webknot value add endpoint not found.");
 }
 
 export async function updateValue(id, data) {
@@ -224,6 +302,7 @@ export async function updateValue(id, data) {
         name: title,
         valueName: title,
         pillar,
+        evaluation_criteria: pillar,
         evaluationCriteria: pillar,
         criteria: pillar,
         valuePillar: pillar,
@@ -234,30 +313,68 @@ export async function updateValue(id, data) {
         details: description,
         desc: description,
     };
-    const res = await fetch(buildApiUrl(`/webknot-values/update/${safeId}`), {
-        method: "PUT",
-        credentials: "include",
-        headers: withCsrfHeaders({
-            "Content-Type": "application/json",
-            ...(auth ? { Authorization: auth } : {}),
-        }),
-        body: JSON.stringify(payload),
+    const headers = withCsrfHeaders({
+        "Content-Type": "application/json",
+        ...(auth ? { Authorization: auth } : {}),
     });
+    const endpoints = [
+        // Primary controller routes (no `/api/v1`)
+        { method: "PUT", path: `/webknot-value/update/${safeId}` },
+        { method: "PATCH", path: `/webknot-value/update/${safeId}` },
+        { method: "POST", path: `/webknot-value/update/${safeId}` },
+        { method: "PUT", path: `/webknot-value/edit/${safeId}` },
+        { method: "PATCH", path: `/webknot-value/edit/${safeId}` },
+        { method: "POST", path: `/webknot-value/edit/${safeId}` },
 
-    if (!res.ok) throw await toHttpError(res);
-    return res.json().catch(() => ({}));
+        // Backwards compatibility for older mounts.
+        { method: "PUT", path: `/api/v1/webknot-value/update/${safeId}` },
+        { method: "PATCH", path: `/api/v1/webknot-value/update/${safeId}` },
+        { method: "POST", path: `/api/v1/webknot-value/update/${safeId}` },
+        { method: "PUT", path: `/api/v1/webknot-value/edit/${safeId}` },
+        { method: "PATCH", path: `/api/v1/webknot-value/edit/${safeId}` },
+        { method: "POST", path: `/api/v1/webknot-value/edit/${safeId}` },
+    ];
+    let lastRouteErr = null;
+
+    for (const endpoint of endpoints) {
+        const res = await fetch(buildWebknotValueUrl(endpoint.path), {
+            method: endpoint.method,
+            credentials: "include",
+            headers,
+            body: JSON.stringify(payload),
+        });
+        if (res.ok) return parseResponse(res, {});
+        const err = await toHttpError(res);
+        if (res.status === 404 || res.status === 405) {
+            lastRouteErr = err;
+            continue;
+        }
+        throw err;
+    }
+
+    throw lastRouteErr || new Error("Webknot value update endpoint not found.");
 }
 
 export async function deleteValue(id) {
     const safeId = encodeURIComponent(String(id ?? "").trim());
     if (!safeId) throw new Error("Value id is required.");
     const auth = getAuthHeader();
-    const res = await fetch(buildApiUrl(`/webknot-values/delete/${safeId}`), {
-        method: "DELETE",
-        credentials: "include",
-        headers: withCsrfHeaders(auth ? { Authorization: auth } : undefined),
-    });
-
-    if (!res.ok) throw await toHttpError(res);
-    return true;
+    const headers = withCsrfHeaders(auth ? { Authorization: auth } : undefined);
+    const endpoints = [`/webknot-value/delete/${safeId}`, `/api/v1/webknot-value/delete/${safeId}`];
+    let lastRouteErr = null;
+    for (const endpoint of endpoints) {
+        const res = await fetch(buildWebknotValueUrl(endpoint), {
+            method: "DELETE",
+            credentials: "include",
+            headers,
+        });
+        if (res.ok) return parseResponse(res, true);
+        const err = await toHttpError(res);
+        if (res.status === 404 || res.status === 405) {
+            lastRouteErr = err;
+            continue;
+        }
+        throw err;
+    }
+    throw lastRouteErr || new Error("Webknot value delete endpoint not found.");
 }

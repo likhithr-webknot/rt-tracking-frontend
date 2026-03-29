@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, toHttpError, withCsrfHeaders } from "./http.js";
 
 export function normalizeEmployees(data) {
   const root = data && typeof data === "object" ? data : {};
@@ -63,7 +63,7 @@ export function normalizeEmployees(data) {
       role: String(e.empRole ?? e.role ?? e.userRole ?? "Employee"),
       designation: String(e.designation ?? e.title ?? e.jobTitle ?? e.empRole ?? ""),
       band: String(e.band ?? e.level ?? "B4"),
-      stream: String(e.stream ?? e.context ?? ""),
+      stream: String(e.department ?? e.stream ?? e.context ?? ""),
       project: String(e.project ?? e.projectName ?? e.account ?? e.client ?? ""),
       managerId: String(e.managerId ?? e.reportingManagerId ?? e.managerEmpId ?? ""),
       createdAt: e.createdAt ? String(e.createdAt) : null,
@@ -80,36 +80,61 @@ export function normalizeEmployees(data) {
   });
 }
 
-async function readError(res) {
-  const text = await res.text().catch(() => "");
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.message) return String(parsed.message);
-    if (parsed?.error) return String(parsed.error);
-  } catch { void 0; }
-  return text || `Request failed: ${res.status} ${res.statusText}`;
-}
-
-async function toHttpError(res) {
-  const message = await readError(res);
-  const err = new Error(message);
-  err.status = res.status;
-  return err;
+function extractUsersArray(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (!raw || typeof raw !== "object") return [];
+  const root = raw;
+  const nested = root?.data && typeof root.data === "object" ? root.data : null;
+  const candidates = [
+    root?.items,
+    root?.users,
+    root?.employees,
+    root?.results,
+    root?.content,
+    root?.data,
+    nested?.items,
+    nested?.users,
+    nested?.employees,
+    nested?.results,
+    nested?.content,
+    nested?.data,
+  ];
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+  return [];
 }
 
 export async function fetchEmployees({ limit = null, cursor = null, signal } = {}) {
   const auth = getAuthHeader();
-  const qs = new URLSearchParams();
-  if (limit != null) qs.set("limit", String(limit));
-  if (cursor) qs.set("cursor", String(cursor));
-  const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const res = await fetch(buildApiUrl(`/employees/getall${suffix}`), {
+  const res = await fetch(buildApiUrl("/api/v1/"), {
     signal,
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
   });
   if (!res.ok) throw await toHttpError(res);
-  return res.json();
+  const raw = await res.json().catch(() => ({}));
+  const allUsers = extractUsersArray(raw);
+
+  const fallbackLimit = 10;
+  const parsedLimit = limit != null ? Number.parseInt(String(limit), 10) : fallbackLimit;
+  const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : fallbackLimit;
+  const parsedOffset = cursor != null ? Number.parseInt(String(cursor), 10) : 0;
+  const safeOffset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+
+  const items = allUsers.slice(safeOffset, safeOffset + safeLimit);
+  const nextCursor = safeOffset + safeLimit < allUsers.length ? String(safeOffset + safeLimit) : null;
+  return {
+    items,
+    nextCursor,
+    total: allUsers.length,
+    managerCount: allUsers.filter((u) => String(u?.empRole ?? u?.role ?? "").toLowerCase() === "manager").length,
+    adminCount: allUsers.filter((u) => String(u?.empRole ?? u?.role ?? "").toLowerCase() === "admin").length,
+    employeeCount: allUsers.filter((u) => String(u?.empRole ?? u?.role ?? "").toLowerCase() === "employee").length,
+    bandCount: new Set(
+      allUsers.map((u) => String(u?.band ?? u?.level ?? "").trim()).filter(Boolean)
+    ).size,
+  };
 }
 
 export async function addEmployee(payload) {

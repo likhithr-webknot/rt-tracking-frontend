@@ -1,3 +1,5 @@
+import { safeJsonParse } from "./json.js";
+
 const APP_SETTINGS_STORAGE_KEY = "rt_tracking_app_settings_v1";
 
 export const APP_SETTINGS_DEFAULTS = {
@@ -67,12 +69,8 @@ function sanitize(settings) {
 }
 
 function parseStored(raw) {
-  try {
-    const parsed = JSON.parse(String(raw || ""));
-    return sanitize(parsed);
-  } catch {
-    return { ...APP_SETTINGS_DEFAULTS };
-  }
+  const parsed = safeJsonParse(raw, undefined, null);
+  return parsed ? sanitize(parsed) : { ...APP_SETTINGS_DEFAULTS };
 }
 
 export function getAppSettings() {

@@ -1449,38 +1449,6 @@ export default function AdminDashboard({
             {!departmentBreakdown.length ? <p className="text-sm text-[rgb(var(--muted))]">No data available.</p> : null}
           </div>
         </div>
-
-        <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="rounded-lg p-2 bg-emerald-500/10 text-emerald-500"><Zap size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Project Analysis</h3>
-              <p className="rt-section-subtitle">Performance by project assignment</p>
-            </div>
-          </div>
-          <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
-            {projectBreakdown.slice(0, 8).map((row) => (
-              <div key={`proj-${row.group}`} className="rt-panel-subtle p-3.5">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="font-semibold text-sm text-[rgb(var(--text))] truncate">{row.group}</div>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${row.bell.className}`}>{row.bell.label}</span>
-                    {row.needsIntervention ? (
-                      <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20">Action</span>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="mt-2 flex items-center gap-4 text-xs text-[rgb(var(--muted))] flex-wrap">
-                  <span>Avg <span className="font-mono text-[rgb(var(--text))]">{row.latestAvg.toFixed(1)}</span></span>
-                  <span>Δ <span className="font-mono">{formatDelta(row.delta)}</span></span>
-                  <span>HC {row.headcount}</span>
-                  <span>{Math.round(row.submissionRate * 100)}% submitted</span>
-                </div>
-              </div>
-            ))}
-            {!projectBreakdown.length ? <p className="text-sm text-[rgb(var(--muted))]">No data available.</p> : null}
-          </div>
-        </div>
       </section>
 
       {/* ── delivery analytics ── */}

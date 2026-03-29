@@ -3,7 +3,7 @@ import { AnimatePresence, motion as Motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Settings, LogOut, ChevronLeft, ChevronRight,
   ClipboardCheck, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X, Layers3,
-  Bell, BellDot, CheckCheck, FileUp, Calendar, RefreshCw, KeyRound, Lock, FileBarChart2, ChevronDown, FolderKanban
+  Bell, BellDot, CheckCheck, FileUp, Calendar, RefreshCw, FileBarChart2, ChevronDown, FolderKanban
 } from "lucide-react";
 
 import AdminDashboard from "./AdminDashboard.jsx";
@@ -16,7 +16,6 @@ import SettingsPanel from "./SettingsPanel.jsx";
 import WebknotValueDirectory from "./WebknotValueDirectory.jsx";
 import BandStreamDirectory from "./BandStreamDirectory.jsx";
 import CsvImportPanel from "./CsvImportPanel.jsx";
-import ProjectsDirectory from "./ProjectsDirectory.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 import Toast from "../shared/Toast.jsx";
 import ThemeToggle from "../shared/ThemeToggle.jsx";
@@ -60,6 +59,7 @@ import {
   normalizeMonthlySubmission,
 } from "../../api/monthly-submissions.js";
 import { getCycleForMonth, normalizeYearMonth } from "../../utils/reviewCycles.js";
+import { safeJsonParse } from "../../utils/json.js";
 import {
   fetchAdminNotifications,
   markAdminNotificationRead,
@@ -84,7 +84,6 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
     { id: "kpi", icon: <Target size={20} />, label: "KPI Directory" },
     { id: "band-streams", icon: <Layers3 size={20} />, label: "Bands & Streams" },
     { id: "certifications", icon: <Award size={20} />, label: "Certifications" },
-    { id: "projects", icon: <FolderKanban size={20} />, label: "Projects" },
     { id: "values", icon: <Sparkles size={20} />, label: "Webknot Values" },
     { id: "csv-import", icon: <FileUp size={20} />, label: "CSV Import" },
     ...(isAdmin ? [{ id: "agents", icon: <Bot size={20} />, label: "AI Agents" }] : []),
@@ -92,7 +91,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
   ];
 
   return (
-    <aside className={`rt-sidebar fixed left-0 top-0 h-full z-50 md:translate-x-0 flex flex-col will-change-transform transition-[transform,width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${isOpen ? 'translate-x-0 w-64' : '-translate-x-full md:translate-x-0 md:w-[72px]'}`}>
+    <aside className={`rt-sidebar fixed left-0 top-0 h-full z-50 md:translate-x-0 flex flex-col will-change-transform transition-[transform,width] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${isOpen ? 'translate-x-0 w-[280px]' : '-translate-x-full md:translate-x-0 md:w-[84px]'}`}>
       <div className="px-5 py-5 flex items-center justify-between">
         {isOpen && (
           <div className="flex items-center gap-2.5">
@@ -276,7 +275,7 @@ function loadEmployeeExtras() {
   try {
     const raw = window.localStorage.getItem(EMPLOYEE_EXTRAS_STORAGE_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw);
+    const parsed = safeJsonParse(raw, undefined, null);
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -295,7 +294,7 @@ function loadCertificationCatalogFromStorage() {
   try {
     const raw = window.localStorage.getItem(CERTIFICATION_CATALOG_STORAGE_KEY);
     if (raw == null) return { items: [], hasStored: false };
-    const parsed = JSON.parse(raw);
+    const parsed = safeJsonParse(raw, undefined, []);
     const items = Array.isArray(parsed) ? parsed : [];
     return { items: normalizeCertificationCatalog(items), hasStored: true };
   } catch {
@@ -510,6 +509,19 @@ function mergeNotifications(existing, incoming) {
   (Array.isArray(existing) ? existing : []).forEach(pushUnique);
   return next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
+
+function isPasswordResetNotification(item) {
+  const type = String(item?.type || "").trim().toUpperCase();
+  if (type.includes("FORGOT") || type.includes("PASSWORD_RESET") || type.includes("RESET_PASSWORD")) {
+    return true;
+  }
+  const payload = item?.payload && typeof item.payload === "object" ? item.payload : {};
+  const hasResetMeta = Boolean(payload.requestId || payload.resetRequestId || payload.resetId || payload.adminCode || payload.verificationCode);
+  if (hasResetMeta) return true;
+  const title = String(item?.title || "").toLowerCase();
+  const message = String(item?.message || "").toLowerCase();
+  return title.includes("password reset") || message.includes("password reset");
+}
 export default function AdminControlCenter({ onLogout, auth }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -523,7 +535,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
   const VALID_TABS = useMemo(() => new Set([
     "dashboard", "submissions", "directory", "kpi", "band-streams",
-    "certifications", "projects", "values", "csv-import", "agents", "settings",
+    "certifications", "values", "csv-import", "agents", "settings",
   ]), []);
 
   const getTabFromPath = useCallback(() => {
@@ -649,6 +661,22 @@ export default function AdminControlCenter({ onLogout, auth }) {
     () => notifications.reduce((count, item) => (item?.read ? count : count + 1), 0),
     [notifications]
   );
+  const notificationUserId = useMemo(() => {
+    const candidates = [
+      auth?.id,
+      auth?.userId,
+      auth?.employeeId,
+      auth?.empId,
+      auth?.claims?.userId,
+      auth?.claims?.uid,
+      auth?.claims?.sub,
+    ];
+    for (const candidate of candidates) {
+      const text = String(candidate ?? "").trim();
+      if (text) return text;
+    }
+    return "";
+  }, [auth?.claims?.sub, auth?.claims?.uid, auth?.claims?.userId, auth?.empId, auth?.employeeId, auth?.id, auth?.userId]);
 
   const reloadNotifications = useCallback(async ({
     signal,
@@ -657,12 +685,20 @@ export default function AdminControlCenter({ onLogout, auth }) {
     silent = false,
     types = null,
   } = {}) => {
+    if (!notificationUserId) {
+      setNotifications([]);
+      setNotificationsNextCursor(null);
+      setNotificationsError("");
+      notificationsLoadedRef.current = false;
+      return { items: [], nextCursor: null, unreadCount: 0 };
+    }
     if (!silent || !notificationsLoadedRef.current) {
       setNotificationsLoading(true);
     }
     setNotificationsError("");
     try {
       const data = await fetchAdminNotifications({
+        userId: notificationUserId,
         limit: ADMIN_NOTIFICATION_PAGE_SIZE,
         cursor,
         unreadOnly: false,
@@ -670,9 +706,10 @@ export default function AdminControlCenter({ onLogout, auth }) {
         types,
       });
       const page = normalizeAdminNotificationPage(data);
+      const visibleItems = page.items.filter((item) => !isPasswordResetNotification(item));
       setNotifications((prev) => {
         const prevById = new Map(prev.map((n) => [String(n.id), n]));
-        const merged = append ? mergeNotifications(prev, page.items) : page.items;
+        const merged = append ? mergeNotifications(prev, visibleItems) : visibleItems;
         return merged.map((item) => {
           const previous = prevById.get(String(item.id));
           return previous?.read ? { ...item, read: true } : item;
@@ -684,7 +721,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } catch (err) {
       if (err?.name === "AbortError") return null;
       if (err?.status === 401) {
-        showToast({ title: "Session expired", message: "Please login again." });
+        showToast({ title: "Session expired", message: "Please login again.", tone: "error" });
         onLogout?.();
         return null;
       }
@@ -693,10 +730,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
     } finally {
       setNotificationsLoading(false);
     }
-  }, [onLogout, showToast]);
+  }, [notificationUserId, onLogout, showToast]);
 
   const pushIncomingNotification = useCallback((incoming) => {
     if (!incoming) return;
+    if (isPasswordResetNotification(incoming)) return;
     const eventKey = String(incoming?.id ?? `${incoming?.type}:${incoming?.createdAt}:${incoming?.message ?? incoming?.title ?? ""}`);
     setNotifications((prev) => mergeNotifications(prev, [incoming]).slice(0, ADMIN_NOTIFICATION_PAGE_SIZE * 3));
     if (notifiedEventKeysRef.current.has(eventKey)) return;
@@ -747,6 +785,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
   }, [onLogout]);
 
   useEffect(() => {
+    if (!notificationUserId) return;
     const controller = new AbortController();
     reloadNotifications({ signal: controller.signal }).catch(() => {});
 
@@ -758,10 +797,12 @@ export default function AdminControlCenter({ onLogout, auth }) {
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [reloadNotifications]);
+  }, [notificationUserId, reloadNotifications]);
 
   useEffect(() => {
+    if (!notificationUserId) return;
     const unsubscribe = subscribeAdminNotificationsStream({
+      userId: notificationUserId,
       onNotification: (item) => {
         pushIncomingNotification(item);
       },
@@ -770,7 +811,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
       },
     });
     return () => unsubscribe?.();
-  }, [pushIncomingNotification, reloadNotifications]);
+  }, [notificationUserId, pushIncomingNotification, reloadNotifications]);
 
   useEffect(() => {
     if (!notificationsOpen) return;
@@ -865,7 +906,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
   }, [reloadCertifications]);
 
   function openKpiModal() {
-    const defaultBand = kpiBandOptions[0] || "";
+    const defaultBand =
+      kpiBandOptions.find((b) => String(b).trim().toUpperCase() === "B4") || kpiBandOptions[0] || "";
     const defaultStream = kpiStreamOptions[0] || "";
     setKpiModalMode("add");
     setEditingKpiId(null);
@@ -993,8 +1035,17 @@ export default function AdminControlCenter({ onLogout, auth }) {
       .filter(Boolean);
     const fromKpis = kpiUniverse.map((k) => String(k?.band || "").trim()).filter(Boolean);
     const fallback = ["B1", "B2", "B3", "B4", "B5", "B5H", "B5L", "B6H", "B6L", "B7H", "B7L", "B8"];
-    return Array.from(new Set([...fromDirectory, ...fromKpis, ...fallback]));
+    return Array.from(
+      new Set([...fromDirectory, ...fromKpis, ...fallback])
+    ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [allKpis, directoryBands, kpis]);
+
+  /** Ensure edit mode can show bands that exist on the KPI but aren't in the directory/fallback set. */
+  const kpiBandSelectOptions = useMemo(() => {
+    const d = String(kpiDraft.band ?? "").trim();
+    if (!d || kpiBandOptions.includes(d)) return kpiBandOptions;
+    return [...kpiBandOptions, d].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [kpiBandOptions, kpiDraft.band]);
 
   const kpiStreamOptions = useMemo(() => {
     const kpiUniverse = allKpis.length ? allKpis : kpis;
@@ -1857,23 +1908,23 @@ export default function AdminControlCenter({ onLogout, auth }) {
         onLogout?.();
         return;
       }
-      showToast({ title: "Unable to mark read", message: err?.message || "Please try again." });
+      showToast({ title: "Unable to mark read", message: err?.message || "Please try again.", tone: "error" });
     }
   }, [onLogout, showToast]);
 
   const markEveryNotificationRead = useCallback(async () => {
     try {
-      await markAllAdminNotificationsRead();
+      await markAllAdminNotificationsRead({ notifications });
       setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
     } catch (err) {
       if (err?.status === 401) {
-        showToast({ title: "Session expired", message: "Please login again." });
+        showToast({ title: "Session expired", message: "Please login again.", tone: "error" });
         onLogout?.();
         return;
       }
-      showToast({ title: "Unable to mark all read", message: err?.message || "Please try again." });
+      showToast({ title: "Unable to mark all read", message: err?.message || "Please try again.", tone: "error" });
     }
-  }, [onLogout, showToast]);
+  }, [notifications, onLogout, showToast]);
 
   useEffect(() => {
     saveCertificationCatalogToStorage(certificationCatalog);
@@ -2196,15 +2247,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => reloadNotifications({ types: ["FORGOT_PASSWORD_REQUESTED"] }).catch(() => {})}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-[rgb(var(--primary))]/8 px-2.5 py-1.5 text-[11px] font-medium text-[rgb(var(--primary))] transition-all hover:bg-[rgb(var(--primary))]/15"
-                      title="Force-load password reset notifications"
-                    >
-                      <KeyRound size={12} />
-                      Password resets
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => markEveryNotificationRead().catch(() => {})}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-[rgb(var(--border))]/60 bg-[rgb(var(--surface-2))]/60 px-2.5 py-1.5 text-[11px] font-medium text-[rgb(var(--muted))] transition-all hover:border-[rgb(var(--border))] hover:text-[rgb(var(--text))] hover:shadow-sm"
                     >
@@ -2241,15 +2283,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   {/* Notification items */}
                   <div className="space-y-2">
                     {notifications.map((item, index) => {
-                      const payload = item?.payload && typeof item.payload === "object" ? item.payload : {};
-                      const adminCode = payload.adminCode || payload.verificationCode || payload.otp || payload.code || "";
-                      const requestId = payload.requestId || payload.resetRequestId || payload.resetId || "";
-                      const expiresAt = payload.expiresAt || payload.expiry || payload.expiresOn || "";
-                      const email = payload.email || payload.employeeEmail || payload.employeeId || item?.message || "";
-                      const expiryLabel = expiresAt ? formatNotificationTimestamp(expiresAt) : null;
-                      const typeUpper = String(item.type || "").toUpperCase();
-                      const isPasswordReset = typeUpper.includes("FORGOT") || Boolean(adminCode);
-
                       return (
                         <Motion.button
                           key={String(item.id)}
@@ -2268,30 +2301,16 @@ export default function AdminControlCenter({ onLogout, auth }) {
                         >
                           <div className="flex items-start gap-3">
                             {/* Type icon */}
-                            <div className={[
-                              "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
-                              isPasswordReset
-                                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                                : "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-                            ].join(" ")}>
-                              {isPasswordReset ? (
-                                <Lock size={14} />
-                              ) : (
-                                <FileBarChart2 size={14} />
-                              )}
+                            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                              <FileBarChart2 size={14} />
                             </div>
 
                             {/* Content */}
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0 flex-1">
-                                  <span className={[
-                                    "inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                                    isPasswordReset
-                                      ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                                      : "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-                                  ].join(" ")}>
-                                    {isPasswordReset ? "Password Reset" : "Submission"}
+                                  <span className="inline-flex items-center rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+                                    Notification
                                   </span>
                                   <div className="mt-1.5 text-[13px] font-medium leading-snug text-[rgb(var(--text))] break-words">{item.title}</div>
                                   {item.message ? (
@@ -2307,38 +2326,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
                                   ) : null}
                                 </div>
                               </div>
-
-                              {/* Password reset metadata */}
-                              {isPasswordReset ? (
-                                <div className="mt-2.5 space-y-1.5">
-                                  {adminCode ? (
-                                    <div className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500/10 to-indigo-500/10 px-2.5 py-1.5">
-                                      <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-300">Code</span>
-                                      <span className="font-mono text-sm font-semibold tracking-widest text-blue-700 dark:text-blue-200">{adminCode}</span>
-                                    </div>
-                                  ) : null}
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {requestId ? (
-                                      <span className="inline-flex items-center gap-1.5 rounded-md bg-[rgb(var(--surface-2))] px-2 py-1 text-[10px] text-[rgb(var(--muted))]">
-                                        <span className="font-semibold uppercase tracking-wider">Req</span>
-                                        <span className="font-mono text-[rgb(var(--text))] break-all">{requestId}</span>
-                                      </span>
-                                    ) : null}
-                                    {email ? (
-                                      <span className="inline-flex items-center gap-1.5 rounded-md bg-[rgb(var(--surface-2))] px-2 py-1 text-[10px] text-[rgb(var(--muted))]">
-                                        <span className="font-semibold uppercase tracking-wider">User</span>
-                                        <span className="font-mono text-[rgb(var(--text))] break-all">{email}</span>
-                                      </span>
-                                    ) : null}
-                                    {expiryLabel ? (
-                                      <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-500/8 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">
-                                        <span className="font-semibold uppercase tracking-wider">Exp</span>
-                                        <span className="font-mono">{expiryLabel}</span>
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                </div>
-                              ) : null}
                             </div>
                           </div>
                         </Motion.button>
@@ -2392,7 +2379,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
         account={account}
       />
 
-      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? 'md:ml-64' : 'md:ml-[72px]'} px-3 py-4 pt-16 sm:px-4 md:pt-6 lg:px-8 lg:py-8`}>
+      <main className={`relative flex-1 transition-all duration-300 ${isSidebarOpen ? 'md:ml-[280px]' : 'md:ml-[84px]'} px-3 py-5 pt-16 sm:px-5 md:pt-8 lg:px-10 lg:py-10`}>
         {activeTab === "dashboard" && (
           <AdminDashboard
             portalWindow={portalWindow}
@@ -2504,10 +2491,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
         {activeTab === "band-streams" && <BandStreamDirectory />}
 
-        {activeTab === "projects" && (
-          <ProjectsDirectory employees={employees} />
-        )}
-
         {activeTab === "csv-import" && (
           <CsvImportPanel
             onImportComplete={() => {
@@ -2590,7 +2573,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                     onChange={(e) => setKpiDraft((d) => ({ ...d, band: e.target.value }))}
                     className="mt-2 rt-input text-sm"
                   >
-                    {kpiBandOptions.map((band) => (
+                    {kpiBandSelectOptions.map((band) => (
                       <option key={`kpi-band:${band}`} value={band}>
                         {band}
                       </option>

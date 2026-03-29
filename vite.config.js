@@ -41,6 +41,9 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       proxy: {
+        /* Spring OAuth2 — keep sign-in on :3000 so redirects can return here with ?token= */
+        '/oauth2':              { ...base },
+        '/login/oauth2':        { ...base },
         '/api':                 { ...base },
         '/submission-window':   { ...base },
         '/employees':           { ...base },
@@ -56,6 +59,7 @@ export default defineConfig(({ mode }) => {
         '/admin':               { ...base },
         '/employee-portal':     { ...base },
         '/webknot-values':      { ...base },
+        '/webknot-value':       { ...base },
         '/ui':                  { ...base },
         '/projects':            { ...base, bypass: spaBypass },
         '/ai-agents':           { ...base },

@@ -1,22 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl } from "./http.js";
-
-async function readError(res) {
-  const text = await res.text().catch(() => "");
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.message) return String(parsed.message);
-    if (parsed?.error) return String(parsed.error);
-  } catch { void 0; }
-  return text || `Request failed: ${res.status} ${res.statusText}`;
-}
-
-async function toHttpError(res) {
-  const message = await readError(res);
-  const err = new Error(message);
-  err.status = res.status;
-  return err;
-}
+import { buildApiUrl, toHttpError } from "./http.js";
 
 function unwrapRoot(data) {
   if (!data || typeof data !== "object") return {};

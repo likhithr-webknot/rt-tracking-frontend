@@ -11,11 +11,12 @@ import {
   fetchStreams,
   normalizeDirectoryPage,
   updateBand,
+  updateBandType,
   updateStream,
 } from "../../api/band-stream-directory.js";
 
 const BAND_CODES = ["B1", "B2", "B3", "B4", "B5", "B5H", "B5L", "B6H", "B6L", "B7H", "B7L", "B8"];
-const STREAM_CODES = ["Development", "QA", "Devops", "DATA", "UI_UX"];
+const BAND_TYPE_OPTIONS = ["BOTH", "TECH", "NON_TECH"];
 
 function titleFor(type) {
   return type === "band" ? "Band" : "Stream";
@@ -37,7 +38,6 @@ export default function BandStreamDirectory() {
   const [bands, setBands] = useState([]);
   const [streams, setStreams] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -46,9 +46,14 @@ export default function BandStreamDirectory() {
     open: false,
     mode: "add",
     type: "band",
+    originalCode: "",
+    originalId: "",
+    originalLabel: "",
+    originalBandType: "BOTH",
     code: "",
     label: "",
     active: true,
+    bandType: "BOTH",
     sortOrder: "",
   });
   const [pendingDelete, setPendingDelete] = useState(null); // { type, row }
@@ -62,11 +67,11 @@ export default function BandStreamDirectory() {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }
 
-  const loadDirectory = useCallback(async (fetcher) => {
+  const loadDirectory = useCallback(async (fetcher, { search = null, activeOnly = null } = {}) => {
     const rows = [];
     let cursor = null;
     for (let i = 0; i < 30; i += 1) {
-      const data = await fetcher({ limit: 100, cursor });
+      const data = await fetcher({ limit: 100, cursor, search, activeOnly });
       const page = normalizeDirectoryPage(data);
       rows.push(...page.items);
       if (!page.nextCursor) break;
@@ -85,19 +90,33 @@ export default function BandStreamDirectory() {
 
   const reload = useCallback(async () => {
     setLoading(true);
-    setError("");
-    try {
-      const [bandRows, streamRows] = await Promise.all([
-        loadDirectory(fetchBands),
-        loadDirectory(fetchStreams),
-      ]);
-      setBands(bandRows);
-      setStreams(streamRows);
-    } catch (err) {
-      setError(err?.message || "Failed to load bands and streams.");
-    } finally {
-      setLoading(false);
+    const [bandResult, streamResult] = await Promise.allSettled([
+      loadDirectory(fetchBands, { search: null }),
+      loadDirectory(fetchStreams, { search: null, activeOnly: null }),
+    ]);
+
+    if (bandResult.status === "fulfilled") {
+      setBands(bandResult.value);
+    } else {
+      setBands([]);
     }
+    if (streamResult.status === "fulfilled") {
+      setStreams(streamResult.value);
+    } else {
+      setStreams([]);
+    }
+
+    const errors = [];
+    if (bandResult.status === "rejected") {
+      errors.push(`Bands: ${bandResult.reason?.message || "failed to load"}`);
+    }
+    if (streamResult.status === "rejected") {
+      errors.push(`Streams: ${streamResult.reason?.message || "failed to load"}`);
+    }
+    if (errors.length) {
+      showToast({ title: "Directory load failed", message: errors.join(" | "), tone: "error" });
+    }
+    setLoading(false);
   }, [loadDirectory]);
 
   useEffect(() => {
@@ -125,21 +144,33 @@ export default function BandStreamDirectory() {
     const existing = new Set(bands.map((x) => String(x.code || "").trim()));
     return BAND_CODES.filter((code) => !existing.has(code));
   }, [bands]);
-  const missingStreamCodes = useMemo(() => {
-    const existing = new Set(streams.map((x) => String(x.code || "").trim()));
-    return STREAM_CODES.filter((code) => !existing.has(code));
+  const streamCodeOptions = useMemo(() => {
+    const seen = new Set();
+    const options = [];
+    for (const row of streams) {
+      const code = String(row?.code || "").trim();
+      if (!code || seen.has(code)) continue;
+      seen.add(code);
+      options.push(code);
+    }
+    return options.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   }, [streams]);
 
   function openAdd(type) {
-    const options = type === "band" ? missingBandCodes : missingStreamCodes;
+    const options = type === "band" ? missingBandCodes : streamCodeOptions;
     const code = options[0] || "";
     setEditor({
       open: true,
       mode: "add",
       type,
+      originalCode: "",
+      originalId: "",
+      originalLabel: "",
+      originalBandType: "BOTH",
       code,
       label: fallbackLabel(type, code),
       active: true,
+      bandType: "BOTH",
       sortOrder: "",
     });
   }
@@ -150,9 +181,14 @@ export default function BandStreamDirectory() {
       open: true,
       mode: "edit",
       type,
+      originalCode: String(row.code || "").trim(),
+      originalId: String(row.id || "").trim(),
+      originalLabel: String(row.label || "").trim(),
+      originalBandType: String(row.bandType || "BOTH").trim().toUpperCase() || "BOTH",
       code: String(row.code || "").trim(),
       label: String(row.label || "").trim(),
-      active: Boolean(row.active),
+      active: type === "stream" ? Boolean(row.active) : true,
+      bandType: String(row.bandType || "BOTH").trim().toUpperCase() || "BOTH",
       sortOrder:
         row.sortOrder == null || Number.isNaN(Number(row.sortOrder))
           ? ""
@@ -166,9 +202,14 @@ export default function BandStreamDirectory() {
       open: false,
       mode: "add",
       type: "band",
+      originalCode: "",
+      originalId: "",
+      originalLabel: "",
+      originalBandType: "BOTH",
       code: "",
       label: "",
       active: true,
+      bandType: "BOTH",
       sortOrder: "",
     });
   }
@@ -177,36 +218,78 @@ export default function BandStreamDirectory() {
     e.preventDefault();
     const type = editor.type === "stream" ? "stream" : "band";
     const code = String(editor.code || "").trim();
+    const originalCode = String(editor.originalCode || "").trim();
+    const originalId = String(editor.originalId || "").trim();
+    const originalLabel = String(editor.originalLabel || "").trim();
+    const originalBandType = String(editor.originalBandType || "BOTH").trim().toUpperCase() || "BOTH";
     const label = String(editor.label || "").trim();
     const sortOrder = String(editor.sortOrder || "").trim();
 
     if (!code) {
-      showToast({ title: "Missing code", message: `${titleFor(type)} code is required.` });
+      showToast({ title: "Missing code", message: `${titleFor(type)} code is required.`, tone: "error" });
       return;
     }
     if (!label) {
-      showToast({ title: "Missing label", message: `${titleFor(type)} label is required.` });
+      showToast({ title: "Missing label", message: `${titleFor(type)} label is required.`, tone: "error" });
       return;
+    }
+    if (editor.mode === "edit") {
+      const keyOf = (value) => String(value || "").trim().toUpperCase();
+      const codeKey = keyOf(code);
+      const originalCodeKey = keyOf(originalCode);
+      const duplicate = (type === "band" ? bands : streams).some((row) => {
+        const rowCodeKey = keyOf(row?.code);
+        if (!rowCodeKey || rowCodeKey !== codeKey) return false;
+        const rowId = String(row?.id || "").trim();
+        if (originalId && rowId) return rowId !== originalId;
+        return rowCodeKey !== originalCodeKey;
+      });
+      if (duplicate) {
+        showToast({
+          title: "Duplicate code",
+          message: `${titleFor(type)} code "${code}" already exists.`,
+          tone: "error",
+        });
+        return;
+      }
     }
 
     setSaving(true);
-    setError("");
     try {
       const payload = {
+        code,
         label,
-        active: Boolean(editor.active),
+        ...(type === "stream" ? { active: Boolean(editor.active) } : {}),
+        bandType: String(editor.bandType || "BOTH").trim().toUpperCase() || "BOTH",
         sortOrder: sortOrder === "" ? null : Number.parseInt(sortOrder, 10),
       };
-      if (editor.mode === "add") {
-        payload.code = code;
-      }
 
       if (type === "band") {
         if (editor.mode === "add") await addBand(payload);
-        else await updateBand(code, payload);
+        else {
+          const nextBandType = String(payload.bandType || "BOTH").trim().toUpperCase() || "BOTH";
+          const codeChanged = String(code).trim().toUpperCase() !== String(originalCode).trim().toUpperCase();
+          const labelChanged = String(label).trim() !== String(originalLabel).trim();
+          const bandTypeChanged = nextBandType !== originalBandType;
+          let bandTypeApplied = false;
+          const bandTarget = originalId || originalCode || code;
+          if (!codeChanged && !labelChanged && bandTypeChanged && originalId) {
+            await updateBandType(originalId, nextBandType);
+            bandTypeApplied = true;
+          } else {
+            await updateBand(bandTarget, { ...payload, code });
+          }
+          if (originalId && bandTypeChanged && !bandTypeApplied) {
+            try {
+              await updateBandType(originalId, nextBandType);
+            } catch (err) {
+              if (!(err?.status === 404 || err?.status === 405)) throw err;
+            }
+          }
+        }
       } else {
         if (editor.mode === "add") await addStream(payload);
-        else await updateStream(code, payload);
+        else await updateStream(originalCode || code, payload);
       }
 
       await reload();
@@ -216,9 +299,19 @@ export default function BandStreamDirectory() {
       });
       closeEditor();
     } catch (err) {
-      const message = err?.message || "Failed to save changes.";
-      setError(message);
-      showToast({ title: "Save failed", message });
+      const message = String(err?.message || "Failed to save changes.").trim();
+      const duplicateMatch = /already exists with name:\s*([A-Za-z0-9_-]+)/i.exec(message);
+      if (duplicateMatch) {
+        await reload().catch(() => { void 0; });
+        const bandName = duplicateMatch[1] || code;
+        showToast({
+          title: "Band already exists",
+          message: `${bandName} already exists in backend. Directory was refreshed to sync latest data.`,
+          tone: "error",
+        });
+      } else {
+        showToast({ title: "Save failed", message, tone: "error" });
+      }
     } finally {
       setSaving(false);
     }
@@ -230,13 +323,17 @@ export default function BandStreamDirectory() {
     if (!code) return;
     try {
       if (type === "band") {
-        await updateBand(code, { active: !row.active });
+        const bandId = String(row?.id || "").trim();
+        if (!bandId) throw new Error("Band id is missing.");
+        const current = String(row?.bandType || "BOTH").toUpperCase();
+        const next = current === "BOTH" ? "TECH" : current === "TECH" ? "NON_TECH" : "BOTH";
+        await updateBandType(bandId, next);
       } else {
         await updateStream(code, { active: !row.active });
       }
       await reload();
     } catch (err) {
-      showToast({ title: "Update failed", message: err?.message || "Please try again." });
+      showToast({ title: "Update failed", message: err?.message || "Please try again.", tone: "error" });
     }
   }
 
@@ -247,26 +344,26 @@ export default function BandStreamDirectory() {
     try {
       const type = target.type === "stream" ? "stream" : "band";
       const code = String(target?.row?.code || "").trim();
-      if (type === "band") await deleteBand(code);
+      const bandId = String(target?.row?.id || "").trim();
+      if (type === "band") await deleteBand(bandId || code);
       else await deleteStream(code);
       await reload();
       showToast({ title: `${titleFor(type)} deleted`, message: code });
       setPendingDelete(null);
     } catch (err) {
-      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+      showToast({ title: "Delete failed", message: err?.message || "Please try again.", tone: "error" });
     } finally {
       setDeleting(false);
     }
   }
 
-  const activeBands = bands.filter((x) => x.active).length;
   const activeStreams = streams.filter((x) => x.active).length;
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
       <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
         <div>
-          <h2 className="rt-title">Bands & Streams</h2>
+          <h2 className="rt-title">Bands & Departments</h2>
           <p className="text-slate-500 text-sm mt-2">
             Manage canonical bands and streams used across KPI and employee workflows.
           </p>
@@ -275,19 +372,15 @@ export default function BandStreamDirectory() {
           <div className="rt-panel-subtle rounded-lg px-4 py-3">
             <div className="rt-kicker">Bands</div>
             <div className="mt-1 text-2xl font-semibold text-[rgb(var(--text))]">{bands.length}</div>
-            <div className="text-[11px] text-[rgb(var(--muted))]">{activeBands} active</div>
+            <div className="text-[11px] text-[rgb(var(--muted))]">Total bands</div>
           </div>
           <div className="rt-panel-subtle rounded-lg px-4 py-3">
-            <div className="rt-kicker">Streams</div>
+            <div className="rt-kicker">Departments</div>
             <div className="mt-1 text-2xl font-semibold text-[rgb(var(--text))]">{streams.length}</div>
             <div className="text-[11px] text-[rgb(var(--muted))]">{activeStreams} active</div>
           </div>
         </div>
       </header>
-
-      {error ? (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">{error}</div>
-      ) : null}
 
       <div className="flex flex-wrap gap-3 items-center justify-between">
         <div className="relative max-w-xl flex-1 min-w-[260px]">
@@ -310,7 +403,7 @@ export default function BandStreamDirectory() {
             onClick={() => openAdd("stream")}
             className="rt-btn-primary"
           >
-            <Plus size={16} /> Add Stream
+            <Plus size={16} /> Add Department
           </button>
         </div>
       </div>
@@ -329,7 +422,7 @@ export default function BandStreamDirectory() {
               <tr>
                 <th className="p-5 font-semibold">Code</th>
                 <th className="p-5 font-semibold">Label</th>
-                <th className="p-5 font-semibold">State</th>
+                <th className="p-5 font-semibold">Type</th>
                 <th className="p-5 text-right font-semibold">Actions</th>
               </tr>
               </thead>
@@ -339,17 +432,14 @@ export default function BandStreamDirectory() {
                   <td className="p-5 font-mono text-[rgb(var(--text))]">{row.code}</td>
                   <td className="p-5 text-[rgb(var(--text))]">{row.label}</td>
                   <td className="p-5">
-                    <span className={`inline-flex rounded-lg px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest ${row.active ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/20 text-slate-300"}`}>
-                      {row.active ? "Active" : "Inactive"}
+                    <span className="inline-flex rounded-lg px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest bg-blue-500/10 text-blue-300">
+                      {String(row.bandType || "BOTH")}
                     </span>
                   </td>
                   <td className="p-5">
                     <div className="flex justify-end gap-2">
-                      <button onClick={() => openEdit("band", row)} className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all" title="Edit">
+                      <button onClick={() => openEdit("band", row)} className="p-2 rounded-md text-amber-500 hover:bg-amber-500/10 transition-all" title="Cycle Band Type">
                         <Edit3 size={16} />
-                      </button>
-                      <button onClick={() => toggleActive("band", row)} className="p-2 rounded-md text-amber-500 hover:bg-amber-500/10 transition-all" title={row.active ? "Deactivate" : "Activate"}>
-                        {row.active ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
                       <button onClick={() => setPendingDelete({ type: "band", row })} className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all" title="Delete">
                         <Trash2 size={16} />
@@ -371,8 +461,8 @@ export default function BandStreamDirectory() {
         <section className="rt-panel overflow-hidden">
           <div className="p-6 flex items-center justify-between">
             <div className="rt-section-header">
-              <h3 className="rt-section-title">Streams</h3>
-              <p className="rt-section-subtitle">Canonical stream names for KPI visibility.</p>
+              <h3 className="rt-section-title">Departments</h3>
+              <p className="rt-section-subtitle">Departments in the organization.</p>
             </div>
           </div>
           <div className="overflow-x-auto">
@@ -442,24 +532,58 @@ export default function BandStreamDirectory() {
                   {titleFor(editor.type)} Code *
                 </label>
                 {editor.mode === "add" ? (
-                  <select
-                    value={editor.code}
-                    onChange={(e) =>
-                      setEditor((prev) => ({
-                        ...prev,
-                        code: e.target.value,
-                        label: prev.label || fallbackLabel(prev.type, e.target.value),
-                      }))
-                    }
-                    className="mt-2 rt-input text-sm"
-                  >
-                    {(editor.type === "band" ? (missingBandCodes.length ? missingBandCodes : BAND_CODES) : (missingStreamCodes.length ? missingStreamCodes : STREAM_CODES))
-                      .map((code) => (
+                  editor.type === "band" ? (
+                    <select
+                      value={editor.code}
+                      onChange={(e) =>
+                        setEditor((prev) => ({
+                          ...prev,
+                          code: e.target.value,
+                          label: prev.label || fallbackLabel(prev.type, e.target.value),
+                        }))
+                      }
+                      className="mt-2 rt-input text-sm"
+                    >
+                      {(missingBandCodes.length ? missingBandCodes : BAND_CODES).map((code) => (
                         <option key={`${editor.type}:option:${code}`} value={code}>{code}</option>
                       ))}
-                  </select>
+                    </select>
+                  ) : streamCodeOptions.length > 0 ? (
+                    <select
+                      value={editor.code}
+                      onChange={(e) =>
+                        setEditor((prev) => ({
+                          ...prev,
+                          code: e.target.value,
+                          label: prev.label || fallbackLabel(prev.type, e.target.value),
+                        }))
+                      }
+                      className="mt-2 rt-input text-sm"
+                    >
+                      {streamCodeOptions.map((code) => (
+                        <option key={`${editor.type}:option:${code}`} value={code}>{code}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={editor.code}
+                      onChange={(e) =>
+                        setEditor((prev) => ({
+                          ...prev,
+                          code: e.target.value,
+                          label: prev.label || fallbackLabel(prev.type, e.target.value),
+                        }))
+                      }
+                      className="mt-2 rt-input text-sm"
+                      placeholder="Enter stream code from backend"
+                    />
+                  )
                 ) : (
-                  <input value={editor.code} readOnly className="mt-2 rt-input text-sm opacity-80 cursor-not-allowed" />
+                  <input
+                    value={editor.code}
+                    onChange={(e) => setEditor((prev) => ({ ...prev, code: e.target.value }))}
+                    className="mt-2 rt-input text-sm"
+                  />
                 )}
               </div>
 
@@ -485,17 +609,35 @@ export default function BandStreamDirectory() {
                     placeholder="e.g., 1"
                   />
                 </div>
-                <div className="flex items-end">
-                  <label className="inline-flex items-center gap-3 mt-2 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(editor.active)}
-                      onChange={(e) => setEditor((prev) => ({ ...prev, active: e.target.checked }))}
-                      className="h-4 w-4 accent-blue-600"
-                    />
-                    <span className="text-sm text-[rgb(var(--text))]">Active</span>
-                  </label>
-                </div>
+                {editor.type === "band" ? (
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                      Band Type
+                    </label>
+                    <select
+                      value={String(editor.bandType || "BOTH")}
+                      onChange={(e) => setEditor((prev) => ({ ...prev, bandType: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                    >
+                      {BAND_TYPE_OPTIONS.map((type) => (
+                        <option key={`band-type:${type}`} value={type}>{type}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+                {editor.type === "stream" ? (
+                  <div className="flex items-end">
+                    <label className="inline-flex items-center gap-3 mt-2 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(editor.active)}
+                        onChange={(e) => setEditor((prev) => ({ ...prev, active: e.target.checked }))}
+                        className="h-4 w-4 accent-blue-600"
+                      />
+                      <span className="text-sm text-[rgb(var(--text))]">Active</span>
+                    </label>
+                  </div>
+                ) : null}
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
