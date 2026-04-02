@@ -87,12 +87,16 @@ function extractUsersArray(raw) {
   const nested = root?.data && typeof root.data === "object" ? root.data : null;
   const candidates = [
     root?.items,
+    root?.managers,
+    root?.managerList,
     root?.users,
     root?.employees,
     root?.results,
     root?.content,
     root?.data,
     nested?.items,
+    nested?.managers,
+    nested?.managerList,
     nested?.users,
     nested?.employees,
     nested?.results,
@@ -232,17 +236,20 @@ export function normalizeManagers(data) {
     : Array.isArray(data?.data)
       ? data.data
       : [];
+  const toRoleKey = (value) => String(value ?? "").trim().toLowerCase().replace(/^role_/, "");
   return arr.map((m, i) => {
     const rawMgrName = String(
       m.employeeName ?? m.employee_name ?? m.name ?? m.fullName ?? m.full_name ?? m.displayName ?? m.display_name ?? ""
     ).trim();
     const employeeId = String(m.employeeId ?? m.id ?? m.empId ?? `MGR_${i}`);
+    const roleKey = toRoleKey(m.empRole ?? m.role ?? m.userRole ?? "manager");
+    const role = roleKey === "admin" ? "Admin" : roleKey === "employee" ? "Employee" : "Manager";
     return {
       id: employeeId,
       employeeId,
       name: rawMgrName || "Unknown",
       email: String(m.email ?? m.employeeEmail ?? m.mail ?? ""),
-      role: String(m.empRole ?? m.role ?? "Manager"),
+      role,
       designation: String(m.designation ?? m.title ?? m.jobTitle ?? ""),
       band: String(m.band ?? m.level ?? ""),
     };
@@ -250,13 +257,51 @@ export function normalizeManagers(data) {
 }
 export async function fetchManagers({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/employees/managers"), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json();
+  const endpoints = [
+    "/employees/managers/registered",
+    "/api/v1/employees/managers/registered",
+    "/employees/managers",
+    "/api/v1/employees/managers",
+    "/api/v1/manager/list",
+    "/api/v1/manager",
+    "/api/v1/",
+  ];
+
+  const toRoleKey = (value) => String(value ?? "").trim().toLowerCase().replace(/^role_/, "");
+  let lastRouteErr = null;
+
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) {
+      const raw = await res.json().catch(() => ({}));
+      const rows = extractUsersArray(raw);
+      if (!Array.isArray(rows)) return [];
+
+      // Manager endpoints are expected to already be manager-only.
+      const endpointLooksManagerSpecific = endpoint.includes("managers") || endpoint.includes("/manager");
+      if (endpointLooksManagerSpecific) return rows;
+
+      const managerOnly = rows.filter((row) => {
+        const roleKey = toRoleKey(row?.empRole ?? row?.role ?? row?.userRole ?? "");
+        return roleKey === "manager";
+      });
+      if (managerOnly.length > 0) return managerOnly;
+      continue;
+    }
+    const err = await toHttpError(res);
+    if (res.status === 400 || res.status === 403 || res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+
+  if (lastRouteErr) throw lastRouteErr;
+  return [];
 }
 export async function fetchManagerReportees(managerId, { signal } = {}) {
   const safeId = encodeURIComponent(String(managerId));

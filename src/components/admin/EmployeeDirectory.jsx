@@ -663,6 +663,7 @@ export default function EmployeeDirectory({
       try {
         const data = await fetchManagers({ signal: controller.signal });
         const list = normalizeManagers(data)
+          .filter((m) => String(m?.role || "").trim().toLowerCase() === "manager")
           .filter((m) => String(m?.id || "").trim())
           .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
         if (!mounted) return;
@@ -853,12 +854,12 @@ export default function EmployeeDirectory({
             <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="px-4 py-3 font-semibold">Emp ID</th>
-                <th className="px-4 py-3 font-semibold">Employee</th>
+                <th className="px-4 py-3 font-semibold">Name</th>
                 <th className="px-4 py-3 font-semibold">Email</th>
                 <th className="px-4 py-3 font-semibold">Role</th>
                 <th className="px-4 py-3 font-semibold">Designation</th>
                 <th className="px-4 py-3 font-semibold">Band</th>
-                <th className="px-4 py-3 font-semibold">Stream</th>
+                <th className="px-4 py-3 font-semibold">Department</th>
                 <th className="px-4 py-3 text-right font-semibold">Actions</th>
               </tr>
             </thead>

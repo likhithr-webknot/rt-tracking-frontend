@@ -616,7 +616,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
         ) : null}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="p-1.5 hover:bg-[rgb(var(--sidebar-hover))] rounded-md text-[rgb(var(--sidebar-muted))] transition-colors"
+          className="hidden md:inline-flex p-1.5 hover:bg-[rgb(var(--sidebar-hover))] rounded-md text-[rgb(var(--sidebar-muted))] transition-colors"
           aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
         >
           {isOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
@@ -2631,15 +2631,6 @@ export default function ManagerPortal({ onLogout, auth }) {
           aria-label="Close sidebar"
         />
       ) : null}
-
-      <button
-        type="button"
-        className="fixed left-4 top-4 z-50 inline-flex h-10 w-10 items-center justify-center rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-lg md:hidden"
-        onClick={() => setIsSidebarOpen((prev) => !prev)}
-        aria-label={isSidebarOpen ? "Close sidebar" : "Open sidebar"}
-      >
-        {isSidebarOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
-      </button>
 
       <Sidebar
         isOpen={isSidebarOpen}
