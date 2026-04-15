@@ -57,6 +57,21 @@ function canonicalRoleFromKey(key) {
   return "";
 }
 
+function explicitRoleFromObject(source) {
+  const obj = source && typeof source === "object" ? source : {};
+  const direct = firstNonEmptyString(
+    obj.activeRole,
+    obj.currentRole,
+    obj.selectedRole,
+    obj.role,
+    obj.empRole,
+    obj.userRole,
+    obj.roleName,
+    obj.roleType,
+  );
+  return canonicalRoleFromKey(direct) || "";
+}
+
 function bestRole(...values) {
   const keys = [];
   for (const value of values) {
@@ -108,6 +123,8 @@ function firstRoleLikeString(collection) {
 
 function extractRole(obj) {
   const source = obj && typeof obj === "object" ? obj : {};
+  const explicit = explicitRoleFromObject(source);
+  if (explicit) return explicit;
   return bestRole(
     source.role,
     source.empRole,
@@ -216,7 +233,12 @@ export function setAuth(auth) {
   const hasIncomingToken = Boolean(incomingTokenRaw);
 
   const previewClaims = incomingTokenRaw ? decodeJwtPayload(incomingTokenRaw) : null;
-  const extractedRole = firstNonEmptyString(extractRole(obj), extractRole(previewClaims || {}));
+  const extractedRole = firstNonEmptyString(
+    explicitRoleFromObject(obj),
+    explicitRoleFromObject(previewClaims || {}),
+    extractRole(obj),
+    extractRole(previewClaims || {})
+  );
   const incomingRole = extractedRole;
   const incomingEmail = firstNonEmptyString(obj.email, obj.employeeEmail, obj.mail);
   const incomingEmployeeId = firstNonEmptyString(obj.employeeId, obj.empId, obj.id);
@@ -245,6 +267,8 @@ export function setAuth(auth) {
   }
 
   const role = firstNonEmptyString(
+    explicitRoleFromObject(obj),
+    explicitRoleFromObject(claims || {}),
     extractedRole,
     bestRole(prev?.role, prev?.portal, prev?.claims?.role, prev?.claims?.roles, prev?.claims?.authorities),
     prev?.role

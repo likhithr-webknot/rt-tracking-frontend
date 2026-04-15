@@ -5,11 +5,13 @@ import {
   fetchSubmissionCycles,
   formatYearMonth,
   normalizeMonthlySubmission,
+  fetchMonthlySubmissionScoreBreakdown,
   submitAdminReviewDecision,
 } from "../../api/monthly-submissions.js";
 import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions.js";
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi.js";
 import { buildCycleMonthOptions, getCycleForMonth, normalizeYearMonth } from "../../utils/reviewCycles.js";
+import { computeSubmissionScoreBreakdown } from "../../utils/submissionScoring.js";
 import ModalOverlay from "../shared/ModalOverlay.jsx";
 
 function formatMonthLabel(monthKey) {
@@ -43,6 +45,16 @@ function formatDateTimeLabel(raw) {
   } catch {
     return value;
   }
+}
+
+function computeLocalScoreBreakdown(submission) {
+  return computeSubmissionScoreBreakdown({
+    managerKpiRatings: submission?.managerEvaluation?.kpiRatings,
+    managerWebknotValueRatings: submission?.managerEvaluation?.webknotValueRatings,
+    certifications: submission?.certifications,
+    recognitionsCount: submission?.recognitionsCount,
+    techShowcase: submission?.techShowcase,
+  });
 }
 
 function normalizeAdminSubmissions(data, employeeLookup) {
@@ -167,6 +179,9 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
   const [rejectError, setRejectError] = useState("");
   const [techShowcaseText, setTechShowcaseText] = useState("");
   const [approveBusy, setApproveBusy] = useState(false);
+  const [scoreBreakdown, setScoreBreakdown] = useState(null);
+  const [scoreBreakdownLoading, setScoreBreakdownLoading] = useState(false);
+  const [scoreBreakdownError, setScoreBreakdownError] = useState("");
   const [kpiIndex, setKpiIndex] = useState({});
   const [valueIndex, setValueIndex] = useState({});
   const [serverCycles, setServerCycles] = useState(null);
@@ -232,13 +247,61 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
     const entry = reviewModal?.item;
     const type = String(entry?.submissionType || entry?.entryType || "").toUpperCase();
     return type.includes("MANAGER_SELF");
-  }, [reviewModal?.item?.entryType, reviewModal?.item?.submissionType]);
+  }, [reviewModal?.item]);
+
+  useEffect(() => {
+    if (!reviewModal.open || !reviewModal.item?.submission) {
+      setScoreBreakdown(null);
+      setScoreBreakdownError("");
+      setScoreBreakdownLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const payload = {
+      month: reviewModal.item.month,
+      cycleKey: reviewModal.item.submission?.cycleKey,
+      submissionId: reviewModal.item.id,
+      subjectEmployeeId: reviewModal.item.employee?.id,
+      submissionType: reviewModal.item.submission?.submissionType ?? reviewModal.item.submissionType,
+      targetRole: reviewModal.item.submission?.targetRole,
+      certifications: reviewModal.item.submission?.certifications,
+      kpiRatings: reviewModal.item.submission?.managerEvaluation?.kpiRatings,
+      webknotValueRatings: reviewModal.item.submission?.managerEvaluation?.webknotValueRatings,
+      recognitionsCount: reviewModal.item.submission?.recognitionsCount,
+      techShowcase: reviewModal.item.submission?.techShowcase,
+    };
+
+    setScoreBreakdownLoading(true);
+    setScoreBreakdownError("");
+    fetchMonthlySubmissionScoreBreakdown(payload, { signal: controller.signal })
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        setScoreBreakdown(data);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setScoreBreakdownError(err?.message || "Failed to load score breakdown.");
+        setScoreBreakdown(computeLocalScoreBreakdown(reviewModal.item.submission));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setScoreBreakdownLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [reviewModal.open, reviewModal.item]);
+
+  const scoringBreakdown = useMemo(() => {
+    if (scoreBreakdown) return scoreBreakdown;
+    if (!reviewModal.item?.submission) return null;
+    return computeLocalScoreBreakdown(reviewModal.item.submission);
+  }, [reviewModal.item?.submission, scoreBreakdown]);
 
   const rejectModalIsManagerSelf = useMemo(() => {
     const entry = rejectModal?.item;
     const type = String(entry?.submissionType || entry?.entryType || "").toUpperCase();
     return type.includes("MANAGER_SELF");
-  }, [rejectModal?.item?.entryType, rejectModal?.item?.submissionType]);
+  }, [rejectModal?.item]);
 
   const reload = useCallback(async () => {
     setError("");
@@ -260,7 +323,11 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
         onLogout?.();
         return;
       }
-      setError(err?.message || "Failed to load submissions.");
+      const message = String(err?.message || "Failed to load submissions.").trim();
+      const withStatus = err?.status && !message.toLowerCase().includes("request failed:")
+        ? `${message} (HTTP ${err.status})`
+        : message;
+      setError(withStatus);
       setItems([]);
     } finally {
       inflightKeyRef.current = null;
@@ -711,53 +778,39 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                   )}
 
                   {/* Scoring Breakdown */}
-                  {!reviewModalIsManagerSelf ? (() => {
-                    const toAvg = (obj) => {
-                      if (!obj || typeof obj !== "object") return null;
-                      const nums = Object.values(obj)
-                        .map((v) => (typeof v === "number" ? v : Number.parseFloat(String(v ?? ""))))
-                        .filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
-                      return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null;
-                    };
-                    const mgrKpiAvg = toAvg(reviewModal.item.submission?.managerEvaluation?.kpiRatings);
-                    const mgrValueAvg = toAvg(reviewModal.item.submission?.managerEvaluation?.webknotValueRatings);
-                    const certCount = Array.isArray(reviewModal.item.submission?.certifications) ? reviewModal.item.submission.certifications.length : 0;
-                    const recognitions = Number(reviewModal.item.submission?.recognitionsCount || 0) || 0;
-                    const existingTechShowcase = String(reviewModal.item.submission?.techShowcase || "").trim();
-                    const brownie = certCount + recognitions + (existingTechShowcase ? 1 : 0);
-                    let weighted = null;
-                    if (mgrKpiAvg != null && mgrValueAvg != null) weighted = 0.85 * mgrKpiAvg + 0.15 * mgrValueAvg;
-                    else if (mgrKpiAvg != null) weighted = mgrKpiAvg;
-                    else if (mgrValueAvg != null) weighted = mgrValueAvg;
-                    if (weighted != null) weighted = Math.round(Math.min(5, Math.max(1, weighted)) * 10) / 10;
-                    return (
-                      <div className="rt-panel-subtle rounded-lg p-5 space-y-3">
+                  {!reviewModalIsManagerSelf ? (
+                    <div className="rt-panel-subtle rounded-lg p-5 space-y-3">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
                         <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Scoring Breakdown</div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
-                          <div className="rt-panel-subtle rounded-md p-3">
-                            <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Avg</div>
-                            <div className="text-xl font-bold mt-1">{mgrKpiAvg != null ? mgrKpiAvg.toFixed(1) : "—"}</div>
-                            <div className="text-[10px] text-[rgb(var(--muted))]">85% weight</div>
-                          </div>
-                          <div className="rt-panel-subtle rounded-md p-3">
-                            <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Values Avg</div>
-                            <div className="text-xl font-bold mt-1">{mgrValueAvg != null ? mgrValueAvg.toFixed(1) : "—"}</div>
-                            <div className="text-[10px] text-[rgb(var(--muted))]">15% weight</div>
-                          </div>
-                          <div className="rt-panel-subtle rounded-md p-3">
-                            <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Weighted Score</div>
-                            <div className="text-xl font-bold mt-1 rt-stat-value">{weighted != null ? weighted.toFixed(1) : "—"}</div>
-                            <div className="text-[10px] text-[rgb(var(--muted))]">out of 5</div>
-                          </div>
-                          <div className="rt-panel-subtle rounded-md p-3">
-                            <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Brownie Points</div>
-                            <div className="text-xl font-bold mt-1 text-amber-500">{brownie}</div>
-                            <div className="text-[10px] text-[rgb(var(--muted))]">{certCount} cert · {recognitions} rec{existingTechShowcase ? " · 1 tech" : ""}</div>
-                          </div>
+                        {scoreBreakdownLoading ? <div className="text-[10px] text-[rgb(var(--muted))]">Loading backend breakdown…</div> : null}
+                      </div>
+                      {scoreBreakdownError ? (
+                        <div className="text-[10px] text-amber-600 dark:text-amber-400">{scoreBreakdownError}</div>
+                      ) : null}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                        <div className="rt-panel-subtle rounded-md p-3">
+                          <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Avg</div>
+                          <div className="text-xl font-bold mt-1">{scoringBreakdown?.managerKpiAverage != null ? scoringBreakdown.managerKpiAverage.toFixed(1) : "—"}</div>
+                          <div className="text-[10px] text-[rgb(var(--muted))]">85% weight</div>
+                        </div>
+                        <div className="rt-panel-subtle rounded-md p-3">
+                          <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Values Avg</div>
+                          <div className="text-xl font-bold mt-1">{scoringBreakdown?.managerWebknotValueAverage != null ? scoringBreakdown.managerWebknotValueAverage.toFixed(1) : "—"}</div>
+                          <div className="text-[10px] text-[rgb(var(--muted))]">15% weight</div>
+                        </div>
+                        <div className="rt-panel-subtle rounded-md p-3">
+                          <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Weighted Score</div>
+                          <div className="text-xl font-bold mt-1 rt-stat-value">{scoringBreakdown?.weightedScore != null ? scoringBreakdown.weightedScore.toFixed(1) : "—"}</div>
+                          <div className="text-[10px] text-[rgb(var(--muted))]">out of 5</div>
+                        </div>
+                        <div className="rt-panel-subtle rounded-md p-3">
+                          <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Brownie Points</div>
+                          <div className="text-xl font-bold mt-1 text-amber-500">{scoringBreakdown?.browniePoints ?? 0}</div>
+                          <div className="text-[10px] text-[rgb(var(--muted))]">{scoringBreakdown?.certificationsCount ?? 0} cert · {scoringBreakdown?.recognitionsCount ?? 0} rec{scoringBreakdown?.techShowcase ? " · 1 tech" : ""}</div>
                         </div>
                       </div>
-                    );
-                  })() : null}
+                    </div>
+                  ) : null}
 
                   {/* Tech Showcase + Approve */}
                   <div className="rt-panel-subtle rounded-lg p-6 space-y-4">

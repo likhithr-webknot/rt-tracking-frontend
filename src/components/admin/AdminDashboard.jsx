@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { motion, useSpring, useTransform, useInView } from "framer-motion";
 import {
   Activity,
   ArrowDown,
@@ -7,7 +6,6 @@ import {
   Award,
   BarChart3,
   Briefcase,
-  Calendar,
   CheckCircle2,
   Clock,
   Download,
@@ -15,10 +13,7 @@ import {
   Filter,
   Layers,
   Minus,
-  Play,
-  Power,
   Shield,
-  Square,
   Target,
   TrendingUp,
   UserCheck,
@@ -49,33 +44,18 @@ import {
 } from "recharts";
 import Toast from "../shared/Toast.jsx";
 
-import { deleteEmployee, promoteEmployee as promoteEmployeeApi } from "../../api/employees.js";
-import { formatYearMonth } from "../../api/monthly-submissions.js";
+import { fetchAdminMonthlyOverview, formatYearMonth } from "../../api/monthly-submissions.js";
 import {
-  closeSubmissionWindowNow,
-  openSubmissionWindowNow,
-  scheduleSubmissionWindow,
-  closeRoleSubmissionWindowNow,
-  openRoleSubmissionWindowNow,
-  scheduleRoleSubmissionWindow,
-  fetchRoleSubmissionWindow,
-} from "../../api/submission-window.js";
+  averageRatings,
+  computeBrowniePoints as computeBrowniePointsFromSubmission,
+  computeWeightedScore85_15,
+} from "../../utils/submissionScoring.js";
 
 /* ───── helpers ───── */
 
 function parseLocalInputValue(value) {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function toLocalInputValue(date) {
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function formatPercent(value) {
-  if (!Number.isFinite(value)) return "0";
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 0 }).format(value);
 }
 
 function clampAbility(n) {
@@ -98,8 +78,16 @@ function getDepartmentLabel(emp) {
   return String(emp?.stream || emp?.designation || emp?.role || "Unassigned").trim() || "Unassigned";
 }
 
-function getProjectLabel(emp) {
-  return String(emp?.project || emp?.projectName || emp?.account || emp?.client || "Unassigned").trim() || "Unassigned";
+function isPortalWindowOpen(windowData, at = new Date()) {
+  if (windowData?.manualClosed) return false;
+  const start = parseLocalInputValue(windowData?.start);
+  if (!start) return false;
+  const endRaw = String(windowData?.end ?? "").trim();
+  const end = endRaw ? parseLocalInputValue(endRaw) : null;
+  if (endRaw && !end) return false;
+  if (at < start) return false;
+  if (!end) return true;
+  return at <= end;
 }
 
 /**
@@ -110,26 +98,11 @@ function getProjectLabel(emp) {
  * missing.  Falls back to the old ability-score if no manager eval exists.
  */
 function computeEmployeePerformanceScore(emp) {
-  const toAvg = (obj) => {
-    if (!obj || typeof obj !== "object") return null;
-    const nums = Object.values(obj)
-      .map((v) => (typeof v === "number" ? v : Number.parseFloat(String(v ?? ""))))
-      .filter((v) => Number.isFinite(v) && v >= 1 && v <= 5);
-    return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : null;
-  };
-
-  const mgrKpiAvg = toAvg(emp?.managerKpiRatings);
-  const mgrValueAvg = toAvg(emp?.managerWebknotValueRatings);
+  const mgrKpiAvg = averageRatings(emp?.managerKpiRatings);
+  const mgrValueAvg = averageRatings(emp?.managerWebknotValueRatings);
 
   if (mgrKpiAvg != null || mgrValueAvg != null) {
-    let weighted;
-    if (mgrKpiAvg != null && mgrValueAvg != null) {
-      weighted = 0.85 * mgrKpiAvg + 0.15 * mgrValueAvg;
-    } else if (mgrKpiAvg != null) {
-      weighted = mgrKpiAvg; // only KPI available
-    } else {
-      weighted = mgrValueAvg; // only values available
-    }
+    const weighted = computeWeightedScore85_15(mgrKpiAvg, mgrValueAvg);
     return Math.round(Math.min(5, Math.max(1, weighted)) * 10) / 10;
   }
 
@@ -146,10 +119,11 @@ function computeEmployeePerformanceScore(emp) {
  *   certifications count + recognitions count + 1 if tech showcase provided
  */
 function computeBrowniePoints(emp) {
-  const certs = Number(emp?.certCount ?? 0) || 0;
-  const recognitions = Number(emp?.recognitions ?? 0) || 0;
-  const techShowcase = String(emp?.techShowcase ?? "").trim() ? 1 : 0;
-  return certs + recognitions + techShowcase;
+  return computeBrowniePointsFromSubmission({
+    certificationsCount: emp?.certCount,
+    recognitionsCount: emp?.recognitions,
+    techShowcase: emp?.techShowcase,
+  });
 }
 
 function buildBreakdownRows({ employees, ability6m, keySelector }) {
@@ -207,62 +181,57 @@ function useChartTooltipStyle() {
   return useMemo(() => getChartTooltipStyle(), [isDark]);
 }
 
-function StatCard({ label, value, subtitle, icon: Icon, iconColor = "text-blue-500", trend, trendLabel }) {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, margin: "-40px" });
-  const colorBase = iconColor.replace("text-", "").replace("-500", "");
+function SectionHeader({ icon: Icon, iconClassName, title, subtitle, compact = false, className = "" }) {
+  const iconNode = Icon ? React.createElement(Icon, { size: 16 }) : null;
   return (
-    <motion.div
-      ref={ref}
-      className="rt-panel p-5 relative overflow-hidden group hover:shadow-lg hover:shadow-[rgb(var(--primary)/.05)] transition-all duration-300"
-      initial={{ opacity: 0, y: 20 }}
-      animate={inView ? { opacity: 1, y: 0 } : {}}
-      transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
-    >
-      {/* solid accent at top */}
-      <div className={`absolute top-0 left-0 right-0 h-[2px] bg-${colorBase}-500/50`} />
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <p className="rt-kicker mb-2">{label}</p>
-          <p className="text-3xl font-bold tracking-tight rt-stat-value">
-            {typeof value === "number" ? (
-              <AnimatedCounter value={value} decimals={Number.isInteger(value) ? 0 : 1} />
-            ) : value}
-          </p>
-          {subtitle ? <p className="mt-1.5 text-xs text-[rgb(var(--muted))]">{subtitle}</p> : null}
-          {trend !== undefined && trend !== null ? (
-            <div className="mt-2 inline-flex items-center gap-1 text-xs font-medium">
-              {trend > 0 ? <ArrowUp size={12} className="text-emerald-500" /> : trend < 0 ? <ArrowDown size={12} className="text-red-500" /> : <Minus size={12} className="text-[rgb(var(--muted))]" />}
-              <span className={trend > 0 ? "text-emerald-600 dark:text-emerald-400" : trend < 0 ? "text-red-600 dark:text-red-400" : "text-[rgb(var(--muted))]"}>
-                {trendLabel || `${trend > 0 ? "+" : ""}${formatPercent(trend)}%`}
-              </span>
-            </div>
-          ) : null}
-        </div>
-        <div className={`flex-shrink-0 rounded-xl p-3 ${iconColor.replace("text-", "bg-").replace("500", "500/10")} ${iconColor} ring-1 ring-inset ring-[rgb(var(--border)/.3)]`}>
-          <Icon size={20} strokeWidth={1.8} />
-        </div>
+    <div className={`flex items-center gap-3 ${compact ? "mb-1" : "mb-4"} ${className}`.trim()}>
+      <div className={`rounded-lg p-2 ${iconClassName}`}>
+        {iconNode}
       </div>
-    </motion.div>
+      <div className="rt-section-header">
+        <h3 className="rt-section-title">{title}</h3>
+        <p className="rt-section-subtitle">{subtitle}</p>
+      </div>
+    </div>
   );
 }
 
-function InsightCard({ icon: Icon, iconColor = "text-blue-500", title, value, detail }) {
+function OverviewMetricTile({ icon: Icon, title, value, helper, tone = "slate" }) {
+  const tones = {
+    slate: "bg-slate-500/10 text-slate-600 dark:text-slate-300",
+    blue: "bg-blue-500/10 text-blue-600 dark:text-blue-300",
+    emerald: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+    amber: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+    violet: "bg-violet-500/10 text-violet-700 dark:text-violet-300",
+    rose: "bg-rose-500/10 text-rose-700 dark:text-rose-300",
+  };
+  const iconNode = Icon ? React.createElement(Icon, { size: 16 }) : null;
   return (
-    <motion.div
-      className="rt-panel-subtle p-4 flex items-start gap-3 group hover:bg-[rgb(var(--surface-2)/.5)] transition-colors duration-200"
-      whileHover={{ y: -2 }}
-      transition={{ duration: 0.2 }}
-    >
-      <div className={`flex-shrink-0 mt-0.5 rounded-lg p-2 ${iconColor.replace("text-", "bg-").replace("500", "500/10")} ${iconColor}`}>
-        <Icon size={16} strokeWidth={1.8} />
+    <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">{title}</div>
+        <div className={`rounded-md p-1.5 ${tones[tone] || tones.slate}`}>{iconNode}</div>
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="rt-kicker">{title}</div>
-        <div className="mt-1 font-bold text-[rgb(var(--text))] truncate">{value}</div>
-        {detail ? <div className="mt-0.5 text-xs text-[rgb(var(--muted))]">{detail}</div> : null}
+      <div className="mt-2 text-2xl font-semibold tabular-nums text-[rgb(var(--text))]">{value}</div>
+      <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{helper}</div>
+    </div>
+  );
+}
+
+function ActionQueueItem({ title, detail, severity = "medium" }) {
+  const severityClass = severity === "high"
+    ? "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/20"
+    : severity === "low"
+      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
+      : "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20";
+  return (
+    <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-semibold text-[rgb(var(--text))]">{title}</div>
+        <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${severityClass}`}>{severity}</span>
       </div>
-    </motion.div>
+      <div className="mt-1.5 text-xs text-[rgb(var(--muted))]">{detail}</div>
+    </div>
   );
 }
 
@@ -275,82 +244,23 @@ function MiniProgressBar({ value, max = 100, color = "bg-blue-500" }) {
   );
 }
 
-/* ── animated counter ── */
-function AnimatedCounter({ value, decimals = 0, duration = 1.2, prefix = "", suffix = "" }) {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, margin: "-40px" });
-  const springVal = useSpring(0, { duration: duration * 1000, bounce: 0 });
-  const display = useTransform(springVal, (v) => {
-    const num = decimals > 0 ? v.toFixed(decimals) : Math.round(v);
-    return `${prefix}${num}${suffix}`;
-  });
-
-  useEffect(() => {
-    if (inView) springVal.set(Number(value) || 0);
-  }, [inView, value, springVal]);
-
-  return <motion.span ref={ref}>{display}</motion.span>;
-}
-
-/* ── radial progress gauge ── */
-function RadialGauge({ value, size = 88, strokeWidth = 7, color = "#2563eb", trackColor, label }) {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, margin: "-20px" });
-  const safeSize = Number.isFinite(Number(size)) && Number(size) > 0 ? Number(size) : 88;
-  const safeStroke = Number.isFinite(Number(strokeWidth)) && Number(strokeWidth) > 0 ? Number(strokeWidth) : 7;
-  const radius = Math.max(1, (safeSize - safeStroke) / 2);
-  const circumference = 2 * Math.PI * radius;
-  const springPct = useSpring(0, { duration: 1400, bounce: 0 });
-  const dashOffset = useTransform(springPct, (v) => circumference - (v / 100) * circumference);
-  const displayVal = useTransform(springPct, (v) => `${Math.round(v)}%`);
-
-  useEffect(() => {
-    if (inView) springPct.set(Math.min(100, Math.max(0, Number(value) || 0)));
-  }, [inView, value, springPct]);
-
-  const resolvedTrack = trackColor || "rgb(var(--border))";
-
-  return (
-    <div ref={ref} className="relative inline-flex items-center justify-center" style={{ width: safeSize, height: safeSize }}>
-      <svg width={safeSize} height={safeSize} className="-rotate-90">
-        <circle cx={safeSize / 2} cy={safeSize / 2} r={radius} fill="none" stroke={resolvedTrack} strokeWidth={safeStroke} />
-        <motion.circle
-          cx={safeSize / 2} cy={safeSize / 2} r={radius} fill="none"
-          stroke={color} strokeWidth={safeStroke} strokeLinecap="round"
-          strokeDasharray={circumference}
-          style={{ strokeDashoffset: dashOffset }}
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <motion.span className="text-base font-bold text-[rgb(var(--text))]">{displayVal}</motion.span>
-        {label ? <span className="text-[9px] font-semibold text-[rgb(var(--muted))] mt-0.5">{label}</span> : null}
-      </div>
-    </div>
-  );
-}
-
 /* ── funnel step ── */
-function FunnelStep({ label, count, total, color, delay = 0 }) {
+function FunnelStep({ label, count, total, color }) {
   const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, margin: "-20px" });
   return (
-    <div ref={ref} className="group flex items-center gap-4 py-0.5">
+    <div className="group flex items-center gap-4 py-0.5">
       <div className="w-14 text-right flex-shrink-0">
         <div className="text-base font-bold tabular-nums" style={{ color }}>{count}</div>
         <div className="text-[10px] font-medium text-[rgb(var(--muted))]">{pct}%</div>
       </div>
       <div className="flex-1 relative">
         <div className="h-8 rounded-lg bg-[rgb(var(--surface-2))] overflow-hidden">
-          <motion.div
+          <div
             className="h-full rounded-lg relative overflow-hidden"
-            style={{ backgroundColor: color }}
-            initial={{ width: 0 }}
-            animate={inView ? { width: `${Math.max(pct, 2)}%` } : { width: 0 }}
-            transition={{ duration: 0.9, delay, ease: [0.25, 0.46, 0.45, 0.94] }}
+            style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: color }}
           >
 
-          </motion.div>
+          </div>
         </div>
       </div>
       <div className="w-32 text-xs font-semibold text-[rgb(var(--text))] truncate">{label}</div>
@@ -362,75 +272,20 @@ function FunnelStep({ label, count, total, color, delay = 0 }) {
 
 export default function AdminDashboard({
   portalWindow,
-  setPortalWindow,
-  portalWindowLoading,
-  portalWindowError,
-  reloadPortalWindow,
   employees,
-  setEmployees,
-  reloadEmployees,
-  employeesLoading,
-  employeesError,
   totalEmployeesCount,
   directoryTotals,
   ability6m,
   submissionSummary,
   submissionCycleMap = {},
   submissionExtrasByEmployee = {},
-  onGenerateReport,
 }) {
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
-  const [promotingId, setPromotingId] = useState(null);
-  const [portalWindowBusy, setPortalWindowBusy] = useState(false);
-  const [now, setNow] = useState(() => new Date());
   const [selectedCycleKey, setSelectedCycleKey] = useState(() => formatYearMonth(new Date()));
-
-  /* ── separate employee / manager window state ── */
-  const [empWindow, setEmpWindow] = useState({ start: "", end: "", manualClosed: false, isOpen: false });
-  const [mgrWindow, setMgrWindow] = useState({ start: "", end: "", manualClosed: false, isOpen: false });
-  const [empWindowBusy, setEmpWindowBusy] = useState(false);
-  const [mgrWindowBusy, setMgrWindowBusy] = useState(false);
-
-  /* Fetch the actual role-specific windows from the server on mount */
-  const [empWindowLoaded, setEmpWindowLoaded] = useState(false);
-  const [mgrWindowLoaded, setMgrWindowLoaded] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    const controller = new AbortController();
-    (async () => {
-      try {
-        const res = await fetchRoleSubmissionWindow("employee", { signal: controller.signal });
-        if (!alive) return;
-        const parsed = parseRoleWindowResponse(res, "");
-        if (parsed.start) { setEmpWindow(parsed); setEmpWindowLoaded(true); }
-      } catch { /* ignore – will fall back to global sync below */ }
-    })();
-    return () => { alive = false; controller.abort(); };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    const controller = new AbortController();
-    (async () => {
-      try {
-        const res = await fetchRoleSubmissionWindow("manager", { signal: controller.signal });
-        if (!alive) return;
-        const parsed = parseRoleWindowResponse(res, "");
-        if (parsed.start) { setMgrWindow(parsed); setMgrWindowLoaded(true); }
-      } catch { /* ignore – will fall back to global sync below */ }
-    })();
-    return () => { alive = false; controller.abort(); };
-  }, []);
-
-  /* Fallback: sync from global when role-specific fetch didn't provide data */
-  useEffect(() => {
-    if (portalWindow?.start) {
-      if (!empWindowLoaded) setEmpWindow((prev) => prev.start ? prev : { start: portalWindow.start, end: portalWindow.end || "", manualClosed: Boolean(portalWindow.manualClosed), isOpen: undefined });
-      if (!mgrWindowLoaded) setMgrWindow((prev) => prev.start ? prev : { start: portalWindow.start, end: portalWindow.end || "", manualClosed: Boolean(portalWindow.manualClosed), isOpen: undefined });
-    }
-  }, [portalWindow?.start, portalWindow?.end, portalWindow?.manualClosed, empWindowLoaded, mgrWindowLoaded]);
+  const [monthlyOverview, setMonthlyOverview] = useState(null);
+  const [monthlyOverviewLoading, setMonthlyOverviewLoading] = useState(false);
+  const [monthlyOverviewError, setMonthlyOverviewError] = useState("");
 
   const CHART_TOOLTIP_STYLE = useChartTooltipStyle();
 
@@ -439,11 +294,6 @@ export default function AdminDashboard({
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }
-
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 15000);
-    return () => window.clearInterval(id);
-  }, []);
 
   const cycleOptions = useMemo(() => {
     const keys = Object.keys(submissionCycleMap || {});
@@ -455,118 +305,35 @@ export default function AdminDashboard({
     const currentKey = formatYearMonth(new Date());
     const validKeys = new Set(cycleOptions.map((c) => c.key));
     if (!validKeys.has(selectedCycleKey)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedCycleKey(validKeys.has(currentKey) ? currentKey : "ALL");
     }
   }, [cycleOptions, selectedCycleKey]);
 
-  function portalWindowFromServer(data) {
-    const obj = data && typeof data === "object" ? data : {};
-    const startAt = obj.startAt ? new Date(obj.startAt) : null;
-    const endAt = obj.endAt ? new Date(obj.endAt) : null;
-    return {
-      start: startAt && !Number.isNaN(startAt.getTime()) ? toLocalInputValue(startAt) : portalWindow.start,
-      end: endAt && !Number.isNaN(endAt.getTime()) ? toLocalInputValue(endAt) : "",
-      manualClosed: Boolean(obj.manualClosed),
-      cycleKey: typeof obj.cycleKey === "string" ? obj.cycleKey : null,
-      meta: { ...(portalWindow.meta ?? {}), lastAction: "server", updatedAt: Date.now() },
-    };
-  }
-
-  const portalIsOpenNow = useMemo(() => {
-    if (portalWindow?.manualClosed) return false;
-    const start = parseLocalInputValue(portalWindow.start);
-    if (!start) return false;
-    const endRaw = String(portalWindow.end ?? "").trim();
-    const end = endRaw ? parseLocalInputValue(endRaw) : null;
-    if (endRaw && !end) return false;
-    if (now < start) return false;
-    if (!end) return true;
-    return now <= end;
-  }, [portalWindow?.manualClosed, portalWindow.start, portalWindow.end, now]);
-
-  function isWindowOpen(win) {
-    /* If server explicitly told us the state, use it */
-    if (win?.manualClosed) return false;
-    if (typeof win?.isOpen === "boolean") return win.isOpen;
-    /* Fallback: compute from dates */
-    const start = parseLocalInputValue(win?.start);
-    if (!start) return false;
-    const endRaw = String(win?.end ?? "").trim();
-    const end = endRaw ? parseLocalInputValue(endRaw) : null;
-    if (endRaw && !end) return false;
-    if (now < start) return false;
-    if (!end) return true;
-    return now <= end;
-  }
-
-  const empWindowOpen = isWindowOpen(empWindow);
-  const mgrWindowOpen = isWindowOpen(mgrWindow);
-
-  function parseRoleWindowResponse(res, fallbackStart) {
-    const obj = res && typeof res === "object" ? res : {};
-    const startAt = obj.startAt ? new Date(obj.startAt) : null;
-    const endAt = obj.endAt ? new Date(obj.endAt) : null;
-    return {
-      start: startAt && !Number.isNaN(startAt.getTime()) ? toLocalInputValue(startAt) : fallbackStart || "",
-      end: endAt && !Number.isNaN(endAt.getTime()) ? toLocalInputValue(endAt) : "",
-      manualClosed: Boolean(obj.manualClosed),
-      isOpen: typeof obj.isOpen === "boolean" ? obj.isOpen : undefined,
-    };
-  }
-
-  async function handleRoleToggle(role) {
-    const isEmp = role === "employee";
-    const isOpen = isEmp ? empWindowOpen : mgrWindowOpen;
-    const setBusy = isEmp ? setEmpWindowBusy : setMgrWindowBusy;
-    const setWin = isEmp ? setEmpWindow : setMgrWindow;
-    setBusy(true);
-    try {
-      const res = isOpen
-        ? await closeRoleSubmissionWindowNow(role)
-        : await openRoleSubmissionWindowNow(role);
-      const parsed = parseRoleWindowResponse(res, isOpen ? "" : toLocalInputValue(new Date()));
-      /* Always force the correct state based on the action we just took */
-      if (isOpen) {
-        parsed.manualClosed = true;
-        parsed.isOpen = false;
-      } else {
-        parsed.manualClosed = false;
-        parsed.isOpen = true;
-      }
-      setWin(parsed);
-      showToast({ title: isOpen ? `${isEmp ? "Employee" : "Manager"} window stopped` : `${isEmp ? "Employee" : "Manager"} window started`, message: isOpen ? "Window closed." : "Window opened." });
-    } catch (err) {
-      showToast({ title: "Window update failed", message: err?.message || "Please try again." });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRoleSchedule(role) {
-    const isEmp = role === "employee";
-    const win = isEmp ? empWindow : mgrWindow;
-    const start = parseLocalInputValue(win.start);
-    const end = parseLocalInputValue(win.end);
-    if (!start || !end) { showToast({ title: "Invalid schedule", message: "Pick a valid Open at and Close at." }); return; }
-    if (end <= start) { showToast({ title: "Invalid schedule", message: "Close at must be after Open at." }); return; }
-    if (end <= now) { showToast({ title: "Invalid schedule", message: "Close at must be in the future." }); return; }
-    const setBusy = isEmp ? setEmpWindowBusy : setMgrWindowBusy;
-    const setWin = isEmp ? setEmpWindow : setMgrWindow;
-    setBusy(true);
-    try {
-      const res = await scheduleRoleSubmissionWindow(role, { startAt: new Date(win.start).toISOString(), endAt: new Date(win.end).toISOString() });
-      const parsed = parseRoleWindowResponse(res, win.start);
-      /* Scheduling re-opens the window (clears a previous manual close) */
-      parsed.manualClosed = false;
-      if (parsed.isOpen === undefined) parsed.isOpen = undefined; /* let isWindowOpen recalculate from dates */
-      setWin(parsed);
-      showToast({ title: `${isEmp ? "Employee" : "Manager"} window scheduled`, message: "Schedule updated." });
-    } catch (err) {
-      showToast({ title: "Schedule failed", message: err?.message || "Please try again." });
-    } finally {
-      setBusy(false);
-    }
-  }
+  useEffect(() => {
+    const controller = new AbortController();
+    const month = selectedCycleKey && selectedCycleKey !== "ALL" ? selectedCycleKey : formatYearMonth(new Date());
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMonthlyOverviewLoading(true);
+    setMonthlyOverviewError("");
+    fetchAdminMonthlyOverview({
+      month,
+      cycleKey: selectedCycleKey === "ALL" ? null : selectedCycleKey,
+      signal: controller.signal,
+    })
+      .then((data) => {
+        if (!controller.signal.aborted) setMonthlyOverview(data);
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setMonthlyOverviewError(err?.message || "Failed to load monthly overview.");
+        setMonthlyOverview(null);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setMonthlyOverviewLoading(false);
+      });
+    return () => controller.abort();
+  }, [selectedCycleKey]);
 
   /* ───── data computations ───── */
 
@@ -677,11 +444,6 @@ export default function AdminDashboard({
 
   const departmentBreakdown = useMemo(
     () => buildBreakdownRows({ employees: normalizedEmployees, ability6m, keySelector: getDepartmentLabel }),
-    [normalizedEmployees, ability6m],
-  );
-
-  const projectBreakdown = useMemo(
-    () => buildBreakdownRows({ employees: normalizedEmployees, ability6m, keySelector: getProjectLabel }),
     [normalizedEmployees, ability6m],
   );
 
@@ -801,14 +563,6 @@ export default function AdminDashboard({
       .slice(0, 6);
   }, [enrichedEmployees]);
 
-  const intelligence = useMemo(() => {
-    const bestDept = departmentPerformanceData[0] || null;
-    const bestBand = bandPerformanceData[0] || null;
-    const strongestMgr = managerOwnershipData.slice().sort((a, b) => b.avgScore - a.avgScore || b.submitted - a.submitted)[0] || null;
-    const topPerf = topPerformers[0] || null;
-    return { bestDept, bestBand, strongestMgr, topPerf };
-  }, [bandPerformanceData, departmentPerformanceData, managerOwnershipData, topPerformers]);
-
   const departmentGranularityRows = useMemo(() => {
     const managersById = new Map(enrichedEmployees.map((emp) => [String(emp?.id || "").trim(), emp]));
     const managerNameById = new Map();
@@ -859,7 +613,7 @@ export default function AdminDashboard({
     }
     const maxVal = Math.max(...base.map((d) => d.employees), 1);
     return base.map((d) => ({ ...d, fullMark: maxVal }));
-  }, [stats, departmentBreakdown]);
+  }, [departmentBreakdown]);
 
   const hasRadarData = useMemo(
     () => orgHealthRadarData.some((d) => Number.isFinite(d.employees)),
@@ -941,9 +695,107 @@ export default function AdminDashboard({
     ];
   }, [stats, enrichedEmployees, submissionExtrasByEmployee]);
 
+  const portalLiveOpen = isPortalWindowOpen(portalWindow, new Date());
+
+  const managerReviewDone = Number.isFinite(Number(monthlyOverview?.managerReviewedCount))
+    ? Number(monthlyOverview.managerReviewedCount)
+    : stats.managersSubmitted;
+
+  const totalSubmissionRecords = Number.isFinite(Number(monthlyOverview?.totalSubmissions))
+    ? Number(monthlyOverview.totalSubmissions)
+    : (stats.employeesSubmitted + stats.managersSubmitted);
+
+  const managerReviewCompletionRate = totalSubmissionRecords > 0
+    ? Math.round((managerReviewDone / totalSubmissionRecords) * 100)
+    : 0;
+
+  const pendingManagerReviews = Number.isFinite(Number(monthlyOverview?.pendingManagerReviews))
+    ? Number(monthlyOverview.pendingManagerReviews)
+    : Math.max(0, stats.totalManagers - stats.managersSubmitted);
+
+  const interventionDeptCount = departmentBreakdown.filter((d) => d.needsIntervention).length;
+
+  const pendingContributors = Math.max(0, (stats.employeeHeadcount + stats.totalManagers) - (stats.employeesSubmitted + stats.managersSubmitted));
+
+  const overviewTiles = [
+    {
+      title: "Workforce",
+      value: stats.totalHeadcount,
+      helper: `${stats.employeeHeadcount} employees · ${stats.totalManagers} managers`,
+      icon: Users,
+      tone: "blue",
+    },
+    {
+      title: "Coverage",
+      value: `${stats.overallSubmissionRate}%`,
+      helper: `${stats.employeesSubmitted + stats.managersSubmitted} contributors submitted`,
+      icon: CheckCircle2,
+      tone: "emerald",
+    },
+    {
+      title: "Pending Contributors",
+      value: pendingContributors,
+      helper: "People who still need to submit",
+      icon: Clock,
+      tone: pendingContributors > 0 ? "amber" : "emerald",
+    },
+    {
+      title: "Manager Review",
+      value: `${managerReviewCompletionRate}%`,
+      helper: `${managerReviewDone}/${totalSubmissionRecords} reviewed`,
+      icon: Shield,
+      tone: managerReviewCompletionRate >= 80 ? "emerald" : managerReviewCompletionRate >= 50 ? "amber" : "rose",
+    },
+    {
+      title: "Ability Pulse",
+      value: stats.latestAbility ? stats.latestAbility.toFixed(1) : "0.0",
+      helper: stats.abilityDelta != null ? `${stats.abilityDelta > 0 ? "+" : ""}${stats.abilityDelta.toFixed(1)} vs previous cycle` : "Awaiting previous cycle baseline",
+      icon: TrendingUp,
+      tone: stats.abilityDelta > 0 ? "emerald" : stats.abilityDelta < 0 ? "rose" : "slate",
+    },
+    {
+      title: "Cycle Mode",
+      value: monthlyOverview?.sixMonthReviewMonth ? "Six-Month" : "Monthly",
+      helper: monthlyOverview?.reviewMonthLabel || (monthlyOverview?.month || selectedCycleKey || "Current cycle"),
+      icon: Target,
+      tone: "violet",
+    },
+  ];
+
+  const actionQueue = (() => {
+    const items = [];
+
+    if (pendingManagerReviews > 0) {
+      items.push({
+        title: "Manager reviews pending",
+        detail: `${pendingManagerReviews} review ${pendingManagerReviews === 1 ? "item is" : "items are"} waiting for manager action.`,
+        severity: pendingManagerReviews > 10 ? "high" : "medium",
+      });
+    }
+
+    for (const row of departmentBreakdown.filter((d) => d.needsIntervention).slice(0, 3)) {
+      items.push({
+        title: `${row.group} needs intervention`,
+        detail: `Score ${row.latestAvg.toFixed(1)} · ${Math.round(row.submissionRate * 100)}% submitted · delta ${formatDelta(row.delta)}`,
+        severity: row.latestAvg < 3.2 || row.submissionRate < 0.4 ? "high" : "medium",
+      });
+    }
+
+    if (!items.length) {
+      items.push({
+        title: "No urgent blockers",
+        detail: "All primary metrics are stable. Continue with cycle monitoring and coaching cadence.",
+        severity: "low",
+      });
+    }
+
+    return items.slice(0, 4);
+  })();
+
   /* ───── Report generator ───── */
   function handleGenerateReport() {
     const ts = new Date().toISOString();
+    const portalIsOpenNow = isPortalWindowOpen(portalWindow, new Date());
     const sections = [];
     sections.push("=== RT TRACKING — ADMIN PERFORMANCE REPORT ===");
     sections.push(`Generated: ${ts}`);
@@ -1008,220 +860,168 @@ export default function AdminDashboard({
     showToast({ title: "Report downloaded", message: "Full report CSV exported." });
   }
 
-  /* ───── portal window actions ───── */
-
-  async function handleToggleWindow() {
-    if (portalWindowBusy || portalWindowLoading) return;
-    setPortalWindowBusy(true);
-    try {
-      const res = portalIsOpenNow ? await closeSubmissionWindowNow() : await openSubmissionWindowNow();
-      const parsed = portalWindowFromServer(res);
-      /* Explicitly set manualClosed when we close, clear when we open */
-      if (portalIsOpenNow) {
-        parsed.manualClosed = true;
-      } else {
-        parsed.manualClosed = false;
-      }
-      setPortalWindow(parsed);
-      showToast({ title: portalIsOpenNow ? "Window stopped" : "Window started", message: portalIsOpenNow ? "Submission window closed." : "Submission window opened." });
-    } catch (err) {
-      showToast({ title: "Window update failed", message: err?.message || "Please try again." });
-    } finally {
-      setPortalWindowBusy(false);
-    }
-  }
-
-  async function handleScheduleWindow() {
-    const start = parseLocalInputValue(portalWindow.start);
-    const end = parseLocalInputValue(portalWindow.end);
-    if (!start || !end) { showToast({ title: "Invalid schedule", message: "Pick a valid Open at and Close at." }); return; }
-    if (end <= start) { showToast({ title: "Invalid schedule", message: "Close at must be after Open at." }); return; }
-    if (end <= now) { showToast({ title: "Invalid schedule", message: "Close at must be in the future." }); return; }
-    if (portalWindowBusy || portalWindowLoading) return;
-    setPortalWindowBusy(true);
-    try {
-      const res = await scheduleSubmissionWindow({ startAt: new Date(portalWindow.start).toISOString(), endAt: new Date(portalWindow.end).toISOString() });
-      setPortalWindow(portalWindowFromServer(res));
-      showToast({ title: "Window scheduled", message: "Submission window schedule updated." });
-    } catch (err) {
-      showToast({ title: "Schedule failed", message: err?.message || "Please try again." });
-    } finally {
-      setPortalWindowBusy(false);
-    }
-  }
-
-  async function promoteEmployee(employeeId) {
-    const emp = normalizedEmployees.find((e) => e.id === employeeId);
-    if (!emp) return;
-    setPromotingId(employeeId);
-    try {
-      await promoteEmployeeApi(employeeId);
-      await reloadEmployees?.();
-      showToast({ title: "Promotion applied", message: `${emp.name} promoted successfully.` });
-    } catch (err) {
-      showToast({ title: "Promotion failed", message: err?.message || "Please try again." });
-    } finally {
-      setPromotingId(null);
-    }
-  }
-
-  async function removeEmployee(employeeId) {
-    try {
-      await deleteEmployee(employeeId);
-      await reloadEmployees?.();
-      setEmployees((prev) => prev.filter((e) => e.id !== employeeId));
-      showToast({ title: "Employee removed", message: `Removed ${employeeId}` });
-    } catch (err) {
-      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
-    }
-  }
-
   /* ───── render ───── */
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
 
       {/* ── header ── */}
-      <header className="rt-panel p-6 sm:p-8">
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-5">
+      <header className="rt-panel p-6 sm:p-8 overflow-hidden relative">
+        <div className="absolute -top-20 -right-24 h-56 w-56 rounded-full bg-cyan-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-16 -left-20 h-52 w-52 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
+        <div className="relative flex flex-col lg:flex-row lg:items-end lg:justify-between gap-5">
           <div>
             <div className="flex items-center gap-3 mb-2">
-              <div className="h-9 w-9 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center">
-                <BarChart3 size={18} strokeWidth={1.8} />
+              <div className="h-10 w-10 rounded-xl bg-cyan-500/15 text-cyan-600 dark:text-cyan-300 flex items-center justify-center">
+                <Zap size={19} strokeWidth={1.9} />
               </div>
-              <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[rgb(var(--muted))]">Admin Dashboard</span>
+              <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[rgb(var(--muted))]">Admin Mission Control</span>
             </div>
-            <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Dashboard Overview</h2>
-            <p className="text-sm text-[rgb(var(--muted))] mt-1">Real-time performance analytics & submission tracking</p>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-[rgb(var(--text))]">Executive Command Overview</h2>
+            <p className="text-sm text-[rgb(var(--muted))] mt-1">A control-plane view of cycle health, team momentum, and intervention priorities.</p>
           </div>
+
           <div className="flex items-center gap-3 flex-wrap">
             <select
               value={selectedCycleKey}
               onChange={(e) => setSelectedCycleKey(e.target.value)}
-              className="rt-input px-3 py-2.5 text-sm w-40"
+              className="rt-input px-3 py-2.5 text-sm w-44"
             >
               {cycleOptions.map((opt) => (
                 <option key={opt.key} value={opt.key}>{opt.label}</option>
               ))}
             </select>
             <button onClick={handleGenerateReport} className="rt-btn-ghost py-2.5">
-              <Download size={15} /> Export
+              <Download size={15} /> Export Brief
             </button>
+          </div>
+        </div>
+
+        <div className="relative mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3.5">
+            <div className="text-[10px] uppercase tracking-wider text-cyan-700 dark:text-cyan-300 font-semibold">Cycle</div>
+            <div className="mt-1 text-sm font-semibold text-[rgb(var(--text))]">{monthlyOverviewLoading ? "Loading cycle..." : (monthlyOverview?.month || selectedCycleKey || "Current")}</div>
+            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{monthlyOverview?.reviewMonthLabel || "Review window monitored in real-time"}</div>
+          </div>
+          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3.5">
+            <div className="text-[10px] uppercase tracking-wider text-emerald-700 dark:text-emerald-300 font-semibold">Portal Status</div>
+            <div className="mt-1 text-sm font-semibold text-[rgb(var(--text))]">{portalLiveOpen ? "Submission Window Open" : "Submission Window Closed"}</div>
+            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{portalWindow?.start ? `Window starts at ${portalWindow.start}` : "No active schedule configured"}</div>
+          </div>
+          <div className="rounded-xl border border-violet-500/20 bg-violet-500/10 p-3.5">
+            <div className="text-[10px] uppercase tracking-wider text-violet-700 dark:text-violet-300 font-semibold">Performance Drift</div>
+            <div className="mt-1 text-sm font-semibold text-[rgb(var(--text))]">{stats.abilityDelta != null ? `${stats.abilityDelta > 0 ? "+" : ""}${stats.abilityDelta.toFixed(1)} vs previous` : "No baseline yet"}</div>
+            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">Latest ability score: {stats.latestAbility ? stats.latestAbility.toFixed(1) : "0.0"}</div>
           </div>
         </div>
       </header>
 
-      {/* ── stat cards ── */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          label="Total Headcount"
-          value={stats.totalHeadcount}
-          subtitle={`${stats.employeeHeadcount} emp · ${stats.totalManagers} mgr · ${stats.totalAdmins} admin`}
-          icon={Users}
-          iconColor="text-blue-500"
-        />
-        <StatCard
-          label="Submissions Done"
-          value={stats.employeesSubmitted + stats.managersSubmitted}
-          subtitle={`of ${stats.employeeHeadcount + stats.totalManagers} eligible`}
-          icon={CheckCircle2}
-          iconColor="text-emerald-500"
-        />
-        <StatCard
-          label="Pending Reviews"
-          value={Math.max(0, (stats.employeeHeadcount - stats.employeesSubmitted) + (stats.totalManagers - stats.managersSubmitted))}
-          subtitle="Awaiting submission"
-          icon={Clock}
-          iconColor="text-amber-500"
-        />
-        <StatCard
-          label="Ability Score"
-          value={stats.latestAbility || stats.avg6m}
-          subtitle="6-month rolling average"
-          icon={TrendingUp}
-          iconColor="text-purple-500"
-          trend={stats.abilityDelta !== null ? (stats.abilityDelta > 0 ? 1 : stats.abilityDelta < 0 ? -1 : 0) : null}
-          trendLabel={stats.abilityDelta !== null ? `${stats.abilityDelta > 0 ? "+" : ""}${stats.abilityDelta} vs prev` : undefined}
-        />
-      </section>
+      {monthlyOverviewError ? (
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-200">
+          {monthlyOverviewError}
+        </div>
+      ) : null}
 
-      {/* ── submission rate cards with radial gauges ── */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="rt-panel p-5 flex items-center gap-5">
-          <RadialGauge value={stats.employeeSubmissionRate} color="#2563eb" />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="rounded-md p-1.5 bg-blue-500/10 text-blue-500"><UserCheck size={14} /></div>
-              <div className="rt-kicker">Employee Submission</div>
-            </div>
-            <div className="text-xs text-[rgb(var(--muted))] mt-1">{stats.employeesSubmitted} of {stats.employeeHeadcount} submitted</div>
-            <div className="mt-2">
-              <MiniProgressBar value={stats.employeeSubmissionRate} color="bg-blue-500" />
-            </div>
+      <section className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+        <div className="xl:col-span-8 rt-panel p-6">
+          <SectionHeader
+            icon={Activity}
+            iconClassName="bg-cyan-500/10 text-cyan-600 dark:text-cyan-300"
+            title="Executive Pulse"
+            subtitle="Core operating metrics for this cycle"
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            {overviewTiles.map((tile) => (
+              <OverviewMetricTile
+                key={tile.title}
+                icon={tile.icon}
+                title={tile.title}
+                value={tile.value}
+                helper={tile.helper}
+                tone={tile.tone}
+              />
+            ))}
           </div>
         </div>
-        <div className="rt-panel p-5 flex items-center gap-5">
-          <RadialGauge value={stats.managerSubmissionRate} color="#059669" />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="rounded-md p-1.5 bg-emerald-500/10 text-emerald-500"><Shield size={14} /></div>
-              <div className="rt-kicker">Manager Submission</div>
-            </div>
-            <div className="text-xs text-[rgb(var(--muted))] mt-1">{stats.managersSubmitted} of {stats.totalManagers} submitted</div>
-            <div className="mt-2">
-              <MiniProgressBar value={stats.managerSubmissionRate} color="bg-emerald-500" />
-            </div>
-          </div>
-        </div>
-        <div className="rt-panel p-5 flex items-center gap-5">
-          <RadialGauge value={stats.overallSubmissionRate} color="#7c3aed" />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="rounded-md p-1.5 bg-purple-500/10 text-purple-500"><Activity size={14} /></div>
-              <div className="rt-kicker">Submission Rate</div>
-            </div>
-            <div className="text-xs text-[rgb(var(--muted))] mt-1">All the employees submission rate</div>
-            <div className="mt-2">
-              <MiniProgressBar value={stats.overallSubmissionRate} color="bg-purple-500" />
-            </div>
+
+        <div className="xl:col-span-4 rt-panel p-6">
+          <SectionHeader
+            icon={Shield}
+            iconClassName="bg-rose-500/10 text-rose-700 dark:text-rose-300"
+            title="Action Queue"
+            subtitle="Priority interventions to close this cycle"
+          />
+          <div className="space-y-2.5">
+            {actionQueue.map((item) => (
+              <ActionQueueItem
+                key={item.title}
+                title={item.title}
+                detail={item.detail}
+                severity={item.severity}
+              />
+            ))}
           </div>
         </div>
       </section>
 
-      {/* ── intelligence highlights ── */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <InsightCard
-          icon={Briefcase} iconColor="text-blue-500" title="Best Department"
-          value={intelligence.bestDept?.department || "—"}
-          detail={intelligence.bestDept ? `Score ${intelligence.bestDept.avgScore.toFixed(1)} · ${intelligence.bestDept.submissionRate}% submitted` : undefined}
-        />
-        <InsightCard
-          icon={Layers} iconColor="text-purple-500" title="Strongest Band"
-          value={intelligence.bestBand?.band || "—"}
-          detail={intelligence.bestBand ? `Score ${intelligence.bestBand.avgScore.toFixed(1)} · ${intelligence.bestBand.submissionRate}% submitted` : undefined}
-        />
-        <InsightCard
-          icon={Shield} iconColor="text-emerald-500" title="Top Manager Team"
-          value={intelligence.strongestMgr?.managerName || "—"}
-          detail={intelligence.strongestMgr ? `Team ${intelligence.strongestMgr.teamSize} · Avg ${intelligence.strongestMgr.avgScore.toFixed(1)}` : undefined}
-        />
-        <InsightCard
-          icon={Award} iconColor="text-amber-500" title="Highest Performer"
-          value={intelligence.topPerf?.name || "—"}
-          detail={intelligence.topPerf ? `Score ${(intelligence.topPerf.performanceScore || 0).toFixed(1)} · ${intelligence.topPerf.band || "—"}` : undefined}
-        />
+      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="rt-panel p-6">
+          <SectionHeader
+            icon={Filter}
+            iconClassName="bg-indigo-500/10 text-indigo-700 dark:text-indigo-300"
+            title="Flow Snapshot"
+            subtitle="Current conversion from eligibility to approval"
+          />
+          <div className="space-y-2.5">
+            {submissionFunnel.map((step) => (
+              <FunnelStep
+                key={step.label}
+                label={step.label}
+                count={step.count}
+                total={submissionFunnel[0]?.count || 1}
+                color={step.color}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="rt-panel p-6">
+          <SectionHeader
+            icon={Award}
+            iconClassName="bg-amber-500/10 text-amber-700 dark:text-amber-300"
+            title="Strategic Highlights"
+            subtitle="Operational posture for the active cycle"
+          />
+          <div className="space-y-3">
+            <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
+              <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Review Cadence</div>
+              <div className="mt-1 text-lg font-semibold text-[rgb(var(--text))]">{monthlyOverview?.sixMonthReviewMonth ? "Six-Month Cycle" : "Monthly Cycle"}</div>
+              <div className="text-xs text-[rgb(var(--muted))] mt-1">{monthlyOverview?.reviewMonthLabel || (monthlyOverview?.month || selectedCycleKey || "Current cycle")}</div>
+            </div>
+            <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
+              <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Review Backlog</div>
+              <div className="mt-1 text-lg font-semibold text-[rgb(var(--text))]">{pendingManagerReviews}</div>
+              <div className="text-xs text-[rgb(var(--muted))] mt-1">{pendingManagerReviews > 0 ? "Items waiting for manager review completion" : "No pending manager reviews"}</div>
+            </div>
+            <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
+              <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Intervention Load</div>
+              <div className="mt-1 text-lg font-semibold text-[rgb(var(--text))]">{interventionDeptCount}</div>
+              <div className="text-xs text-[rgb(var(--muted))] mt-1">Departments currently flagged for intervention</div>
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* ── ability trend + org health radar ── */}
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2 rt-panel p-6">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><TrendingUp size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Performance Trend</h3>
-              <p className="rt-section-subtitle">6-month rolling average score</p>
-            </div>
-          </div>
+          <SectionHeader
+            icon={TrendingUp}
+            iconClassName="bg-blue-500/10 text-blue-500"
+            title="Performance Trend"
+            subtitle="6-month rolling average score"
+            compact
+          />
           <div className="mt-4 w-full" style={{ height: 260 }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={safeAbility6m} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
@@ -1236,13 +1036,13 @@ export default function AdminDashboard({
         </div>
 
         <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="rounded-lg p-2 bg-purple-500/10 text-purple-500"><Target size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Workforce Distribution</h3>
-              <p className="rt-section-subtitle">Employee headcount by department</p>
-            </div>
-          </div>
+          <SectionHeader
+            icon={Target}
+            iconClassName="bg-purple-500/10 text-purple-500"
+            title="Workforce Distribution"
+            subtitle="Employee headcount by department"
+            compact
+          />
           <div className="mt-4 w-full" style={{ height: 320 }}>
             {hasRadarData ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -1265,13 +1065,12 @@ export default function AdminDashboard({
       {cycleComparisonData.length > 0 ? (
         <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
           <div className="rt-panel p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="rounded-lg p-2 bg-emerald-500/10 text-emerald-500"><BarChart3 size={16} /></div>
-              <div className="rt-section-header">
-                <h3 className="rt-section-title">Review Cycle Comparison</h3>
-                <p className="rt-section-subtitle">Submission volume per cycle</p>
-              </div>
-            </div>
+            <SectionHeader
+              icon={BarChart3}
+              iconClassName="bg-emerald-500/10 text-emerald-500"
+              title="Review Cycle Comparison"
+              subtitle="Submission volume per cycle"
+            />
             <div style={{ height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={cycleComparisonData} barGap={4} barCategoryGap={20}>
@@ -1288,13 +1087,12 @@ export default function AdminDashboard({
           </div>
 
           <div className="rt-panel p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><TrendingUp size={16} /></div>
-              <div className="rt-section-header">
-                <h3 className="rt-section-title">Completion Rate Trend</h3>
-                <p className="rt-section-subtitle">Submission rate % across cycles</p>
-              </div>
-            </div>
+            <SectionHeader
+              icon={TrendingUp}
+              iconClassName="bg-blue-500/10 text-blue-500"
+              title="Completion Rate Trend"
+              subtitle="Submission rate % across cycles"
+            />
             <div style={{ height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={cycleComparisonData} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
@@ -1309,13 +1107,12 @@ export default function AdminDashboard({
           </div>
 
           <div className="rt-panel p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="rounded-lg p-2 bg-amber-500/10 text-amber-500"><FileBarChart size={16} /></div>
-              <div className="rt-section-header">
-                <h3 className="rt-section-title">Current Cycle Status</h3>
-                <p className="rt-section-subtitle">Employee vs manager submission progress</p>
-              </div>
-            </div>
+            <SectionHeader
+              icon={FileBarChart}
+              iconClassName="bg-amber-500/10 text-amber-500"
+              title="Current Cycle Status"
+              subtitle="Employee vs manager submission progress"
+            />
             <div style={{ height: 260 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -1344,16 +1141,15 @@ export default function AdminDashboard({
         </section>
       ) : null}
 
-      {/* ── performance distribution + submission pipeline ── */}
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+      {/* ── performance distribution ── */}
+      <section className="grid grid-cols-1 gap-4">
         <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="rounded-lg p-2 bg-indigo-500/10 text-indigo-500"><BarChart3 size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Score Distribution</h3>
-              <p className="rt-section-subtitle">Performance bell curve across all employees</p>
-            </div>
-          </div>
+          <SectionHeader
+            icon={BarChart3}
+            iconClassName="bg-indigo-500/10 text-indigo-500"
+            title="Score Distribution"
+            subtitle="Performance bell curve across all employees"
+          />
           <div style={{ height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={performanceDistribution.buckets} barCategoryGap="20%" margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
@@ -1379,53 +1175,17 @@ export default function AdminDashboard({
             <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />Top Performers</span>
           </div>
         </div>
-
-        <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="rounded-lg p-2 bg-violet-500/10 text-violet-500"><Filter size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Review Pipeline</h3>
-              <p className="rt-section-subtitle">End-to-end submission funnel</p>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {submissionFunnel.map((step, idx) => (
-              <FunnelStep
-                key={step.label}
-                label={step.label}
-                count={step.count}
-                total={submissionFunnel[0]?.count || 1}
-                color={step.color}
-                delay={idx * 0.1}
-              />
-            ))}
-          </div>
-          <div className="mt-5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-3.5 flex items-center gap-3">
-            <div className="rounded-md p-1.5 bg-emerald-500/10 text-emerald-500"><CheckCircle2 size={14} /></div>
-            <div className="flex-1">
-              <div className="text-xs font-semibold text-[rgb(var(--text))]">
-                Pipeline Efficiency
-              </div>
-              <div className="text-[11px] text-[rgb(var(--muted))]">
-                {submissionFunnel[0]?.count
-                  ? `${Math.round((submissionFunnel[submissionFunnel.length - 1]?.count / submissionFunnel[0].count) * 100)}% completion rate from eligible to approved`
-                  : "No data yet"}
-              </div>
-            </div>
-          </div>
-        </div>
       </section>
 
-      {/* ── department & project breakdown ── */}
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+      {/* ── department breakdown ── */}
+      <section className="grid grid-cols-1 gap-4">
         <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><Briefcase size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Department Analysis</h3>
-              <p className="rt-section-subtitle">Performance classification & alerts</p>
-            </div>
-          </div>
+          <SectionHeader
+            icon={Briefcase}
+            iconClassName="bg-blue-500/10 text-blue-500"
+            title="Department Analysis"
+            subtitle="Performance classification and alerts"
+          />
           <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
             {departmentBreakdown.slice(0, 8).map((row) => (
               <div key={`dep-${row.group}`} className="rt-panel-subtle p-3.5">
@@ -1453,13 +1213,13 @@ export default function AdminDashboard({
 
       {/* ── delivery analytics ── */}
       <section className="rt-panel p-6">
-        <div className="flex items-center gap-3 mb-5">
-          <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><BarChart3 size={16} /></div>
-          <div className="rt-section-header">
-            <h3 className="rt-section-title">Operational Analytics</h3>
-            <p className="rt-section-subtitle">Role throughput and band distribution</p>
-          </div>
-        </div>
+        <SectionHeader
+          icon={BarChart3}
+          iconClassName="bg-blue-500/10 text-blue-500"
+          title="Operational Analytics"
+          subtitle="Role throughput and band distribution"
+          className="mb-5"
+        />
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           <div className="rt-panel-subtle p-4 flex flex-col" style={{ height: 340 }}>
@@ -1505,13 +1265,12 @@ export default function AdminDashboard({
       {/* ── dept & band performance charts ── */}
       <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><Briefcase size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Department Performance</h3>
-              <p className="rt-section-subtitle">Average score & submission rate by department</p>
-            </div>
-          </div>
+          <SectionHeader
+            icon={Briefcase}
+            iconClassName="bg-blue-500/10 text-blue-500"
+            title="Department Performance"
+            subtitle="Average score and submission rate by department"
+          />
           <div style={{ height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={departmentPerformanceData}>
@@ -1529,13 +1288,12 @@ export default function AdminDashboard({
         </div>
 
         <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="rounded-lg p-2 bg-purple-500/10 text-purple-500"><Layers size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Band Performance</h3>
-              <p className="rt-section-subtitle">Performance by employee band</p>
-            </div>
-          </div>
+          <SectionHeader
+            icon={Layers}
+            iconClassName="bg-purple-500/10 text-purple-500"
+            title="Band Performance"
+            subtitle="Performance by employee band"
+          />
           <div style={{ height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={bandPerformanceData}>
@@ -1556,13 +1314,12 @@ export default function AdminDashboard({
       {/* ── manager ownership + top performers ── */}
       <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="rounded-lg p-2 bg-emerald-500/10 text-emerald-500"><Shield size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Manager Team Overview</h3>
-              <p className="rt-section-subtitle">Team composition and submission progress</p>
-            </div>
-          </div>
+          <SectionHeader
+            icon={Shield}
+            iconClassName="bg-emerald-500/10 text-emerald-500"
+            title="Manager Team Overview"
+            subtitle="Team composition and submission progress"
+          />
           <div style={{ height: 280 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={managerOwnershipData} barGap={4} barCategoryGap={24}>
@@ -1579,22 +1336,17 @@ export default function AdminDashboard({
         </div>
 
         <div className="rt-panel p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="rounded-lg p-2 bg-amber-500/10 text-amber-500"><Award size={16} /></div>
-            <div className="rt-section-header">
-              <h3 className="rt-section-title">Top Performers</h3>
-              <p className="rt-section-subtitle">Highest-rated employees this cycle</p>
-            </div>
-          </div>
+          <SectionHeader
+            icon={Award}
+            iconClassName="bg-amber-500/10 text-amber-500"
+            title="Top Performers"
+            subtitle="Highest-rated employees this cycle"
+          />
           <div className="space-y-2.5 max-h-[280px] overflow-y-auto pr-1">
             {topPerformers.length ? topPerformers.map((emp, idx) => (
-              <motion.div
+              <div
                 key={`top:${emp.id}`}
                 className="rt-panel-subtle p-3 flex items-center gap-3 group hover:bg-[rgb(var(--surface-2)/.5)] transition-colors"
-                initial={{ opacity: 0, x: -12 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: idx * 0.08, duration: 0.4 }}
               >
                 <div className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${idx === 0 ? "bg-amber-500" : idx === 1 ? "bg-slate-400" : idx === 2 ? "bg-orange-500" : "bg-[rgb(var(--surface-3))] text-[rgb(var(--text))]"}`}>
                   {idx + 1}
@@ -1607,7 +1359,7 @@ export default function AdminDashboard({
                   <div className="text-lg font-bold rt-stat-value">{(emp.performanceScore || 0).toFixed(1)}</div>
                   <div className="text-[10px] text-[rgb(var(--muted))]">Brownie: {emp.browniePoints || 0}</div>
                 </div>
-              </motion.div>
+              </div>
             )) : <p className="text-sm text-[rgb(var(--muted))]">No performance data yet.</p>}
           </div>
         </div>

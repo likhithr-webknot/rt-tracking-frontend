@@ -101,3 +101,102 @@ export async function importCsvBulk(filesByField, opts = {}) {
 
   return res.json().catch(() => ({ success: true }));
 }
+
+/**
+ * Import leave data from CSV file.
+ *
+ * POST /api/v1/upload/csv
+ * Content-Type: multipart/form-data  (field name: "file")
+ *
+ * @param {File}   file    – the CSV File object
+ * @param {object} [opts]  – { signal }
+ * @returns {Promise<object>} parsed JSON response
+ */
+export async function importLeaveDataCsv(file, opts = {}) {
+  if (!(file instanceof File)) {
+    throw new Error("leave file must be a File object");
+  }
+
+  await ensureCsrfCookie({ signal: opts.signal });
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(buildApiUrl("/api/v1/upload/csv"), {
+    method: "POST",
+    credentials: "include",
+    headers: withCsrfHeaders({}),
+    body: formData,
+    signal: opts.signal,
+  });
+
+  if (!res.ok) throw await toHttpError(res);
+
+  return res.json().catch(() => ({ success: true }));
+}
+
+/**
+ * Import allocation data from CSV file.
+ *
+ * POST /api/v1/upload-allocation/csv
+ * Content-Type: multipart/form-data  (field name: "file")
+ *
+ * @param {File}   file    – the CSV File object
+ * @param {object} [opts]  – { signal }
+ * @returns {Promise<object>} parsed JSON response
+ */
+export async function importAllocationsCsv(file, opts = {}) {
+  if (!(file instanceof File)) {
+    throw new Error("allocation file must be a File object");
+  }
+
+  await ensureCsrfCookie({ signal: opts.signal });
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(buildApiUrl("/api/v1/upload-allocation/csv"), {
+    method: "POST",
+    credentials: "include",
+    headers: withCsrfHeaders({}),
+    body: formData,
+    signal: opts.signal,
+  });
+
+  if (!res.ok) throw await toHttpError(res);
+
+  return res.json().catch(() => ({ success: true }));
+}
+
+/**
+ * Import user data from CSV file.
+ *
+ * POST /api/v1/upload/user-data/csv
+ * Content-Type: multipart/form-data  (field name: "file")
+ *
+ * @param {File}   file    – the CSV File object
+ * @param {object} [opts]  – { signal }
+ * @returns {Promise<object>} parsed JSON response
+ */
+export async function importUserDataCsv(file, opts = {}) {
+  if (!(file instanceof File)) {
+    throw new Error("user data file must be a File object");
+  }
+
+  await ensureCsrfCookie({ signal: opts.signal });
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(buildApiUrl("/api/v1/upload/user-data/csv"), {
+    method: "POST",
+    credentials: "include",
+    headers: withCsrfHeaders({}),
+    body: formData,
+    signal: opts.signal,
+  });
+
+  if (!res.ok) throw await toHttpError(res);
+
+  return res.json().catch(() => ({ success: true }));
+}

@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, ensureCsrfCookie, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
 
 function authHeaders({ json = false } = {}) {
   const auth = getAuthHeader();
@@ -127,6 +127,25 @@ export async function fetchUserRole({ email = null, signal } = {}) {
     signal,
     credentials: "include",
     headers: authHeaders(),
+  });
+  if (!res.ok) throw await toHttpError(res);
+  return parseResponse(res, {});
+}
+
+export async function switchMyRole(role, { signal } = {}) {
+  const requested = String(role ?? "").trim().toUpperCase();
+  if (!["ADMIN", "MANAGER", "EMPLOYEE"].includes(requested)) {
+    throw new Error("Role must be ADMIN, MANAGER, or EMPLOYEE.");
+  }
+  await ensureCsrfCookie({ signal });
+  const qs = new URLSearchParams();
+  qs.set("role", requested);
+  const res = await fetch(buildApiUrl(`/api/v1/user/switch-role?${qs.toString()}`), {
+    method: "POST",
+    signal,
+    credentials: "include",
+    headers: authHeaders({ json: true }),
+    body: JSON.stringify({}),
   });
   if (!res.ok) throw await toHttpError(res);
   return parseResponse(res, {});

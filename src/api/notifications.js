@@ -453,11 +453,18 @@ async function fetchNotificationsByUserId(userId, { signal } = {}) {
           `/api/v1/notifications/user/${safeUserId}`,
           `/api/v1/notifications?userId=${safeUserId}`,
           `/api/v1/notifications?employeeId=${safeUserId}`,
+          `/notifications/${safeUserId}`,
+          `/notifications/user/${safeUserId}`,
+          `/notifications?userId=${safeUserId}`,
+          `/notifications?employeeId=${safeUserId}`,
         ]
       : [
           `/api/v1/notifications?employeeId=${safeUserId}`,
           `/api/v1/notifications?employeeCode=${safeUserId}`,
           `/api/v1/notifications?userId=${safeUserId}`,
+          `/notifications?employeeId=${safeUserId}`,
+          `/notifications?employeeCode=${safeUserId}`,
+          `/notifications?userId=${safeUserId}`,
         ];
     for (const path of paths) {
       const res = await fetch(buildApiUrl(path), {
@@ -491,6 +498,9 @@ async function markNotificationReadById(notificationId, { signal } = {}) {
     `/api/v1/notifications/${safeId}/read`,
     `/api/v1/notifications/read/${safeId}`,
     `/api/v1/notifications/${safeId}`,
+    `/notifications/${safeId}/read`,
+    `/notifications/read/${safeId}`,
+    `/notifications/${safeId}`,
   ];
   const methods = ["PUT", "POST", "PATCH"];
   let lastRouteErr = null;

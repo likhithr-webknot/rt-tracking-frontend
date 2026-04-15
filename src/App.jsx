@@ -21,6 +21,99 @@ import {
 } from "./api/auth.js";
 import { fetchSubmissionWindowCurrent, fetchRoleSubmissionWindow } from "./api/submission-window.js";
 
+const ROLE_SWITCH_ALLOWED_EMAIL = "likhith.r@webknot.in";
+const ROLE_PREVIEW_STORAGE_KEY = "rt_tracking_role_preview_v1";
+const DEFAULT_ROLE_OPTIONS = ["Admin", "Manager", "Employee"];
+
+function normalizePortalRole(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  const cleaned = raw.replace(/^role[_-]/, "");
+  if (cleaned === "admin" || cleaned === "hr") return "Admin";
+  if (cleaned === "manager") return "Manager";
+  if (cleaned === "employee" || cleaned === "user") return "Employee";
+  if (cleaned.includes("admin")) return "Admin";
+  if (cleaned.includes("manager")) return "Manager";
+  if (cleaned.includes("employee") || cleaned.includes("user")) return "Employee";
+  return "";
+}
+
+function normalizeRoleList(input) {
+  const arr = Array.isArray(input) ? input : [input];
+  const out = [];
+  const seen = new Set();
+  for (const item of arr) {
+    if (item == null) continue;
+
+    if (typeof item === "object") {
+      const role = normalizePortalRole(
+        item?.role || item?.authority || item?.name || item?.value || item?.code || ""
+      );
+      if (role && !seen.has(role)) {
+        seen.add(role);
+        out.push(role);
+      }
+      continue;
+    }
+
+    const text = String(item || "").trim();
+    if (!text) continue;
+
+    // Accept formats like "ADMIN,MANAGER", "ROLE_ADMIN ROLE_MANAGER".
+    const parts = text.split(/[\s,|;]+/).filter(Boolean);
+    for (const part of (parts.length ? parts : [text])) {
+      const role = normalizePortalRole(part);
+      if (!role || seen.has(role)) continue;
+      seen.add(role);
+      out.push(role);
+    }
+  }
+  return out;
+}
+
+function inferAvailableRoles(source) {
+  const obj = source && typeof source === "object" ? source : {};
+  const claims = obj?.claims && typeof obj.claims === "object" ? obj.claims : {};
+  const byPayload = normalizeRoleList([
+    ...(Array.isArray(obj?.availableRoles) ? obj.availableRoles : []),
+    ...(Array.isArray(obj?.roles) ? obj.roles : []),
+    ...(Array.isArray(obj?.authorities) ? obj.authorities : []),
+    ...(Array.isArray(obj?.grantedAuthorities) ? obj.grantedAuthorities : []),
+    ...(Array.isArray(claims?.roles) ? claims.roles : []),
+    ...(Array.isArray(claims?.authorities) ? claims.authorities : []),
+    ...(Array.isArray(claims?.grantedAuthorities) ? claims.grantedAuthorities : []),
+    obj?.activeRole,
+    obj?.currentRole,
+    obj?.selectedRole,
+    obj?.role,
+    obj?.empRole,
+    obj?.userRole,
+    obj?.roleName,
+    obj?.roleType,
+    claims?.activeRole,
+    claims?.role,
+  ]);
+  return byPayload;
+}
+
+function getAuthEmail(auth) {
+  const obj = auth && typeof auth === "object" ? auth : {};
+  const claims = obj?.claims && typeof obj.claims === "object" ? obj.claims : {};
+  const candidates = [
+    obj?.email,
+    obj?.userEmail,
+    obj?.mail,
+    claims?.email,
+    claims?.upn,
+    claims?.preferred_username,
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate ?? "").trim().toLowerCase();
+    if (text) return text;
+  }
+  return "";
+}
+
 /** Shared loading fallback for Suspense boundaries */
 function PortalLoader() {
   return (
@@ -29,6 +122,48 @@ function PortalLoader() {
         <div className="rt-kicker">Loading</div>
         <div className="mt-2 rt-title">Loading Portal</div>
         <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">Please wait…</div>
+      </div>
+    </div>
+  );
+}
+
+function RolePreviewSwitcher({
+  visible,
+  currentRole,
+  options,
+  busy,
+  error,
+  previewMode,
+  onSelect,
+  onClear,
+}) {
+  if (!visible) return null;
+  return (
+    <div className="fixed right-4 bottom-4 z-[80]">
+      <div className="rt-panel p-3 sm:p-4 shadow-xl border-[rgb(var(--primary))]/20">
+        <div className="rt-kicker">Role Preview</div>
+        <div className="text-xs text-[rgb(var(--muted))] mt-1 mb-2">Local view-only switch for your account</div>
+        <div className="flex items-center gap-2">
+          <select
+            className="rt-input py-2 px-3 text-sm min-w-[160px]"
+            value={normalizePortalRole(currentRole) || ""}
+            disabled={busy}
+            onChange={(e) => onSelect?.(e.target.value)}
+          >
+            {(Array.isArray(options) && options.length ? options : ["Admin", "Manager", "Employee"]).map((role) => (
+              <option key={role} value={role}>{role}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={onClear}
+            disabled={busy || !previewMode}
+            className="rt-btn-ghost rt-btn-sm"
+          >
+            Clear
+          </button>
+        </div>
+        {error ? <div className="text-[11px] text-red-600 dark:text-red-400 mt-2">{error}</div> : null}
       </div>
     </div>
   );
@@ -81,16 +216,25 @@ function resolveRoleFromCandidates(candidates) {
 function resolvePortalRole(auth) {
   const obj = auth && typeof auth === "object" ? auth : {};
   const claims = obj?.claims && typeof obj.claims === "object" ? obj.claims : {};
+
+  const explicit = normalizePortalRole(
+    obj?.activeRole ||
+    obj?.currentRole ||
+    obj?.selectedRole ||
+    obj?.role ||
+    obj?.empRole ||
+    obj?.userRole ||
+    obj?.roleName ||
+    obj?.roleType ||
+    claims?.activeRole ||
+    claims?.role
+  );
+  if (explicit) return explicit;
+
   return resolveRoleFromCandidates([
-    obj?.role,
-    obj?.roleName,
-    obj?.roleType,
-    obj?.empRole,
-    obj?.userRole,
     obj?.roles,
     obj?.authorities,
     obj?.grantedAuthorities,
-    claims?.role,
     claims?.roles,
     claims?.authorities,
     claims?.grantedAuthorities,
@@ -102,6 +246,14 @@ export default function App() {
   const [auth, setAuthState] = useState(() => getAuth());
   const [authChecking, setAuthChecking] = useState(() => !getAuth());
   const [hasReportees, setHasReportees] = useState(null);
+  const [roleSwitchBusy, setRoleSwitchBusy] = useState(false);
+  const [roleSwitchError, setRoleSwitchError] = useState("");
+  const [roleSwitchAllowed, setRoleSwitchAllowed] = useState(false);
+  const [roleSwitchOptions, setRoleSwitchOptions] = useState(DEFAULT_ROLE_OPTIONS);
+  const [rolePreview, setRolePreview] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return normalizePortalRole(window.localStorage.getItem(ROLE_PREVIEW_STORAGE_KEY) || "");
+  });
   const [windowData, setWindowData] = useState(null);
   const [windowLoading, setWindowLoading] = useState(false);
   const [windowError, setWindowError] = useState("");
@@ -155,7 +307,52 @@ export default function App() {
     return "Admin";
   }, [hasReportees, roleLabel]);
 
+  const authEmail = useMemo(() => getAuthEmail(auth), [auth]);
+
+  useEffect(() => {
+    if (!authEmail) {
+      setRoleSwitchAllowed(false);
+      return;
+    }
+    setRoleSwitchAllowed(authEmail === ROLE_SWITCH_ALLOWED_EMAIL);
+  }, [authEmail]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!roleSwitchAllowed) {
+      setRolePreview("");
+      window.localStorage.removeItem(ROLE_PREVIEW_STORAGE_KEY);
+      return;
+    }
+    const stored = normalizePortalRole(window.localStorage.getItem(ROLE_PREVIEW_STORAGE_KEY) || "");
+    setRolePreview(stored);
+  }, [roleSwitchAllowed]);
+
+  useEffect(() => {
+    if (!roleSwitchAllowed) {
+      setRoleSwitchOptions(DEFAULT_ROLE_OPTIONS);
+      return;
+    }
+
+    const inferred = inferAvailableRoles(auth);
+    const nextOptions = inferred.length ? inferred : DEFAULT_ROLE_OPTIONS;
+    setRoleSwitchOptions(nextOptions);
+    setRolePreview((prev) => {
+      if (!prev) return prev;
+      if (nextOptions.includes(prev)) return prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(ROLE_PREVIEW_STORAGE_KEY);
+      }
+      return "";
+    });
+  }, [auth, roleSwitchAllowed]);
+
   const roleProbeLoading = Boolean(auth) && !roleLabel && hasReportees === null;
+
+  const activePortalRole = useMemo(() => {
+    if (roleSwitchAllowed && rolePreview) return rolePreview;
+    return effectivePortalRole;
+  }, [effectivePortalRole, rolePreview, roleSwitchAllowed]);
 
   useEffect(() => {
     let alive = true;
@@ -220,7 +417,7 @@ export default function App() {
       setWindowLoading(false);
       return;
     }
-    if (effectivePortalRole !== "Employee" && effectivePortalRole !== "Manager") return;
+    if (activePortalRole !== "Employee" && activePortalRole !== "Manager") return;
 
     let alive = true;
     let timer = null;
@@ -238,12 +435,12 @@ export default function App() {
         /* Try role-specific window first, fall back to global */
         let windowResult;
         try {
-          windowResult = await fetchRoleSubmissionWindow(effectivePortalRole, { signal: controller.signal });
+          windowResult = await fetchRoleSubmissionWindow(activePortalRole, { signal: controller.signal });
         } catch {
           windowResult = await fetchSubmissionWindowCurrent({ signal: controller.signal });
         }
         if (!alive) return;
-        setWindowData(withWindowSource(windowResult, effectivePortalRole.toLowerCase()));
+        setWindowData(withWindowSource(windowResult, activePortalRole.toLowerCase()));
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!alive) return;
@@ -278,7 +475,36 @@ export default function App() {
       if (timer) window.clearTimeout(timer);
       if (controller) controller.abort();
     };
-  }, [auth, effectivePortalRole, windowRefreshNonce]);
+  }, [activePortalRole, auth, windowRefreshNonce]);
+
+  const handleRolePreviewSelect = useCallback(async (value) => {
+    const normalized = normalizePortalRole(value);
+    if (!normalized || !roleSwitchAllowed || roleSwitchBusy) return;
+    setRoleSwitchBusy(true);
+    setRoleSwitchError("");
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(ROLE_PREVIEW_STORAGE_KEY, normalized);
+      }
+      setRolePreview(normalized);
+      setWindowRefreshNonce((n) => n + 1);
+      setAuthState(getAuth());
+    } catch (err) {
+      setRoleSwitchError(err?.message || "Role preview failed.");
+    } finally {
+      setRoleSwitchBusy(false);
+    }
+  }, [roleSwitchAllowed, roleSwitchBusy]);
+
+  const clearRolePreview = useCallback(() => {
+    if (!roleSwitchAllowed) return;
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(ROLE_PREVIEW_STORAGE_KEY);
+    }
+    setRolePreview("");
+    setRoleSwitchError("");
+    setWindowRefreshNonce((n) => n + 1);
+  }, [roleSwitchAllowed]);
 
   const logout = useCallback(() => {
     markManualLogout();
@@ -311,8 +537,22 @@ export default function App() {
     );
   }
 
-  if (roleLabel === "Admin" || effectivePortalRole === "Admin") {
-    return <Suspense fallback={<PortalLoader />}><AdminControlCenter onLogout={logout} auth={auth} /></Suspense>;
+  if (activePortalRole === "Admin") {
+    return (
+      <>
+        <Suspense fallback={<PortalLoader />}><AdminControlCenter onLogout={logout} auth={auth} /></Suspense>
+        <RolePreviewSwitcher
+          visible={roleSwitchAllowed}
+          currentRole={activePortalRole}
+          options={roleSwitchOptions}
+          busy={roleSwitchBusy}
+          error={roleSwitchError}
+          previewMode={Boolean(rolePreview)}
+          onSelect={handleRolePreviewSelect}
+          onClear={clearRolePreview}
+        />
+      </>
+    );
   }
 
   if (roleProbeLoading) {
@@ -354,19 +594,59 @@ export default function App() {
 
   if (!windowData.isOpen) {
     return (
-      <Suspense fallback={<PortalLoader />}>
-        <SubmissionWindowClosed
-          portalWindow={windowData}
-          onRetry={() => setWindowRefreshNonce((n) => n + 1)}
-          onLogout={logout}
+      <>
+        <Suspense fallback={<PortalLoader />}>
+          <SubmissionWindowClosed
+            portalWindow={windowData}
+            onRetry={() => setWindowRefreshNonce((n) => n + 1)}
+            onLogout={logout}
+          />
+        </Suspense>
+        <RolePreviewSwitcher
+          visible={roleSwitchAllowed}
+          currentRole={activePortalRole}
+          options={roleSwitchOptions}
+          busy={roleSwitchBusy}
+          error={roleSwitchError}
+          previewMode={Boolean(rolePreview)}
+          onSelect={handleRolePreviewSelect}
+          onClear={clearRolePreview}
         />
-      </Suspense>
+      </>
     );
   }
 
-  if (effectivePortalRole === "Manager") {
-    return <Suspense fallback={<PortalLoader />}><ManagerPortal onLogout={logout} auth={auth} /></Suspense>;
+  if (activePortalRole === "Manager") {
+    return (
+      <>
+        <Suspense fallback={<PortalLoader />}><ManagerPortal onLogout={logout} auth={auth} /></Suspense>
+        <RolePreviewSwitcher
+          visible={roleSwitchAllowed}
+          currentRole={activePortalRole}
+          options={roleSwitchOptions}
+          busy={roleSwitchBusy}
+          error={roleSwitchError}
+          previewMode={Boolean(rolePreview)}
+          onSelect={handleRolePreviewSelect}
+          onClear={clearRolePreview}
+        />
+      </>
+    );
   }
 
-  return <Suspense fallback={<PortalLoader />}><EmployeePortal onLogout={logout} auth={auth} /></Suspense>;
+  return (
+    <>
+      <Suspense fallback={<PortalLoader />}><EmployeePortal onLogout={logout} auth={auth} /></Suspense>
+      <RolePreviewSwitcher
+        visible={roleSwitchAllowed}
+        currentRole={activePortalRole}
+        options={roleSwitchOptions}
+        busy={roleSwitchBusy}
+        error={roleSwitchError}
+        previewMode={Boolean(rolePreview)}
+        onSelect={handleRolePreviewSelect}
+        onClear={clearRolePreview}
+      />
+    </>
+  );
 }

@@ -20,9 +20,22 @@ export async function readError(res) {
   const parsed = safeJsonParse(text, ErrorEnvelopeSchema, null);
   const message = toOptionalString(parsed?.message);
   const details = toOptionalString(parsed?.details);
+  const genericMessageValues = new Set([
+    "no message available",
+    "no message",
+    "n/a",
+    "unknown error",
+    "error",
+  ]);
+  const messageIsGeneric = genericMessageValues.has(message.toLowerCase());
+
   if (message && details) return `${message}: ${details}`;
   const fallback = toOptionalString(parsed?.error);
-  return details || message || fallback || text || `Request failed: ${res.status} ${res.statusText}`;
+  const best = details || message || fallback || text;
+  if (!best || messageIsGeneric) {
+    return `Request failed: ${res.status} ${res.statusText}`;
+  }
+  return best;
 }
 
 export async function toHttpError(res) {

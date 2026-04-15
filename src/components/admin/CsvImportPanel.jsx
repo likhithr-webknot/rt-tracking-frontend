@@ -1,11 +1,10 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   Upload,
   FileSpreadsheet,
   CheckCircle2,
   AlertTriangle,
   X,
-  ChevronDown,
   Loader2,
   FileUp,
   Database,
@@ -18,9 +17,9 @@ import {
   BookOpen,
 } from "lucide-react";
 import { importCsvSingle, importCsvBulk, CSV_ENTITY_MAP, CSV_BULK_FIELD_MAP } from "../../api/csv-import.js";
+import ModalOverlay from "../shared/ModalOverlay.jsx";
 
 /* ───── entity config ───── */
-              <FileSpreadsheet size={28} className="mx-auto text-[rgb(var(--muted))] mb-2" />
 const ENTITY_OPTIONS = [
   { key: "employees", label: "Employees", icon: Users, hint: "employeeId, employeeName, email, empRole, band, stream", color: "text-blue-500" },
   { key: "bands", label: "Bands", icon: Layers, hint: "code", color: "text-purple-500" },
@@ -41,6 +40,13 @@ const BULK_FIELDS = [
   { field: "designationLookups", label: "Designation Lookups" },
 ];
 
+const BULK_LABEL_BY_FIELD = Object.fromEntries(BULK_FIELDS.map((item) => [item.field, item.label]));
+
+function formatFileSize(file) {
+  if (!(file instanceof File)) return "0 KB";
+  return `${(file.size / 1024).toFixed(1)} KB`;
+}
+
 /* ───── component ───── */
 
 export default function CsvImportPanel({ onImportComplete, showToast }) {
@@ -51,19 +57,28 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null); // { type: "success" | "error", message: string }
   const [history, setHistory] = useState([]); // [{ ts, entity, status, message }]
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewPayload, setReviewPayload] = useState(null);
   const singleInputRef = useRef(null);
   const bulkInputRefs = useRef({});
+  const reviewInputRefs = useRef({});
 
   const clearResult = useCallback(() => setResult(null), []);
+  const activeEntityOption = ENTITY_OPTIONS.find((e) => e.key === selectedEntity) || ENTITY_OPTIONS[0];
+  const bulkFileCount = Object.values(bulkFiles).filter((f) => f instanceof File).length;
+  const totalSelectedFiles = mode === "single" ? (singleFile ? 1 : 0) : bulkFileCount;
+
+  const reviewRows = useMemo(() => reviewPayload?.rows || [], [reviewPayload]);
+  const canConfirmReview = reviewRows.some((row) => row.file instanceof File);
 
   /* ── single import ── */
-  async function handleSingleImport() {
-    if (!singleFile || loading) return;
+  async function handleSingleImport(fileToImport = singleFile, entityToImport = selectedEntity) {
+    if (!fileToImport || loading) return;
     setLoading(true);
     setResult(null);
-    const entity = selectedEntity;
+    const entity = entityToImport;
     try {
-      const res = await importCsvSingle(entity, singleFile);
+      const res = await importCsvSingle(entity, fileToImport);
       const msg = res?.message || `Successfully imported ${entity}.`;
       setResult({ type: "success", message: msg });
       setHistory((h) => [{ ts: Date.now(), entity, status: "success", message: msg }, ...h].slice(0, 20));
@@ -82,8 +97,8 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
   }
 
   /* ── bulk import ── */
-  async function handleBulkImport() {
-    const entries = Object.entries(bulkFiles).filter(([, f]) => f instanceof File);
+  async function handleBulkImport(files = bulkFiles) {
+    const entries = Object.entries(files).filter(([, f]) => f instanceof File);
     if (!entries.length || loading) return;
     setLoading(true);
     setResult(null);
@@ -107,6 +122,110 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
     }
   }
 
+  function openReviewDialog() {
+    if (loading) return;
+
+    if (mode === "single") {
+      if (!(singleFile instanceof File)) return;
+      setReviewPayload({
+        mode: "single",
+        entity: selectedEntity,
+        rows: [{
+          id: "single",
+          field: selectedEntity,
+          label: activeEntityOption.label,
+          hint: activeEntityOption.hint,
+          file: singleFile,
+        }],
+      });
+      setReviewOpen(true);
+      return;
+    }
+
+    const rows = Object.entries(bulkFiles)
+      .filter(([, f]) => f instanceof File)
+      .map(([field, file]) => ({
+        id: field,
+        field,
+        label: BULK_LABEL_BY_FIELD[field] || field,
+        hint: `mapped field: ${field}`,
+        file,
+      }));
+
+    if (!rows.length) return;
+
+    setReviewPayload({ mode: "bulk", rows });
+    setReviewOpen(true);
+  }
+
+  function closeReviewDialog() {
+    setReviewOpen(false);
+    setReviewPayload(null);
+    reviewInputRefs.current = {};
+  }
+
+  function updateReviewRowFile(rowId, file) {
+    if (!(file instanceof File)) return;
+
+    setReviewPayload((prev) => {
+      if (!prev) return prev;
+      const rows = prev.rows.map((row) => (row.id === rowId ? { ...row, file } : row));
+      return { ...prev, rows };
+    });
+
+    if (rowId === "single") {
+      setSingleFile(file);
+      if (singleInputRef.current) {
+        singleInputRef.current.value = "";
+      }
+      return;
+    }
+
+    setBulkFiles((prev) => ({ ...prev, [rowId]: file }));
+    if (bulkInputRefs.current[rowId]) {
+      bulkInputRefs.current[rowId].value = "";
+    }
+  }
+
+  function removeReviewRow(rowId) {
+    setReviewPayload((prev) => {
+      if (!prev) return prev;
+      return { ...prev, rows: prev.rows.filter((row) => row.id !== rowId) };
+    });
+
+    if (rowId === "single") {
+      setSingleFile(null);
+      if (singleInputRef.current) {
+        singleInputRef.current.value = "";
+      }
+      return;
+    }
+
+    removeBulkFile(rowId);
+  }
+
+  async function confirmReviewedImport() {
+    if (!reviewPayload || loading) return;
+
+    if (reviewPayload.mode === "single") {
+      const [row] = reviewPayload.rows;
+      if (!(row?.file instanceof File)) return;
+      await handleSingleImport(row.file, reviewPayload.entity);
+      closeReviewDialog();
+      return;
+    }
+
+    const payload = Object.fromEntries(
+      reviewPayload.rows
+        .filter((row) => row.file instanceof File)
+        .map((row) => [row.field, row.file]),
+    );
+
+    if (!Object.keys(payload).length) return;
+    await handleBulkImport(payload);
+    closeReviewDialog();
+  }
+
   function removeBulkFile(field) {
     setBulkFiles((prev) => {
       const next = { ...prev };
@@ -116,30 +235,51 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
     if (bulkInputRefs.current[field]) bulkInputRefs.current[field].value = "";
   }
 
-  const bulkFileCount = Object.values(bulkFiles).filter((f) => f instanceof File).length;
-  const activeEntityOption = ENTITY_OPTIONS.find((e) => e.key === selectedEntity) || ENTITY_OPTIONS[0];
-
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
+
+      <div className="rt-panel p-5 sm:p-6 overflow-hidden relative">
+        <div className="absolute -top-20 -right-16 w-56 h-56 rounded-full bg-cyan-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-20 -left-12 w-52 h-52 rounded-full bg-indigo-500/10 blur-3xl pointer-events-none" />
+        <div className="relative grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="sm:col-span-2">
+            <p className="rt-kicker mb-1">Import Control</p>
+            <h2 className="rt-title">CSV Import</h2>
+            <p className="text-sm text-[rgb(var(--muted))] mt-1">
+              Review every dataset before writing into the database.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3">
+              <p className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Mode</p>
+              <p className="text-sm font-semibold text-[rgb(var(--text))] mt-1">{mode === "single" ? "Single" : "Bulk"}</p>
+            </div>
+            <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3">
+              <p className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Files Ready</p>
+              <p className="text-sm font-semibold text-[rgb(var(--text))] mt-1">{totalSelectedFiles}</p>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* ── header ── */}
       <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
-          <h2 className="rt-title">CSV Import</h2>
+          <h3 className="rt-section-title">Choose Import Strategy</h3>
           <p className="text-sm text-[rgb(var(--muted))] mt-1">
-            Upload CSV files to populate or update system data.
+            Import one dataset at a time or push multiple files in one reviewed batch.
           </p>
         </div>
       </header>
 
       {/* ── mode toggle ── */}
-      <div className="flex gap-2">
+      <div className="inline-flex gap-2 p-1 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))]">
         <button
           onClick={() => { setMode("single"); setResult(null); }}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
             mode === "single"
-              ? "bg-[rgb(var(--primary))] text-white"
-              : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+              ? "bg-[rgb(var(--primary))] text-white shadow-md"
+              : "bg-transparent text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
           }`}
         >
           <FileUp size={14} className="inline mr-1.5 -mt-0.5" />
@@ -147,10 +287,10 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
         </button>
         <button
           onClick={() => { setMode("bulk"); setResult(null); }}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
             mode === "bulk"
-              ? "bg-[rgb(var(--primary))] text-white"
-              : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
+              ? "bg-[rgb(var(--primary))] text-white shadow-md"
+              : "bg-transparent text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
           }`}
         >
           <Database size={14} className="inline mr-1.5 -mt-0.5" />
@@ -277,11 +417,11 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
           {/* upload button */}
           <div className="flex justify-end">
             <button
-              onClick={handleSingleImport}
+              onClick={openReviewDialog}
               disabled={!singleFile || loading}
               className="rt-btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? <><Loader2 size={14} className="animate-spin" /> Importing…</> : <><FileSpreadsheet size={14} /> Import {activeEntityOption.label}</>}
+              {loading ? <><Loader2 size={14} className="animate-spin" /> Importing…</> : <><FileSpreadsheet size={14} /> Review And Import {activeEntityOption.label}</>}
             </button>
           </div>
         </div>
@@ -356,11 +496,11 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
               {bulkFileCount} file{bulkFileCount !== 1 ? "s" : ""} selected
             </p>
             <button
-              onClick={handleBulkImport}
+              onClick={openReviewDialog}
               disabled={bulkFileCount === 0 || loading}
               className="rt-btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? <><Loader2 size={14} className="animate-spin" /> Importing…</> : <><Upload size={14} /> Import All</>}
+              {loading ? <><Loader2 size={14} className="animate-spin" /> Importing…</> : <><Upload size={14} /> Review And Import All</>}
             </button>
           </div>
         </div>
@@ -397,6 +537,93 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
           </div>
         </div>
       ) : null}
+
+      <ModalOverlay
+        open={reviewOpen}
+        onClose={loading ? undefined : closeReviewDialog}
+        maxWidth="max-w-4xl"
+        header={(
+          <div>
+            <p className="rt-kicker">Final Review</p>
+            <h3 className="rt-section-title mt-1">Confirm Data Before Import</h3>
+            <p className="text-xs text-[rgb(var(--muted))] mt-1">
+              Validate the mapped datasets and update any file before saving to the database.
+            </p>
+          </div>
+        )}
+      >
+        <div className="space-y-3">
+          {reviewRows.map((row) => (
+            <div
+              key={row.id}
+              className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-[rgb(var(--text))]">{row.label}</p>
+                  <p className="text-[11px] text-[rgb(var(--muted))] mt-0.5">{row.hint}</p>
+                  {row.file ? (
+                    <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-2 break-all">
+                      {row.file.name} ({formatFileSize(row.file)})
+                    </p>
+                  ) : (
+                    <p className="text-xs text-red-600 dark:text-red-400 mt-2">No file attached</p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="rt-btn-ghost rt-btn-sm cursor-pointer">
+                    <FileSpreadsheet size={14} />
+                    Replace
+                    <input
+                      ref={(el) => { reviewInputRefs.current[row.id] = el; }}
+                      type="file"
+                      accept=".csv"
+                      className="sr-only"
+                      onChange={(e) => {
+                        const nextFile = e.target.files?.[0];
+                        if (nextFile) updateReviewRowFile(row.id, nextFile);
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => removeReviewRow(row.id)}
+                    className="rt-btn-ghost rt-btn-sm text-red-600 dark:text-red-400"
+                  >
+                    <X size={14} />
+                    Remove
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 flex items-center justify-between gap-3">
+          <p className="text-xs text-[rgb(var(--muted))]">
+            {reviewRows.filter((row) => row.file instanceof File).length} file{reviewRows.filter((row) => row.file instanceof File).length !== 1 ? "s" : ""} ready for import
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={closeReviewDialog}
+              disabled={loading}
+              className="rt-btn-ghost rt-btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmReviewedImport}
+              disabled={!canConfirmReview || loading}
+              className="rt-btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? <><Loader2 size={14} className="animate-spin" /> Importing…</> : <><Database size={14} /> Confirm Import</>}
+            </button>
+          </div>
+        </div>
+      </ModalOverlay>
     </div>
   );
 }

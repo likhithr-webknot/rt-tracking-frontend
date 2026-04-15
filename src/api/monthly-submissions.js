@@ -553,20 +553,47 @@ export async function submitMonthlySubmission(payload, { signal } = {}) {
 
 export async function fetchMyMonthlySubmission({ month, signal } = {}) {
   const auth = getAuthHeader();
-  const qs = new URLSearchParams();
-  if (month) qs.set("month", String(month));
-  const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const res = await fetch(buildApiUrl(`/monthly-submissions/me${suffix}`), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw await toHttpError(res);
-  const contentType = res.headers.get("content-type") || "";
-  if (!contentType.includes("application/json")) return res.text().catch(() => "");
+  const monthKey = normalizeYearMonth(month) || String(month ?? "").trim();
+  const endpoints = [
+    "/api/v1/monthly-submissions/me",
+    "/monthly-submissions/me",
+  ];
+  const queryVariants = [];
+  if (monthKey) {
+    queryVariants.push(new URLSearchParams({ month: monthKey }));
+    queryVariants.push(new URLSearchParams({ monthKey: monthKey }));
+    queryVariants.push(new URLSearchParams({ cycleKey: monthKey }));
+  } else {
+    queryVariants.push(new URLSearchParams());
+  }
 
-  const raw = await res.json().catch(() => ({}));
+  let raw = null;
+  let found = false;
+  for (const endpoint of endpoints) {
+    for (const qs of queryVariants) {
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      const res = await fetch(buildApiUrl(`${endpoint}${suffix}`), {
+        signal,
+        credentials: "include",
+        headers: auth ? { Authorization: auth } : undefined,
+      });
+      if (res.status === 404 || res.status === 405) {
+        continue;
+      }
+      if (!res.ok) throw await toHttpError(res);
+      const contentType = res.headers.get("content-type") || "";
+      raw = contentType.includes("application/json")
+        ? await res.json().catch(() => ({}))
+        : await res.text().catch(() => "");
+      found = true;
+      break;
+    }
+    if (found) break;
+  }
+
+  if (!found) return null;
+  if (raw == null || typeof raw !== "object") return raw;
+
   // Backend returns GenericResponseDTO, where `data` is usually a list.
   const container = raw?.data ?? raw;
   if (Array.isArray(container)) {
@@ -608,60 +635,285 @@ export async function fetchMyMonthlySubmission({ month, signal } = {}) {
 
 export async function fetchMyMonthlySubmissionHistory({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/monthly-submissions/me/history"), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => []);
+  const endpoints = [
+    "/api/v1/monthly-submissions/me/history",
+    "/monthly-submissions/me/history",
+  ];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) return res.json().catch(() => []);
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Monthly submission history endpoint not found.");
 }
 
 export async function fetchManagerTeamSubmissions({ month, status, limit = null, cursor = null, signal } = {}) {
   const auth = getAuthHeader();
-  const qs = new URLSearchParams();
-  if (month) qs.set("month", String(month));
-  if (status) qs.set("status", String(status));
-  if (limit != null) qs.set("limit", String(limit));
-  if (cursor) qs.set("cursor", String(cursor));
-  const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const res = await fetch(buildApiUrl(`/monthly-submissions/manager/team${suffix}`), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
+  const monthKey = normalizeYearMonth(month) || String(month ?? "").trim();
+  const endpoints = [
+    "/api/v1/monthly-submissions/manager/team",
+    "/monthly-submissions/manager/team",
+  ];
+  const queryVariants = [];
+  const buildQuery = (monthField) => {
+    const qs = new URLSearchParams();
+    if (monthKey && monthField) qs.set(monthField, monthKey);
+    if (status) qs.set("status", String(status));
+    if (limit != null) qs.set("limit", String(limit));
+    if (cursor) qs.set("cursor", String(cursor));
+    return qs;
+  };
+  if (monthKey) {
+    queryVariants.push(buildQuery("month"));
+    queryVariants.push(buildQuery("monthKey"));
+    queryVariants.push(buildQuery("cycleKey"));
+  } else {
+    queryVariants.push(buildQuery(null));
+  }
+
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    for (const qs of queryVariants) {
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      const res = await fetch(buildApiUrl(`${endpoint}${suffix}`), {
+        signal,
+        credentials: "include",
+        headers: auth ? { Authorization: auth } : undefined,
+      });
+      if (res.ok) return res.json().catch(() => ({}));
+      const err = await toHttpError(res);
+      if (res.status === 404 || res.status === 405) {
+        lastRouteErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastRouteErr || new Error("Manager team submissions endpoint not found.");
 }
 
 export async function fetchAdminAllSubmissions({ month, status, signal } = {}) {
   const auth = getAuthHeader();
+  const monthKey = normalizeYearMonth(month) || String(month ?? "").trim();
+  const buildQuery = (monthField) => {
+    const qs = new URLSearchParams();
+    if (monthKey && monthField) qs.set(monthField, monthKey);
+    if (status) qs.set("status", String(status));
+    return qs;
+  };
+  const queryVariants = monthKey
+    ? [buildQuery("month"), buildQuery("monthKey"), buildQuery("cycleKey")]
+    : [buildQuery(null)];
+
+  const endpoints = [
+    "/api/v1/monthly-submissions/admin/all",
+    "/monthly-submissions/admin/all",
+    "/api/v1/monthly-submissions/admin/list",
+    "/monthly-submissions/admin/list",
+  ];
+
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    for (const qs of queryVariants) {
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      const res = await fetch(buildApiUrl(`${endpoint}${suffix}`), {
+        signal,
+        credentials: "include",
+        headers: auth ? { Authorization: auth } : undefined,
+      });
+      if (res.ok) {
+        const raw = await res.json().catch(() => ([]));
+        const data = raw?.data ?? raw;
+        if (Array.isArray(data)) return data;
+        if (Array.isArray(data?.items)) return data.items;
+        if (Array.isArray(data?.results)) return data.results;
+        if (Array.isArray(data?.content)) return data.content;
+        if (Array.isArray(raw?.items)) return raw.items;
+        if (Array.isArray(raw?.results)) return raw.results;
+        if (Array.isArray(raw?.content)) return raw.content;
+        return [];
+      }
+
+      const err = await toHttpError(res);
+      if (res.status === 404 || res.status === 405) {
+        lastRouteErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastRouteErr || new Error("Monthly submissions endpoint not found.");
+}
+
+function normalizeScoreBreakdown(raw, fallback = {}) {
+  const obj = raw && typeof raw === "object" ? raw : {};
+  const readNumber = (...values) => {
+    for (const value of values) {
+      const num = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+      if (Number.isFinite(num)) return Math.round(num * 10) / 10;
+    }
+    return null;
+  };
+
+  return {
+    managerKpiAverage: readNumber(obj.managerKpiAverage, obj.kpiAverage, obj.kpiAvg, obj.kpiScoreAverage, fallback.managerKpiAverage),
+    managerWebknotValueAverage: readNumber(obj.managerWebknotValueAverage, obj.webknotValueAverage, obj.valueAverage, obj.webknotValueAvg, fallback.managerWebknotValueAverage),
+    weightedScore: readNumber(obj.weightedScore, obj.finalScore, obj.score, obj.combinedScore, fallback.weightedScore),
+    browniePoints: readNumber(obj.browniePoints, obj.brownie, obj.extraPoints, fallback.browniePoints),
+    certificationPoints: readNumber(obj.certificationPoints, obj.certPoints, fallback.certificationPoints),
+    recognitionPoints: readNumber(obj.recognitionPoints, obj.recognitionCount, obj.recognitions, fallback.recognitionPoints),
+    techShowcasePoints: readNumber(obj.techShowcasePoints, obj.techShowcaseBonus, obj.techPoints, fallback.techShowcasePoints),
+    certificationsCount: readNumber(obj.certificationsCount, obj.certCount, fallback.certificationsCount),
+    recognitionsCount: readNumber(obj.recognitionsCount, obj.recognitionCount, fallback.recognitionsCount),
+    techShowcase: String(obj.techShowcase ?? fallback.techShowcase ?? "").trim() || "",
+    raw: obj,
+  };
+}
+
+export async function fetchMonthlySubmissionScoreBreakdown(payload, { signal } = {}) {
+  const auth = getAuthHeader();
+  const preparedPayload = toRequestPayload(payload);
+  const body = JSON.stringify(preparedPayload);
+  const makeHeaders = () => withCsrfHeaders({
+    "Content-Type": "application/json",
+    ...(auth ? { Authorization: auth } : {}),
+  });
+
+  const endpoints = [
+    "/api/v1/monthly-submissions/score-breakdown",
+    "/monthly-submissions/score-breakdown",
+  ];
+
+  for (const endpoint of endpoints) {
+    let res = await fetch(buildApiUrl(endpoint), {
+      method: "POST",
+      signal,
+      credentials: "include",
+      headers: makeHeaders(),
+      body,
+    });
+
+    if (res.status === 403) {
+      await ensureCsrfCookie({
+        signal,
+        headers: auth ? { Authorization: auth } : undefined,
+        forceRefresh: true,
+      }).catch(() => {});
+      res = await fetch(buildApiUrl(endpoint), {
+        method: "POST",
+        signal,
+        credentials: "include",
+        headers: makeHeaders(),
+        body,
+      });
+    }
+
+    if (res.ok) {
+      const raw = await res.json().catch(() => ({}));
+      return normalizeScoreBreakdown(raw, preparedPayload);
+    }
+
+    if (res.status === 404 || res.status === 405) {
+      continue;
+    }
+
+    throw await toHttpError(res);
+  }
+
+  return normalizeScoreBreakdown({}, preparedPayload);
+}
+
+function normalizeAdminOverview(raw, fallback = {}) {
+  const obj = raw && typeof raw === "object" ? raw : {};
+  const readNumber = (...values) => {
+    for (const value of values) {
+      const num = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+      if (Number.isFinite(num)) return Math.round(num);
+    }
+    return null;
+  };
+
+  return {
+    month: String(obj.month ?? fallback.month ?? "").trim() || null,
+    cycleKey: String(obj.cycleKey ?? fallback.cycleKey ?? "").trim() || null,
+    totalSubmissions: readNumber(obj.totalSubmissions, obj.submissionCount, obj.total, fallback.totalSubmissions),
+    pendingManagerReviews: readNumber(obj.pendingManagerReviews, obj.pendingReviews, obj.pending, fallback.pendingManagerReviews),
+    managerReviewedCount: readNumber(obj.managerReviewedCount, obj.managerReviewed, obj.reviewed, fallback.managerReviewedCount),
+    sixMonthReviewMonth: Boolean(obj.sixMonthReviewMonth ?? obj.reviewMonthFlag ?? obj.isSixMonthReviewMonth ?? fallback.sixMonthReviewMonth),
+    reviewMonthLabel: String(obj.reviewMonthLabel ?? obj.reviewMonth ?? obj.sixMonthReviewLabel ?? fallback.reviewMonthLabel ?? "").trim() || null,
+    raw: obj,
+  };
+}
+
+export async function fetchAdminMonthlyOverview({ month, cycleKey, signal } = {}) {
+  const auth = getAuthHeader();
   const qs = new URLSearchParams();
   if (month) qs.set("month", String(month));
-  if (status) qs.set("status", String(status));
+  if (cycleKey) qs.set("cycleKey", String(cycleKey));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const res = await fetch(buildApiUrl(`/monthly-submissions/admin/all${suffix}`), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => []);
+  const endpoints = [
+    `/api/v1/monthly-submissions/admin-overview${suffix}`,
+    `/monthly-submissions/admin-overview${suffix}`,
+  ];
+
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) {
+      const raw = await res.json().catch(() => ({}));
+      return normalizeAdminOverview(raw, { month, cycleKey });
+    }
+    if (res.status === 404 || res.status === 405) {
+      continue;
+    }
+    throw await toHttpError(res);
+  }
+
+  return normalizeAdminOverview({}, { month, cycleKey });
 }
 
 export async function deleteAdminMonthlySubmission(submissionId, { signal } = {}) {
   const safeId = encodeURIComponent(String(submissionId));
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(`/monthly-submissions/admin/${safeId}`), {
-    method: "DELETE",
-    signal,
-    credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json().catch(() => ({}));
-  return res.text().catch(() => "");
+  const endpoints = [
+    `/api/v1/monthly-submissions/admin/${safeId}`,
+    `/monthly-submissions/admin/${safeId}`,
+  ];
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      method: "DELETE",
+      signal,
+      credentials: "include",
+      headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
+    });
+    if (res.ok) {
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) return res.json().catch(() => ({}));
+      return res.text().catch(() => "");
+    }
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastRouteErr || new Error("Admin monthly submission delete endpoint not found.");
 }
 
 /**
@@ -848,6 +1100,9 @@ export async function submitAdminReviewDecision(payload, { signal } = {}) {
     ...(auth ? { Authorization: auth } : {}),
   };
   const endpoints = [
+    "/api/v1/monthly-submissions/admin/review",
+    "/api/v1/monthly-submissions/admin/reviews",
+    "/api/v1/monthly-submissions/admin/decision",
     "/monthly-submissions/admin/review",
     "/monthly-submissions/admin/reviews",
     "/monthly-submissions/admin/decision",
