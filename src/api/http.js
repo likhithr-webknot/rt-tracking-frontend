@@ -38,11 +38,114 @@ export async function readError(res) {
   return best;
 }
 
-export async function toHttpError(res) {
+export async function toHttpError(res, context = {}) {
   const message = await readError(res);
-  const err = new Error(message);
+  const requestLabel = formatRequestLabel(context);
+  const err = new Error(requestLabel ? `${requestLabel}: ${message}` : message);
   err.status = res.status;
+  if (context?.path) err.path = context.path;
+  if (context?.method) err.method = context.method;
   return err;
+}
+
+function formatRequestLabel(context = {}) {
+  const method = String(context.method || "").trim().toUpperCase();
+  const path = String(context.path || context.url || "").trim();
+  if (method && path) return `${method} ${path}`;
+  return path || method;
+}
+
+function normalizeFallbackCandidate(candidate, defaults = {}) {
+  if (typeof candidate === "string") return { ...defaults, path: candidate };
+  const obj = candidate && typeof candidate === "object" ? candidate : {};
+  return { ...defaults, ...obj };
+}
+
+function formatAttempt(attempt) {
+  const label = formatRequestLabel(attempt);
+  const status = attempt.status ? `${attempt.status}` : "network";
+  const message = String(attempt.message || "").trim();
+  return `${label || "request"} -> ${status}${message ? ` (${message})` : ""}`;
+}
+
+export function toTrackedRequestError(message, attempts = [], cause = null) {
+  const cleanAttempts = Array.isArray(attempts) ? attempts.filter(Boolean) : [];
+  const suffix = cleanAttempts.length
+    ? ` Tried: ${cleanAttempts.map(formatAttempt).join("; ")}`
+    : "";
+  const err = new Error(`${message}${suffix}`);
+  err.attempts = cleanAttempts;
+  if (cause) err.cause = cause;
+  const last = cleanAttempts[cleanAttempts.length - 1];
+  if (last?.status) err.status = last.status;
+  return err;
+}
+
+export async function requestWithFallbacks(candidates, options = {}) {
+  const {
+    method = "GET",
+    body,
+    signal,
+    headers,
+    credentials = "include",
+    fallbackStatuses = [400, 403, 404, 405],
+    notFoundMessage = "API endpoint not found.",
+    parseFallback = {},
+  } = options;
+  const attempts = [];
+  const list = Array.isArray(candidates) ? candidates : [candidates];
+
+  for (const rawCandidate of list) {
+    const candidate = normalizeFallbackCandidate(rawCandidate, { method });
+    const requestMethod = String(candidate.method || method || "GET").toUpperCase();
+    const path = String(candidate.path || "").trim();
+    if (!path) continue;
+    const requestHeaders =
+      candidate.headers && typeof candidate.headers === "object"
+        ? candidate.headers
+        : headers;
+    const requestBody =
+      candidate.body !== undefined
+        ? candidate.body
+        : body !== undefined
+          ? body
+          : undefined;
+
+    let res;
+    try {
+      res = await fetch(buildApiUrl(path), {
+        method: requestMethod,
+        signal,
+        credentials,
+        headers: requestHeaders,
+        ...(requestBody !== undefined ? { body: requestBody } : {}),
+      });
+    } catch (err) {
+      if (err?.name === "AbortError") throw err;
+      attempts.push({
+        method: requestMethod,
+        path,
+        message: err?.message || "Network request failed.",
+      });
+      continue;
+    }
+
+    if (res.ok) return parseResponse(res, candidate.parseFallback ?? parseFallback);
+
+    const err = await toHttpError(res, { method: requestMethod, path });
+    attempts.push({
+      method: requestMethod,
+      path,
+      status: res.status,
+      message: err?.message || res.statusText,
+    });
+
+    if (!fallbackStatuses.includes(res.status)) {
+      throw toTrackedRequestError(err.message || "Request failed.", attempts, err);
+    }
+  }
+
+  throw toTrackedRequestError(notFoundMessage, attempts);
 }
 
 export async function parseResponse(res, fallback = null) {
@@ -137,11 +240,9 @@ export async function ensureCsrfCookie({ signal, headers, forceRefresh = false }
   if (!forceRefresh && hasCsrfCookie()) return true;
   const candidates = [
     "/api/v1/profile",
-    "/auth/me",
-    "/portal/employee",
-    "/portal/manager",
-    "/portal/admin",
-    "/submission-window/current",
+    "/api/v1/submission-cycles",
+    "/api/v1/users?page=0&size=1",
+    "/api/v1/departments",
   ];
 
   for (const path of candidates) {

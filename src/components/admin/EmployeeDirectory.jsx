@@ -17,43 +17,10 @@ import ModalOverlay from "../shared/ModalOverlay.jsx";
 import {
   addEmployeeWithManager,
   deleteEmployee,
-  fetchManagers,
-  normalizeManagers,
   promoteEmployee as promoteEmployeeApi,
   updateEmployee,
 } from "../../api/employees.js";
 import { fetchBands, fetchStreams, fetchBandDesignation, normalizeDirectoryPage } from "../../api/band-stream-directory.js";
-
-function computeNextEmployeeId(employees) {
-  let maxEmp = -1;
-  let empWidth = 3;
-  let maxNumeric = -1;
-
-  for (const e of employees) {
-    const id = String(e?.id ?? "").trim();
-    if (!id) continue;
-
-    const empMatch = /^EMP(\d+)$/i.exec(id);
-    if (empMatch) {
-      const num = Number.parseInt(empMatch[1], 10);
-      if (Number.isFinite(num) && num > maxEmp) {
-        maxEmp = num;
-        empWidth = Math.max(empWidth, empMatch[1].length);
-      }
-      continue;
-    }
-
-    const numericMatch = /^\d+$/.exec(id);
-    if (numericMatch) {
-      const num = Number.parseInt(id, 10);
-      if (Number.isFinite(num) && num > maxNumeric) maxNumeric = num;
-    }
-  }
-
-  if (maxEmp >= 0) return `EMP${String(maxEmp + 1).padStart(empWidth, "0")}`;
-  if (maxNumeric >= 0) return String(maxNumeric + 1);
-  return "EMP001";
-}
 
 function buildOptionStats(employees, key, { emptyLabel = "Unassigned" } = {}) {
   const map = new Map(); // value -> { count }
@@ -67,6 +34,22 @@ function buildOptionStats(employees, key, { emptyLabel = "Unassigned" } = {}) {
   return Array.from(map.entries())
     .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
     .map(([value, stats]) => ({ value, count: stats.count }));
+}
+
+function toWebtrakDate(value) {
+  const raw = String(value || "").trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match) return raw;
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+function todayInput() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function toNumberOrNull(value) {
+  const n = Number.parseFloat(String(value ?? "").trim());
+  return Number.isFinite(n) ? n : null;
 }
 
 export default function EmployeeDirectory({
@@ -101,22 +84,28 @@ export default function EmployeeDirectory({
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [addDraft, setAddDraft] = useState({
-    employeeId: "",
-    useNextEmployeeId: false,
     employeeName: "",
     email: "",
     empRole: "Employee",
+    userType: "FULLTIME",
+    workMode: "HYBRID",
+    startDate: todayInput(),
     designation: "",
     allowNoDesignationOverride: false,
     band: "B4",
     stream: "",
-    managerId: "",
+    salaryBase: "600000",
+    salaryVariable: "100000",
+    payoutCycle: "MONTHLY",
+    stipend: "25000",
+    payPerHour: "1000",
+    projectDuration: "3 months",
+    internshipDuration: "6",
+    assetRequired: false,
+    assetDetails: "",
   });
   const [addDesignation, setAddDesignation] = useState(null);
   const [addDesignationLoading, setAddDesignationLoading] = useState(false);
-  const [managers, setManagers] = useState([]);
-  const [managersLoading, setManagersLoading] = useState(false);
-  const [managersError, setManagersError] = useState("");
   const [directoryBands, setDirectoryBands] = useState([]);
   const [directoryStreams, setDirectoryStreams] = useState([]);
 
@@ -193,7 +182,7 @@ export default function EmployeeDirectory({
 
       return matchesText && roleOk && designationOk && bandOk;
     });
-  }, [employees, query, roleFilter, designationFilter, bandFilter]);
+  }, [searchUniverse, query, roleFilter, designationFilter, bandFilter]);
 
   const directoryStats = useMemo(() => {
     const list = Array.isArray(searchUniverse) ? searchUniverse : [];
@@ -218,7 +207,7 @@ export default function EmployeeDirectory({
       totalBands: uniqueBands.size,
       ...roleCounts,
     };
-  }, [employees]);
+  }, [searchUniverse]);
 
   const isSelf = useCallback(
     (emp) => Boolean(currentEmployeeId) && String(emp?.id) === String(currentEmployeeId),
@@ -227,7 +216,6 @@ export default function EmployeeDirectory({
 
   const visibleEmployees = filtered;
 
-  const nextEmployeeId = useMemo(() => computeNextEmployeeId(searchUniverse), [searchUniverse]);
   const roleOptions = useMemo(() => buildOptionStats(searchUniverse, "role"), [searchUniverse]);
   const designationOptions = useMemo(
     () => buildOptionStats(searchUniverse, "designation"),
@@ -260,6 +248,7 @@ export default function EmployeeDirectory({
     const fromDirectory = directoryBands
       .filter((row) => Boolean(row?.active))
       .map((row) => ({
+        id: row?.id ?? null,
         value: String(row?.code || "").trim(),
         label: String(row?.code || "").trim(),
       }))
@@ -271,10 +260,11 @@ export default function EmployeeDirectory({
       .map((emp) => String(emp?.band ?? "").trim())
       .filter(Boolean)
       .map((value) => ({ value, label: value }));
+    const withIds = fromEmployees.map((row) => ({ ...row, id: null }));
     return Array.from(
       new Map([
-        ...defaults.map((value) => [value, { value, label: value }]),
-        ...fromEmployees.map((row) => [row.value, row]),
+        ...defaults.map((value) => [value, { id: null, value, label: value }]),
+        ...withIds.map((row) => [row.value, row]),
       ]).values()
     ).sort((a, b) => a.value.localeCompare(b.value, undefined, { numeric: true }));
   }, [directoryBands, searchUniverse]);
@@ -310,7 +300,6 @@ export default function EmployeeDirectory({
     () => streamSelectOptions[0]?.value || "",
     [streamSelectOptions]
   );
-  const addRoleIsAdmin = String(addDraft.empRole || "").trim().toLowerCase() === "admin";
   const editRoleIsAdmin = String(draft.role || "").trim().toLowerCase() === "admin";
   const managerCount = useMemo(
     () => {
@@ -395,7 +384,7 @@ export default function EmployeeDirectory({
     const controller = new AbortController();
     const band = String(addDraft.band || "").trim();
     const stream = String(addDraft.stream || "").trim();
-    if (addRoleIsAdmin || !band || !stream) {
+    if (!band || !stream) {
       setAddDesignation(null);
       setAddDesignationLoading(false);
       return () => controller.abort();
@@ -410,7 +399,7 @@ export default function EmployeeDirectory({
             setAddDraft((d) => ({ ...d, designation: res.designation }));
           }
         }
-      } catch (err) {
+      } catch {
         if (controller.signal.aborted) return;
         setAddDesignation(null);
       } finally {
@@ -418,7 +407,7 @@ export default function EmployeeDirectory({
       }
     })();
     return () => controller.abort();
-  }, [addDraft.band, addDraft.stream, addRoleIsAdmin]);
+  }, [addDraft.band, addDraft.stream]);
 
   // Auto-fetch designation for edit modal based on selected band/stream
   useEffect(() => {
@@ -445,7 +434,7 @@ export default function EmployeeDirectory({
             setDraft((d) => ({ ...d, designation: res.designation }));
           }
         }
-      } catch (err) {
+      } catch {
         if (controller.signal.aborted) return;
         setEditDesignation(null);
       } finally {
@@ -634,18 +623,26 @@ export default function EmployeeDirectory({
 
   function openAdd() {
     setAddDraft({
-      employeeId: "",
-      useNextEmployeeId: false,
       employeeName: "",
       email: "",
       empRole: "Employee",
+      userType: "FULLTIME",
+      workMode: "HYBRID",
+      startDate: todayInput(),
       designation: "",
       allowNoDesignationOverride: false,
       band: defaultAddBand,
       stream: defaultAddStream,
-      managerId: "",
+      salaryBase: "600000",
+      salaryVariable: "100000",
+      payoutCycle: "MONTHLY",
+      stipend: "25000",
+      payPerHour: "1000",
+      projectDuration: "3 months",
+      internshipDuration: "6",
+      assetRequired: false,
+      assetDetails: "",
     });
-    setManagersError("");
     setShowAddModal(true);
   }
 
@@ -653,78 +650,81 @@ export default function EmployeeDirectory({
     setShowAddModal(false);
   }
 
-  useEffect(() => {
-    if (!showAddModal) return;
-    let mounted = true;
-    const controller = new AbortController();
-    (async () => {
-      setManagersError("");
-      setManagersLoading(true);
-      try {
-        const data = await fetchManagers({ signal: controller.signal });
-        const list = normalizeManagers(data)
-          .filter((m) => String(m?.role || "").trim().toLowerCase() === "manager")
-          .filter((m) => String(m?.id || "").trim())
-          .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
-        if (!mounted) return;
-        setManagers(list);
-      } catch (err) {
-        if (err?.name === "AbortError") return;
-        if (!mounted) return;
-        setManagersError(err?.message || "Failed to load managers.");
-        setManagers([]);
-      } finally {
-        if (mounted) setManagersLoading(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-      controller.abort();
-    };
-  }, [showAddModal]);
-
   async function submitAdd(e) {
     e.preventDefault();
 
-    const isAdminRole = String(addDraft.empRole || "").trim().toLowerCase() === "admin";
-    const employeeIdValue = (addDraft.useNextEmployeeId ? nextEmployeeId : addDraft.employeeId).trim();
     const designationValue = addDraft.designation.trim();
     const missingDesignation = !designationValue;
     if (missingDesignation && !addDraft.allowNoDesignationOverride) {
       showToast({ title: "Designation required", message: "Select a designation or tick override to proceed." });
       return;
     }
+    const selectedBand = bandSelectOptions.find((band) => band.value === addDraft.band) || null;
+    const bandId = Number.parseInt(String(selectedBand?.id ?? ""), 10);
+    if (!Number.isFinite(bandId) || bandId <= 0) {
+      showToast({ title: "Band required", message: "Select a backend band from Band List before adding an employee." });
+      return;
+    }
+
+    const userType = String(addDraft.userType || "FULLTIME").trim().toUpperCase();
+    const salaryDetails = {
+      description: designationValue || addDraft.empRole,
+    };
+    if (userType === "FULLTIME") {
+      salaryDetails.base = toNumberOrNull(addDraft.salaryBase);
+      salaryDetails.variable = toNumberOrNull(addDraft.salaryVariable);
+      salaryDetails.payoutCycle = String(addDraft.payoutCycle || "MONTHLY").trim();
+      if (!salaryDetails.base || !salaryDetails.variable || !salaryDetails.payoutCycle) {
+        showToast({ title: "Salary required", message: "Full-time employees need base, variable, and payout cycle." });
+        return;
+      }
+    } else if (userType === "INTERN") {
+      salaryDetails.stipend = toNumberOrNull(addDraft.stipend);
+      if (salaryDetails.stipend == null) {
+        showToast({ title: "Stipend required", message: "Interns need a stipend value." });
+        return;
+      }
+    } else if (userType === "FREELANCER") {
+      salaryDetails.payPerHour = toNumberOrNull(addDraft.payPerHour);
+      salaryDetails.projectDuration = String(addDraft.projectDuration || "").trim();
+      if (!salaryDetails.payPerHour) {
+        showToast({ title: "Hourly rate required", message: "Freelancers need pay per hour." });
+        return;
+      }
+    }
+
     const payload = {
-      ...(employeeIdValue ? { employeeId: employeeIdValue } : {}),
-      employeeName: addDraft.employeeName.trim(),
+      name: addDraft.employeeName.trim(),
       email: addDraft.email.trim(),
-      empRole: addDraft.empRole,
-      band: isAdminRole ? null : addDraft.band.trim() || null,
-      stream: isAdminRole ? null : addDraft.stream.trim() || null,
-      designation: designationValue || null,
-      managerId: addDraft.managerId.trim() || null,
+      role: addDraft.empRole.trim() || designationValue || "Employee",
+      userType,
+      workMode: String(addDraft.workMode || "HYBRID").trim().toUpperCase(),
+      startDate: toWebtrakDate(addDraft.startDate || todayInput()),
+      bandId,
+      department: addDraft.stream.trim() || "Development",
+      salaryDetails,
+      assetRequired: Boolean(addDraft.assetRequired),
+      assetDetails: addDraft.assetRequired ? String(addDraft.assetDetails || "").trim() : "",
+      ...(userType === "INTERN"
+        ? { internshipDuration: Number.parseInt(String(addDraft.internshipDuration || "0"), 10) || 1 }
+        : {}),
     };
 
-    if (!payload.employeeName) {
+    if (!payload.name) {
       showToast({ title: "Missing field", message: "Employee name is required." });
       return;
     }
 
-    if (employeeIdValue) {
-      const exists = employees.some(
-        (emp) => String(emp?.id ?? "").trim().toLowerCase() === employeeIdValue.toLowerCase()
-      );
-      if (exists) {
-        showToast({ title: "Duplicate ID", message: `Employee ID ${employeeIdValue} already exists.` });
-        return;
-      }
+    if (!payload.email) {
+      showToast({ title: "Missing field", message: "Email is required." });
+      return;
     }
 
     try {
       setMutating(true);
       await addEmployeeWithManager(payload);
 
-      showToast({ title: "Employee added", message: `${payload.employeeName} created successfully.` });
+      showToast({ title: "Employee added", message: `${payload.name} created successfully.` });
 
       closeAdd();
       await safeReloadEmployees(); // refresh list
@@ -1110,40 +1110,6 @@ export default function EmployeeDirectory({
 	            <form onSubmit={submitAdd} className="mt-1 space-y-4">
 	              <div>
 	                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-	                  Employee ID
-	                </label>
-	                <input
-	                  value={addDraft.useNextEmployeeId ? nextEmployeeId : addDraft.employeeId}
-	                  onChange={(e) => setAddDraft((d) => ({ ...d, employeeId: e.target.value, useNextEmployeeId: false }))}
-	                  disabled={addDraft.useNextEmployeeId}
-                    className={[
-                      "mt-2 w-full rt-input text-sm font-mono",
-                      addDraft.useNextEmployeeId ? "opacity-70 cursor-not-allowed" : "",
-                    ].join(" ")}
-	                  placeholder={`e.g., ${nextEmployeeId}`}
-	                />
-	
-	                <label className="mt-3 inline-flex items-center gap-3 select-none cursor-pointer">
-	                  <input
-	                    type="checkbox"
-	                    checked={addDraft.useNextEmployeeId}
-	                    onChange={(e) =>
-	                      setAddDraft((d) => ({
-	                        ...d,
-	                        useNextEmployeeId: e.target.checked,
-	                        employeeId: e.target.checked ? nextEmployeeId : "",
-	                      }))
-	                    }
-	                    className="h-4 w-4 accent-purple-600"
-	                  />
-                    <span className="text-xs text-[rgb(var(--text))]">
-	                    Use next available ID (<span className="font-mono">{nextEmployeeId}</span>)
-	                  </span>
-	                </label>
-	              </div>
-
-	              <div>
-	                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
 	                  Employee Name *
 	                </label>
 	                <input
@@ -1166,58 +1132,80 @@ export default function EmployeeDirectory({
                 />
               </div>
 
-              <div className={addRoleIsAdmin ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 sm:grid-cols-2 gap-4"}>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-                    Role
+                    User Type
                   </label>
                   <select
-                    value={addDraft.empRole}
-                    onChange={(e) => {
-                      const nextRole = e.target.value;
-                      const isAdmin = String(nextRole).trim().toLowerCase() === "admin";
-                      setAddDraft((d) => ({
-                        ...d,
-                        empRole: nextRole,
-                        band: isAdmin ? "" : (d.band || defaultAddBand),
-                        stream: isAdmin ? "" : (d.stream || defaultAddStream),
-                      }));
-                    }}
+                    value={addDraft.userType}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, userType: e.target.value }))}
                     className="mt-2 rt-input text-sm"
                   >
-                    <option value="Employee">Employee</option>
-                    <option value="Manager">Manager</option>
-                    <option value="HR">HR</option>
-                    <option value="Finance">Finance</option>
-                    <option value="Admin">Admin</option>
+                    <option value="FULLTIME">Full-time</option>
+                    <option value="INTERN">Intern</option>
+                    <option value="FREELANCER">Freelancer</option>
                   </select>
                 </div>
 
-                {!addRoleIsAdmin ? (
-                  <div>
-                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-                      Band
-                    </label>
-                    <select
-                      value={addDraft.band}
-                      onChange={(e) => setAddDraft((d) => ({ ...d, band: e.target.value }))}
-                      className="mt-2 rt-input text-sm"
-                    >
-                      {bandSelectOptions.map((band) => (
-                        <option key={`add-band:${band.value}`} value={band.value}>
-                          {band.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : null}
+                <div>
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Work Mode
+                  </label>
+                  <select
+                    value={addDraft.workMode}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, workMode: e.target.value }))}
+                    className="mt-2 rt-input text-sm"
+                  >
+                    <option value="HYBRID">Hybrid</option>
+                    <option value="INOFFICE">In office</option>
+                    <option value="REMOTE">Remote</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Start Date
+                  </label>
+                  <input
+                    type="date"
+                    value={addDraft.startDate}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, startDate: e.target.value }))}
+                    className="mt-2 rt-input text-sm"
+                  />
+                </div>
               </div>
 
-              {addRoleIsAdmin ? (
-                <div className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3 text-xs text-[rgb(var(--muted))]">
-                  Admin role does not require Band and Stream.
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Role / Bench Allocation Role
+                  </label>
+                  <input
+                    value={addDraft.empRole}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, empRole: e.target.value }))}
+                    className="mt-2 rt-input text-sm"
+                    placeholder="Employee, PM, DM, Software Engineer"
+                  />
                 </div>
-              ) : null}
+
+                <div>
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Band
+                  </label>
+                  <select
+                    value={addDraft.band}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, band: e.target.value }))}
+                    className="mt-2 rt-input text-sm"
+                  >
+                    {bandSelectOptions.map((band) => (
+                      <option key={`add-band:${band.value}`} value={band.value}>
+                        {band.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
 
               <div>
                 <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
@@ -1242,65 +1230,126 @@ export default function EmployeeDirectory({
                 </label>
               </div>
 
-              <div className={addRoleIsAdmin ? "grid grid-cols-1 gap-4" : "grid grid-cols-1 sm:grid-cols-2 gap-4"}>
-                {!addRoleIsAdmin ? (
-                  <div>
-                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-                      Stream
-                    </label>
-                    <select
-                      value={addDraft.stream}
-                      onChange={(e) => setAddDraft((d) => ({ ...d, stream: e.target.value }))}
-                      className="mt-2 rt-input text-sm"
-                    >
-                      <option value="">Unassigned</option>
-                      {streamSelectOptions.map((stream) => (
-                        <option key={`add-stream:${stream.value}`} value={stream.value}>
-                          {stream.label}
-                        </option>
-                      ))}
-                    </select>
-                    {addDraft.band && addDraft.stream ? (
-                      <div className="mt-2 text-xs text-[rgb(var(--muted))]">
-                        {addDesignationLoading
-                          ? "Loading designation…"
-                          : addDesignation?.designation
-                            ? `Designation: ${addDesignation.designation}`
-                            : "No designation found for this band/stream."}
-                      </div>
-                    ) : null}
+              <div>
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                  Department
+                </label>
+                <select
+                  value={addDraft.stream}
+                  onChange={(e) => setAddDraft((d) => ({ ...d, stream: e.target.value }))}
+                  className="mt-2 rt-input text-sm"
+                >
+                  {streamSelectOptions.map((stream) => (
+                    <option key={`add-stream:${stream.value}`} value={stream.value}>
+                      {stream.label}
+                    </option>
+                  ))}
+                </select>
+                {addDraft.band && addDraft.stream ? (
+                  <div className="mt-2 text-xs text-[rgb(var(--muted))]">
+                    {addDesignationLoading
+                      ? "Loading designation…"
+                      : addDesignation?.designation
+                        ? `Designation: ${addDesignation.designation}`
+                        : "No designation found for this band/department."}
                   </div>
                 ) : null}
+              </div>
 
-                <div>
-                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-                    Manager (optional)
-                  </label>
-                  <select
-                    value={addDraft.managerId}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, managerId: e.target.value }))}
-                    disabled={managersLoading}
-                    className={[
-                      "mt-2 w-full rt-input text-sm",
-                      managersLoading ? "opacity-60 cursor-not-allowed" : "",
-                    ].join(" ")}
-                  >
-                    <option value="">No manager</option>
-                    {managers.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} ({m.id}{m.email ? `, ${m.email}` : ""})
-                      </option>
-                    ))}
-                  </select>
-                  {managersLoading ? (
-                    <div className="mt-2 text-xs text-gray-500">Loading managers…</div>
-                  ) : null}
-                  {managersError ? (
-                    <div className="mt-2 text-xs text-red-300">
-                      {managersError}
-                    </div>
-                  ) : null}
+              {addDraft.userType === "FULLTIME" ? (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Base</label>
+                    <input
+                      value={addDraft.salaryBase}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, salaryBase: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                      inputMode="decimal"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Variable</label>
+                    <input
+                      value={addDraft.salaryVariable}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, salaryVariable: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                      inputMode="decimal"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Payout Cycle</label>
+                    <input
+                      value={addDraft.payoutCycle}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, payoutCycle: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                    />
+                  </div>
                 </div>
+              ) : null}
+
+              {addDraft.userType === "INTERN" ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Stipend</label>
+                    <input
+                      value={addDraft.stipend}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, stipend: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                      inputMode="decimal"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Internship Months</label>
+                    <input
+                      value={addDraft.internshipDuration}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, internshipDuration: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                      inputMode="numeric"
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {addDraft.userType === "FREELANCER" ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Pay Per Hour</label>
+                    <input
+                      value={addDraft.payPerHour}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, payPerHour: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                      inputMode="decimal"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Project Duration</label>
+                    <input
+                      value={addDraft.projectDuration}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, projectDuration: e.target.value }))}
+                      className="mt-2 rt-input text-sm"
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3">
+                <label className="inline-flex items-center gap-3 select-none cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={addDraft.assetRequired}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, assetRequired: e.target.checked }))}
+                    className="h-4 w-4 accent-purple-600"
+                  />
+                  <span className="text-xs font-semibold text-[rgb(var(--text))]">Asset required</span>
+                </label>
+                {addDraft.assetRequired ? (
+                  <textarea
+                    value={addDraft.assetDetails}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, assetDetails: e.target.value }))}
+                    className="mt-3 rt-input min-h-[72px] text-sm"
+                    placeholder="Laptop, monitor, access card, or other details"
+                  />
+                ) : null}
               </div>
 
               <div className="flex justify-end gap-3 pt-2">

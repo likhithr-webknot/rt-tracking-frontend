@@ -34,7 +34,7 @@ export async function fetchDesignations({ bandId, department, signal } = {}) {
   }
   
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const res = await fetch(buildApiUrl(`/designations${suffix}`), {
+  const res = await fetch(buildApiUrl(`/api/v1/designations${suffix}`), {
     signal,
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,

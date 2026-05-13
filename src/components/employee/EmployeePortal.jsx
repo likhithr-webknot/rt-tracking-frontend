@@ -24,16 +24,18 @@ import {
 import Toast from "../shared/Toast.jsx";
 import ThemeToggle from "../shared/ThemeToggle.jsx";
 import ModalOverlay from "../shared/ModalOverlay.jsx";
+import LeaveRequestsPage from "./LeaveRequestsPage.jsx";
 
 import { fetchMe } from "../../api/auth.js";
 import { fetchCertifications, normalizeCertifications } from "../../api/certifications.js";
 import { normalizeKpiDefinitions } from "../../api/kpi-definitions.js";
 import {
+  fetchEmployeeSubmissionCycleSummary,
   fetchMyMonthlySubmission,
   formatYearMonth,
   normalizeMonthlySubmission,
   saveMonthlyDraft,
-  submitMonthlySubmission
+  submitMonthlySubmission,
 } from "../../api/monthly-submissions.js";
 import { fetchPortalEmployee, updatePortalEmployee } from "../../api/portal.js";
 import { fetchDesignations } from "../../api/designations.js";
@@ -440,6 +442,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
     { id: "certifications", icon: <Award size={20} />, label: "Certifications" },
     { id: "recognitions", icon: <Award size={20} />, label: "Recognitions" },
     { id: "review", icon: <ClipboardCheck size={20} />, label: "Review" },
+    { id: "leave-requests", icon: <Calendar size={20} />, label: "Leave Requests" },
   ];
 
   return (
@@ -2307,7 +2310,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     return window.innerWidth >= 1024;
   });
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
-  const EMP_VALID_TABS = useMemo(() => new Set(["profile", "kpis", "values", "certifications", "recognitions", "review"]), []);
+  const EMP_VALID_TABS = useMemo(() => new Set(["profile", "kpis", "values", "certifications", "recognitions", "review", "leave-requests"]), []);
 
   const getEmpTabFromPath = useCallback(() => {
     const raw = window.location.pathname.replace(/^\//, "").split("/")[0];
@@ -2376,6 +2379,8 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [selectedValues, setSelectedValues] = useState({}); // { [valueId]: rating }
   const [valueComments, setValueComments] = useState({}); // { [valueId]: comment }
   const [recognitionsCount, setRecognitionsCount] = useState(0);
+  const [cycleSummary, setCycleSummary] = useState(null);
+  const [cycleSummaryLoading, setCycleSummaryLoading] = useState(false);
 
   // Route all error states through toast
   useEffect(() => { if (portalBootstrapError) showToast({ title: "Portal Error", message: portalBootstrapError, tone: "error" }); }, [portalBootstrapError, showToast]);
@@ -2406,6 +2411,30 @@ export default function EmployeePortal({ onLogout, auth }) {
     () => buildCycleMonthOptions(submissionMonth || new Date()),
     [submissionMonth]
   );
+
+  useEffect(() => {
+    if (!subjectEmployeeId || !cycleInfo?.key) return;
+    let mounted = true;
+    const controller = new AbortController();
+    setCycleSummaryLoading(true);
+    fetchEmployeeSubmissionCycleSummary(
+      { cycleKey: cycleInfo.key, employeeId: subjectEmployeeId },
+      { signal: controller.signal }
+    )
+      .then((summary) => {
+        if (mounted) setCycleSummary(summary);
+      })
+      .catch(() => {
+        if (mounted) setCycleSummary(null);
+      })
+      .finally(() => {
+        if (mounted) setCycleSummaryLoading(false);
+      });
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [cycleInfo?.key, subjectEmployeeId]);
 
   useEffect(() => {
     if (!cycleMonthOptions.length) return;
@@ -2791,6 +2820,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       try {
         const data = await fetchMyMonthlySubmission({
           month: submissionMonth,
+          employeeId: subjectEmployeeId,
           signal: controller.signal,
         });
         if (!mounted) return;
@@ -3240,6 +3270,9 @@ export default function EmployeePortal({ onLogout, auth }) {
   ]);
 
   const main = (() => {
+    if (activeTab === "leave-requests") {
+      return <LeaveRequestsPage employee={employee} authEmail={authEmail} />;
+    }
     if (activeTab === "profile") {
       return (
         <>
@@ -3338,7 +3371,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     return <Placeholder title="Profile" note="Employee profile." />;
   })();
 
-  if (locked && !needsResubmission) {
+  if (activeTab !== "leave-requests" && locked && !needsResubmission) {
     return (
       <AlreadyRespondedScreen
         month={submissionMeta?.month || submissionMonth}
@@ -3391,13 +3424,17 @@ export default function EmployeePortal({ onLogout, auth }) {
         <div className="max-w-4xl mx-auto mb-8">
           <div className="flex items-center gap-3 mb-2">
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Monthly Performance Workspace</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">
+            {activeTab === "leave-requests" ? "Leave Request Workspace" : "Monthly Performance Workspace"}
+          </h1>
           <p className="text-sm text-[rgb(var(--muted))] mt-1.5">
-            Complete each step, then submit your final review for manager evaluation.
+            {activeTab === "leave-requests"
+              ? "Create and track leave, WFH, and comp off requests."
+              : "Complete each step, then submit your final review for manager evaluation."}
           </p>
         </div>
 
-        {!locked && needsResubmission ? (
+        {activeTab !== "leave-requests" && !locked && needsResubmission ? (
           <div className="max-w-4xl mx-auto mb-6">
             <div className="relative overflow-hidden rounded-2xl border border-amber-500/45 bg-gradient-to-r from-amber-50 via-amber-50 to-white shadow-sm dark:from-amber-950/40 dark:via-amber-900/40 dark:to-transparent">
               <div className="absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-amber-500 to-orange-500" aria-hidden="true" />
@@ -3438,6 +3475,7 @@ export default function EmployeePortal({ onLogout, auth }) {
             </div>
           </div>
         ) : null}
+        {activeTab !== "leave-requests" ? (
         <div className="max-w-4xl mx-auto mb-6 flex items-end justify-between gap-4 flex-wrap">
           <div className="space-y-1.5">
             <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
@@ -3462,6 +3500,23 @@ export default function EmployeePortal({ onLogout, auth }) {
             <div className="text-[10px] text-[rgb(var(--muted))]">
               Cycle: {cycleInfo?.label || "May-Oct / Nov-Apr"}
             </div>
+            {cycleSummaryLoading ? (
+              <div className="text-[10px] text-[rgb(var(--muted))] mt-1">Loading cycle summary…</div>
+            ) : cycleSummary ? (
+              <div className="text-[10px] text-[rgb(var(--muted))] mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
+                <span>
+                  {cycleSummary.submissionCount} submission{cycleSummary.submissionCount === 1 ? "" : "s"} in cycle
+                </span>
+                {cycleSummary.averageEmployeeScore != null &&
+                Number.isFinite(Number(cycleSummary.averageEmployeeScore)) ? (
+                  <span>Avg self {Number(cycleSummary.averageEmployeeScore).toFixed(1)}</span>
+                ) : null}
+                {cycleSummary.averageManagerScore != null &&
+                Number.isFinite(Number(cycleSummary.averageManagerScore)) ? (
+                  <span>Avg manager {Number(cycleSummary.averageManagerScore).toFixed(1)}</span>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))]">
@@ -3479,8 +3534,11 @@ export default function EmployeePortal({ onLogout, auth }) {
             </span>
           </div>
         </div>
+        ) : null}
 
-        <SubmissionStepper activeTab={activeTab} steps={stepItems} onNavigate={goToTab} />
+        {activeTab !== "leave-requests" ? (
+          <SubmissionStepper activeTab={activeTab} steps={stepItems} onNavigate={goToTab} />
+        ) : null}
 
         <AnimatePresence mode="wait">
           <motion.div

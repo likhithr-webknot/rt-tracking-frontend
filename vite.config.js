@@ -15,6 +15,22 @@ function rewriteOrigin(proxy, apiTarget) {
   })
 }
 
+function configureProxy(proxy, apiTarget) {
+  rewriteOrigin(proxy, apiTarget)
+  proxy.on('error', (err, req, res) => {
+    const method = req?.method || 'GET'
+    const url = req?.url || ''
+    const message = err?.message || 'Proxy request failed'
+    console.error(`[vite proxy] ${method} ${url} -> ${apiTarget}: ${message}`)
+    if (!res || res.headersSent) return
+    res.writeHead(502, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      message: 'Frontend dev proxy could not reach the backend API.',
+      details: `${method} ${url} -> ${apiTarget}: ${message}`,
+    }))
+  })
+}
+
 /** Bypass function for routes that collide with SPA page paths */
 function spaBypass(req) {
   if (req.headers.accept && req.headers.accept.includes('text/html')) {
@@ -31,7 +47,7 @@ export default defineConfig(({ mode }) => {
     target: API_TARGET,
     changeOrigin: true,
     secure: false,
-    configure: (proxy) => rewriteOrigin(proxy, API_TARGET),
+    configure: (proxy) => configureProxy(proxy, API_TARGET),
   }
 
   return {
@@ -51,7 +67,7 @@ export default defineConfig(({ mode }) => {
         '/kpi-definition':      { ...base },
         '/bands':               { ...base },
         '/streams':             { ...base },
-        '/auth':                { ...base },
+        '/auth':                { ...base, bypass: spaBypass },
         '/portal':              { ...base },
         '/certifications':      { ...base, bypass: spaBypass },
         '/monthly-submissions': { ...base },

@@ -46,6 +46,8 @@ export default function LoginPage() {
   const authErrorMessage =
     authErrorKey === "unregistered_user"
       ? "Your Google account is not registered. Contact HR/admin to get access."
+      : authErrorKey === "auth_failed"
+        ? "We could not finish the sign-in handoff. Clear the session and try again."
       : "";
   const toastTimerRef = useRef(null);
   const showToast = useCallback((next) => {
@@ -223,7 +225,7 @@ export default function LoginPage() {
                 {authErrorMessage ? (
                   <div
                     role="alert"
-                    className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200"
+                    className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300 dark:text-red-200"
                   >
                     {authErrorMessage}
                   </div>

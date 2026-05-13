@@ -5,7 +5,6 @@ const AdminControlCenter = lazy(() => import("./components/admin/AdminControlCen
 const EmployeePortal = lazy(() => import("./components/employee/EmployeePortal.jsx"));
 const ManagerPortal = lazy(() => import("./components/manager/ManagerPortal.jsx"));
 const LoginPage = lazy(() => import("./components/auth/LoginPage.jsx"));
-const SubmissionWindowClosed = lazy(() => import("./components/employee/SubmissionWindowClosed.jsx"));
 
 import { fetchManagerReportees, normalizeEmployees } from "./api/employees.js";
 import {
@@ -19,10 +18,10 @@ import {
   markManualLogout,
   setAuth,
 } from "./api/auth.js";
-import { fetchSubmissionWindowCurrent, fetchRoleSubmissionWindow } from "./api/submission-window.js";
 
 const ROLE_SWITCH_ALLOWED_EMAIL = "likhith.r@webknot.in";
 const ROLE_PREVIEW_STORAGE_KEY = "rt_tracking_role_preview_v1";
+const ROLE_PREVIEW_POS_STORAGE_KEY = "rt_tracking_role_preview_pos_v1";
 const DEFAULT_ROLE_OPTIONS = ["Admin", "Manager", "Employee"];
 
 function normalizePortalRole(value) {
@@ -35,6 +34,8 @@ function normalizePortalRole(value) {
   if (cleaned.includes("admin")) return "Admin";
   if (cleaned.includes("manager")) return "Manager";
   if (cleaned.includes("employee") || cleaned.includes("user")) return "Employee";
+  // Backend user-role strings (e.g. FINANCE, ASSET_MANAGER) → same portal surface as admin ops
+  if (cleaned.includes("finance") || cleaned.includes("asset_manager")) return "Admin";
   return "";
 }
 
@@ -134,14 +135,25 @@ function RolePreviewSwitcher({
   busy,
   error,
   previewMode,
+  position,
+  onDragStart,
   onSelect,
   onClear,
 }) {
   if (!visible) return null;
   return (
-    <div className="fixed right-4 bottom-4 z-[80]">
+    <div
+      className="fixed z-[80]"
+      style={{ left: `${position?.x ?? 16}px`, top: `${position?.y ?? 16}px` }}
+    >
       <div className="rt-panel p-3 sm:p-4 shadow-xl border-[rgb(var(--primary))]/20">
-        <div className="rt-kicker">Role Preview</div>
+        <div
+          className="rt-kicker cursor-move select-none"
+          onMouseDown={onDragStart}
+          title="Drag to move"
+        >
+          Role Preview
+        </div>
         <div className="text-xs text-[rgb(var(--muted))] mt-1 mb-2">Local view-only switch for your account</div>
         <div className="flex items-center gap-2">
           <select
@@ -167,15 +179,6 @@ function RolePreviewSwitcher({
       </div>
     </div>
   );
-}
-
-function withWindowSource(data, source) {
-  const obj = data && typeof data === "object" ? data : {};
-  const existingSource = String(obj?.source ?? "").trim();
-  return {
-    ...obj,
-    source: existingSource || source,
-  };
 }
 
 function normalizeRoleKey(value) {
@@ -208,6 +211,7 @@ function resolveRoleFromCandidates(candidates) {
   }
 
   if (keys.some((k) => k.includes("admin") || k === "hr")) return "Admin";
+  if (keys.some((k) => k.includes("finance") || k.includes("asset"))) return "Admin";
   if (keys.some((k) => k.includes("manager"))) return "Manager";
   if (keys.some((k) => k.includes("employee") || k.includes("user"))) return "Employee";
   return null;
@@ -254,10 +258,19 @@ export default function App() {
     if (typeof window === "undefined") return "";
     return normalizePortalRole(window.localStorage.getItem(ROLE_PREVIEW_STORAGE_KEY) || "");
   });
-  const [windowData, setWindowData] = useState(null);
-  const [windowLoading, setWindowLoading] = useState(false);
-  const [windowError, setWindowError] = useState("");
-  const [windowRefreshNonce, setWindowRefreshNonce] = useState(0);
+  const [rolePreviewPos, setRolePreviewPos] = useState(() => {
+    if (typeof window === "undefined") return { x: 16, y: 16 };
+    try {
+      const raw = window.localStorage.getItem(ROLE_PREVIEW_POS_STORAGE_KEY);
+      if (!raw) return { x: 16, y: 16 };
+      const parsed = JSON.parse(raw);
+      const x = Number(parsed?.x);
+      const y = Number(parsed?.y);
+      return { x: Number.isFinite(x) ? x : 16, y: Number.isFinite(y) ? y : 16 };
+    } catch {
+      return { x: 16, y: 16 };
+    }
+  });
 
   const roleLabel = useMemo(() => resolvePortalRole(auth), [auth]);
 
@@ -303,8 +316,10 @@ export default function App() {
     if (roleLabel === "Admin") return "Admin";
     if (roleLabel === "Manager") return "Manager";
     if (roleLabel === "Employee") return "Employee";
+    // When JWT/profile did not carry a portal role, infer manager only if they have reportees.
     if (hasReportees === true) return "Manager";
-    return "Admin";
+    // Never default to Admin without an explicit admin role (avoids wrong portal / access).
+    return "Employee";
   }, [hasReportees, roleLabel]);
 
   const authEmail = useMemo(() => getAuthEmail(auth), [auth]);
@@ -410,73 +425,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!auth) {
-      setWindowData(null);
-      setWindowError("");
-      setWindowLoading(false);
-      return;
-    }
-    if (activePortalRole !== "Employee" && activePortalRole !== "Manager") return;
-
-    let alive = true;
-    let timer = null;
-    let controller = null;
-
-    async function load({ showSpinner } = {}) {
-      if (!alive) return;
-      if (controller) controller.abort();
-      controller = new AbortController();
-
-      if (showSpinner) setWindowLoading(true);
-      setWindowError("");
-
-      try {
-        /* Try role-specific window first, fall back to global */
-        let windowResult;
-        try {
-          windowResult = await fetchRoleSubmissionWindow(activePortalRole, { signal: controller.signal });
-        } catch {
-          windowResult = await fetchSubmissionWindowCurrent({ signal: controller.signal });
-        }
-        if (!alive) return;
-        setWindowData(withWindowSource(windowResult, activePortalRole.toLowerCase()));
-      } catch (err) {
-        if (err?.name === "AbortError") return;
-        if (!alive) return;
-
-        if (err?.status === 401) {
-          try {
-            const me = await fetchMe({ signal: controller.signal }).catch(() => null);
-            if (!me) {
-              clearAuth();
-              setAuthState(null);
-              return;
-            }
-            setAuth(me);
-            setAuthState(getAuth() || me);
-          } catch { void 0; }
-        }
-
-        setWindowError(err?.message || "Failed to load submission window status.");
-        setWindowData(null);
-      } finally {
-        if (alive) {
-          setWindowLoading(false);
-          timer = window.setTimeout(() => load({ showSpinner: false }), 30_000);
-        }
-      }
-    }
-
-    load({ showSpinner: true });
-
-    return () => {
-      alive = false;
-      if (timer) window.clearTimeout(timer);
-      if (controller) controller.abort();
-    };
-  }, [activePortalRole, auth, windowRefreshNonce]);
-
   const handleRolePreviewSelect = useCallback(async (value) => {
     const normalized = normalizePortalRole(value);
     if (!normalized || !roleSwitchAllowed || roleSwitchBusy) return;
@@ -487,7 +435,6 @@ export default function App() {
         window.localStorage.setItem(ROLE_PREVIEW_STORAGE_KEY, normalized);
       }
       setRolePreview(normalized);
-      setWindowRefreshNonce((n) => n + 1);
       setAuthState(getAuth());
     } catch (err) {
       setRoleSwitchError(err?.message || "Role preview failed.");
@@ -503,8 +450,47 @@ export default function App() {
     }
     setRolePreview("");
     setRoleSwitchError("");
-    setWindowRefreshNonce((n) => n + 1);
   }, [roleSwitchAllowed]);
+
+  const handleRolePreviewDragStart = useCallback((e) => {
+    if (typeof window === "undefined") return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const initial = { ...rolePreviewPos };
+
+    function onMove(moveEvent) {
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      const next = {
+        x: Math.max(8, initial.x + dx),
+        y: Math.max(8, initial.y + dy),
+      };
+      setRolePreviewPos(next);
+    }
+
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      try {
+        window.localStorage.setItem(ROLE_PREVIEW_POS_STORAGE_KEY, JSON.stringify(rolePreviewPos));
+      } catch {
+        void 0;
+      }
+    }
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [rolePreviewPos]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(ROLE_PREVIEW_POS_STORAGE_KEY, JSON.stringify(rolePreviewPos));
+    } catch {
+      void 0;
+    }
+  }, [rolePreviewPos]);
 
   const logout = useCallback(() => {
     markManualLogout();
@@ -512,9 +498,6 @@ export default function App() {
     clearAuth();
     setAuthState(null);
     setAuthChecking(false);
-    setWindowData(null);
-    setWindowError("");
-    setWindowLoading(false);
   }, []);
 
   if (authChecking && (!auth || (!auth?.email && !auth?.employeeName))) {
@@ -548,6 +531,8 @@ export default function App() {
           busy={roleSwitchBusy}
           error={roleSwitchError}
           previewMode={Boolean(rolePreview)}
+          position={rolePreviewPos}
+          onDragStart={handleRolePreviewDragStart}
           onSelect={handleRolePreviewSelect}
           onClear={clearRolePreview}
         />
@@ -567,55 +552,6 @@ export default function App() {
     );
   }
 
-  if (windowLoading && !windowData) {
-    return (
-      <div className="rt-shell grid place-items-center px-6">
-        <div className="rt-panel text-center px-8 py-10 w-full max-w-xl">
-          <div className="rt-kicker">Loading</div>
-          <div className="mt-2 rt-title">Checking Submission Window</div>
-          <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">Please wait…</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!windowData) {
-    return (
-      <Suspense fallback={<PortalLoader />}>
-        <SubmissionWindowClosed
-          portalWindow={null}
-          error={windowError || "Unable to determine whether submissions are open."}
-          onRetry={() => setWindowRefreshNonce((n) => n + 1)}
-          onLogout={logout}
-        />
-      </Suspense>
-    );
-  }
-
-  if (!windowData.isOpen) {
-    return (
-      <>
-        <Suspense fallback={<PortalLoader />}>
-          <SubmissionWindowClosed
-            portalWindow={windowData}
-            onRetry={() => setWindowRefreshNonce((n) => n + 1)}
-            onLogout={logout}
-          />
-        </Suspense>
-        <RolePreviewSwitcher
-          visible={roleSwitchAllowed}
-          currentRole={activePortalRole}
-          options={roleSwitchOptions}
-          busy={roleSwitchBusy}
-          error={roleSwitchError}
-          previewMode={Boolean(rolePreview)}
-          onSelect={handleRolePreviewSelect}
-          onClear={clearRolePreview}
-        />
-      </>
-    );
-  }
-
   if (activePortalRole === "Manager") {
     return (
       <>
@@ -627,6 +563,8 @@ export default function App() {
           busy={roleSwitchBusy}
           error={roleSwitchError}
           previewMode={Boolean(rolePreview)}
+          position={rolePreviewPos}
+          onDragStart={handleRolePreviewDragStart}
           onSelect={handleRolePreviewSelect}
           onClear={clearRolePreview}
         />
@@ -644,6 +582,8 @@ export default function App() {
         busy={roleSwitchBusy}
         error={roleSwitchError}
         previewMode={Boolean(rolePreview)}
+        position={rolePreviewPos}
+        onDragStart={handleRolePreviewDragStart}
         onSelect={handleRolePreviewSelect}
         onClear={clearRolePreview}
       />

@@ -39,6 +39,21 @@ function normalizeDirectoryRows(data) {
   const arr = Array.isArray(data) ? data : [];
   return arr
     .map((raw) => {
+      if (typeof raw === "string" || typeof raw === "number") {
+        const code = String(raw ?? "").trim();
+        return code
+          ? {
+              id: null,
+              code,
+              label: code,
+              bandType: "BOTH",
+              active: true,
+              sortOrder: null,
+              createdAt: null,
+              updatedAt: null,
+            }
+          : null;
+      }
       const obj = raw && typeof raw === "object" ? raw : {};
       const code = [
         obj.code,
@@ -194,68 +209,6 @@ function resolveNextListCursor(raw, { resolvedPage, itemsLength, limit }) {
   return null;
 }
 
-async function fetchDirectory(path, { activeOnly = null, limit = null, cursor = null, signal } = {}) {
-  const auth = getAuthHeader();
-  const qs = new URLSearchParams();
-  if (activeOnly != null) qs.set("activeOnly", String(Boolean(activeOnly)));
-  if (limit != null) qs.set("limit", String(limit));
-  if (cursor) qs.set("cursor", String(cursor));
-  const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const res = await fetch(buildApiUrl(`${path}/list${suffix}`), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
-}
-
-async function addDirectoryRow(path, payload, { signal } = {}) {
-  const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(`${path}/add`), {
-    method: "POST",
-    signal,
-    credentials: "include",
-    headers: withCsrfHeaders({
-      "Content-Type": "application/json",
-      ...(auth ? { Authorization: auth } : {}),
-    }),
-    body: JSON.stringify(payload ?? {}),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
-}
-
-async function updateDirectoryRow(path, code, payload, { signal } = {}) {
-  const safeCode = encodeURIComponent(String(code ?? "").trim());
-  const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(`${path}/update/${safeCode}`), {
-    method: "PUT",
-    signal,
-    credentials: "include",
-    headers: withCsrfHeaders({
-      "Content-Type": "application/json",
-      ...(auth ? { Authorization: auth } : {}),
-    }),
-    body: JSON.stringify(payload ?? {}),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
-}
-
-async function deleteDirectoryRow(path, code, { signal } = {}) {
-  const safeCode = encodeURIComponent(String(code ?? "").trim());
-  const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(`${path}/delete/${safeCode}`), {
-    method: "DELETE",
-    signal,
-    credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : undefined),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json().catch(() => ({}));
-}
-
 export async function fetchBands(options = {}) {
   const { search = null, page = 0, limit = null, cursor = null, signal } = options || {};
   const auth = getAuthHeader();
@@ -317,8 +270,20 @@ export async function fetchStreams(options = {}) {
 
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
 
-  // Note: backend uses "department-list" but in this UI "departments == streams".
-  const endpoints = [`/api/v1/department-list${suffix}`];
+  // Webtrak exposes enum departments at /api/v1/departments and a compatibility
+  // streams endpoint at /api/v1/streams.
+  // Some controllers paginate with `size` instead of `limit`.
+  const qsSize = new URLSearchParams(qs);
+  if (qsSize.has("limit")) {
+    qsSize.set("size", qsSize.get("limit"));
+  }
+  const suffixSize = qsSize.toString() ? `?${qsSize.toString()}` : "";
+
+  const endpoints = [
+    `/api/v1/departments${suffix}`,
+    `/api/v1/streams${suffix}`,
+    `/api/v1/streams${suffixSize}`,
+  ];
 
   let lastRouteErr = null;
   for (const endpoint of endpoints) {

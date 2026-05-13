@@ -1724,7 +1724,11 @@ export default function ManagerPortal({ onLogout, auth }) {
       setHydratingSelfSubmission(true);
       setManagerDraftError("");
       try {
-        const data = await fetchMyMonthlySubmission({ month, signal: controller.signal });
+        const data = await fetchMyMonthlySubmission({
+          month,
+          employeeId: String(managerId || auth?.employeeId || "").trim(),
+          signal: controller.signal,
+        });
         if (!mounted) return;
 
         const normalized = normalizeMonthlySubmission(data);

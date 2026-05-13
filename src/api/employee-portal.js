@@ -63,12 +63,12 @@ export async function fetchEmployeePortalKpiDefinitions({
   const auth = getAuthHeader();
   const qs = new URLSearchParams();
   if (limit != null) qs.set("limit", String(limit));
-  if (cursor) qs.set("cursor", String(cursor));
+  if (cursor) qs.set("offset", String(cursor));
   if (employeeId) qs.set("employeeId", String(employeeId));
   if (band) qs.set("band", String(band));
-  if (stream) qs.set("stream", String(stream));
+  if (stream) qs.set("department", String(stream));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const res = await fetch(buildApiUrl(`/employee-portal/kpi-definitions${suffix}`), {
+  const res = await fetch(buildApiUrl(`/api/v1/list-kpi-definitions${suffix}`), {
     signal,
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
@@ -81,11 +81,11 @@ export async function fetchEmployeePortalWebknotValues({ limit = 10, cursor = nu
   const auth = getAuthHeader();
   const qs = new URLSearchParams();
   if (limit != null) qs.set("limit", String(limit));
-  if (cursor) qs.set("cursor", String(cursor));
+  if (cursor) qs.set("offset", String(cursor));
   qs.set("activeOnly", "true");
   qs.set("_ts", Date.now().toString());
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const res = await fetch(buildApiUrl(`/employee-portal/webknot-values${suffix}`), {
+  const res = await fetch(buildApiUrl(`/api/v1/webknot-value/list${suffix}`), {
     signal,
     credentials: "include",
     cache: "no-store",

@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl, ensureCsrfCookie, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http.js";
 import { buildCycleMeta, formatYearMonth as formatYearMonthFromCycle, normalizeYearMonth } from "../utils/reviewCycles.js";
 
 export function formatYearMonth(date) {
@@ -213,11 +213,18 @@ export function normalizeMonthlySubmission(data) {
       : data;
 
   const id = obj.submissionId ?? obj.id ?? null;
-  const month = normalizeYearMonth(obj.month ?? obj.monthKey) || null;
+  const month = normalizeYearMonth(obj.month ?? obj.monthKey ?? obj.submissionMonth) || null;
   const status = typeof obj.status === "string" ? obj.status : null;
 
   const payload = obj.payload && typeof obj.payload === "object" ? obj.payload : obj;
-  const selfReviewText = String(payload.selfReviewText ?? payload.selfReview ?? payload.reviewText ?? "").trim();
+  const selfReviewText = String(
+    payload.selfReviewText ??
+    payload.selfReview ??
+    payload.reviewText ??
+    payload.employeeComment ??
+    obj.employeeComment ??
+    ""
+  ).trim();
   const rawWebknotValues = Array.isArray(payload.webknotValues ?? payload.values)
     ? (payload.webknotValues ?? payload.values)
     : [];
@@ -248,7 +255,7 @@ export function normalizeMonthlySubmission(data) {
     payload?.techShowcase ?? payload?.techShowcaseNotes ?? obj?.techShowcase ?? ""
   ).trim();
 
-  const submittedAt = obj.submittedAt ?? obj.submittedOn ?? null;
+  const submittedAt = obj.submittedAt ?? obj.submittedOn ?? obj.employeeSubmittedAt ?? null;
   const updatedAt = obj.updatedAt ?? obj.lastUpdatedAt ?? null;
   const cycleMeta = buildCycleMeta(
     payload?.cycleMonth ??
@@ -288,6 +295,8 @@ export function normalizeMonthlySubmission(data) {
   const managerFallbackComment = String(
     payload?.managerComments ??
     payload?.managerNotes ??
+    payload?.managerComment ??
+    obj?.managerComment ??
     managerEvaluation?.comments ??
     ""
   ).trim();
@@ -422,48 +431,124 @@ export function normalizeMonthlySubmission(data) {
 }
 
 export async function saveMonthlyDraft(payload, { signal } = {}) {
-  const auth = getAuthHeader();
-  const preparedPayload = toRequestPayload(payload);
-  const baseHeaders = {
-    "Content-Type": "application/json",
-    ...(auth ? { Authorization: auth } : {}),
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  return {
+    skipped: true,
+    reason: "Monthly draft persistence is not exposed by the Webtrak backend.",
+    payload: toRequestPayload(payload),
   };
+}
 
-  async function attempt() {
-    return fetch(buildApiUrl("/monthly-submissions/draft"), {
-      method: "POST",
-      signal,
-      credentials: "include",
-      headers: withCsrfHeaders(baseHeaders),
-      body: JSON.stringify(preparedPayload),
-    });
-  }
+/** Path under `/api/v1/submission-cycles/...` for monthly submission pairs (create + list). */
+export function submissionCycleMonthlySubmissionsPath(cycleKey, employeeId) {
+  const ck = String(cycleKey ?? "").trim();
+  const id = String(employeeId ?? "").trim();
+  if (!ck || !id) return "";
+  return `/api/v1/submission-cycles/${encodeURIComponent(ck)}/employees/${encodeURIComponent(id)}/monthly-submissions`;
+}
 
-  let res = await attempt();
-  if (!res.ok && res.status === 403) {
-    await ensureCsrfCookie({
-      signal,
-      headers: auth ? { Authorization: auth } : undefined,
-      forceRefresh: true,
-    });
-    res = await attempt();
-  }
+function unwrapGenericArray(raw) {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== "object") return [];
+  const root = raw.data !== undefined ? raw.data : raw;
+  if (Array.isArray(root)) return root;
+  if (Array.isArray(root?.data)) return root.data;
+  if (Array.isArray(root?.items)) return root.items;
+  if (Array.isArray(root?.results)) return root.results;
+  if (Array.isArray(root?.content)) return root.content;
+  return [];
+}
 
-  // New controller integration: /draft might not exist anymore.
-  if (res.status === 404 || res.status === 405) {
-    return submitMonthlySubmission(payload, { signal });
-  }
+function unwrapGenericPage(raw) {
+  const root = raw && typeof raw === "object" && raw.data !== undefined ? raw.data : raw;
+  const items = unwrapGenericArray(raw);
+  const totalRaw =
+    root?.totalElements ??
+    root?.totalElement ??
+    root?.total ??
+    raw?.totalElements ??
+    raw?.totalElement ??
+    null;
+  const total = Number.isFinite(Number(totalRaw)) ? Number(totalRaw) : items.length;
+  return { items, total, raw: root ?? raw };
+}
 
-  if (!res.ok) {
-    const err = await toHttpError(res);
-    if (res.status === 400) {
-      err.message = `${err.message} [payload-shape kpiRatings=${Array.isArray(preparedPayload?.kpiRatings)} certifications=${Array.isArray(preparedPayload?.certifications)} webknotValueResponses=${Array.isArray(preparedPayload?.webknotValueResponses)}]`;
-    }
-    throw err;
+function resolveCycleKey({ month, cycleKey } = {}) {
+  const monthKey = normalizeYearMonth(month) || String(month ?? "").trim();
+  if (monthKey) return monthKey;
+  return normalizeYearMonth(cycleKey) || String(cycleKey ?? "").trim();
+}
+
+function toFiniteNumberOrNull(...values) {
+  for (const value of values) {
+    if (value == null || value === "") continue;
+    const num = typeof value === "number" ? value : Number.parseFloat(String(value));
+    if (Number.isFinite(num)) return Math.round(num * 10) / 10;
   }
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json().catch(() => ({}));
-  return res.text().catch(() => "");
+  return null;
+}
+
+function toMonthlySubmissionDtoPayload(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const prepared = toRequestPayload(source);
+  const submissionMonth =
+    normalizeYearMonth(source.submissionMonth ?? prepared.month ?? prepared.monthKey ?? source.monthKey ?? source.month) ||
+    String(source.submissionMonth ?? prepared.month ?? prepared.monthKey ?? "").trim();
+  const managerReview = source.managerReview && typeof source.managerReview === "object" ? source.managerReview : {};
+  const adminReview = source.adminReview && typeof source.adminReview === "object" ? source.adminReview : {};
+  const managerEvaluation = source.managerEvaluation && typeof source.managerEvaluation === "object" ? source.managerEvaluation : {};
+  const submittedAt = String(source.employeeSubmittedAt ?? source.submittedAt ?? "").trim() || new Date().toISOString();
+  const reviewSubmittedAt = String(
+    source.managerSubmittedAt ??
+    source.managerReviewedAt ??
+    managerReview.reviewedAt ??
+    adminReview.reviewedAt ??
+    ""
+  ).trim();
+  return {
+    managerId: source.managerId != null && source.managerId !== "" ? Number(source.managerId) : null,
+    submissionMonth,
+    employeeScore: toFiniteNumberOrNull(source.employeeScore, source.weightedScore, source.score, source.selfScore),
+    managerScore: toFiniteNumberOrNull(source.managerScore, managerEvaluation.score, source.managerWeightedScore),
+    employeeComment: String(source.employeeComment ?? prepared.selfReviewText ?? source.selfReviewText ?? "").trim(),
+    managerComment: String(source.managerComment ?? managerReview.comments ?? adminReview.comments ?? managerEvaluation.comments ?? "").trim(),
+    employeeSubmittedAt: submittedAt,
+    managerSubmittedAt: reviewSubmittedAt || (source.managerReview || source.adminReview ? new Date().toISOString() : null),
+  };
+}
+
+async function fetchAdminMonthlySubmissionsPage({ month, cycleKey, employeeId, page = 0, size = 200, signal } = {}) {
+  const auth = getAuthHeader();
+  const ck = resolveCycleKey({ month, cycleKey });
+  if (!ck) return { items: [], total: 0, raw: null };
+  const qs = new URLSearchParams();
+  qs.set("cycleKey", ck);
+  if (employeeId != null && String(employeeId).trim()) qs.set("employeeId", String(employeeId).trim());
+  qs.set("page", String(Math.max(Number.parseInt(String(page ?? 0), 10) || 0, 0)));
+  qs.set("size", String(Math.max(Number.parseInt(String(size ?? 200), 10) || 200, 1)));
+
+  const res = await fetch(buildApiUrl(`/api/v1/admin/monthly-submissions?${qs.toString()}`), {
+    signal,
+    credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+  if (!res.ok) throw await toHttpError(res);
+  const raw = await parseResponse(res, {});
+  return unwrapGenericPage(raw);
+}
+
+function pickSubmissionRowForMonth(list, monthKey) {
+  const wanted = String(monthKey ?? "").trim();
+  if (!wanted || !Array.isArray(list)) return null;
+  return (
+    list.find(
+      (x) =>
+        x &&
+        (String(x.month ?? x.monthKey ?? x.cycleMonth ?? "").trim() === wanted ||
+          String(x.monthKey ?? "").trim() === wanted)
+    ) ?? null
+  );
 }
 
 export async function submitMonthlySubmission(payload, { signal } = {}) {
@@ -487,26 +572,37 @@ export async function submitMonthlySubmission(payload, { signal } = {}) {
     hasManagerReview &&
     Boolean(submissionId);
 
+  const scopedCycleKey = normalizeYearMonth(preparedPayload.month ?? preparedPayload.monthKey) ||
+    String(preparedPayload.cycleKey ?? "").trim();
+  const scopedEmployeeId = String(
+    preparedPayload.subjectEmployeeId ?? preparedPayload.employeeId ?? ""
+  ).trim();
+  const cycleScopedPath =
+    !isManagerEmployeeReview && scopedCycleKey && scopedEmployeeId
+      ? submissionCycleMonthlySubmissionsPath(scopedCycleKey, scopedEmployeeId)
+      : "";
+  const cycleScopedPayload = cycleScopedPath ? toMonthlySubmissionDtoPayload(payload) : null;
+
   const requestCandidates = isManagerEmployeeReview
     ? [
         {
-          method: "PUT",
-          path: `/monthly-submissions/${encodeURIComponent(submissionId)}/manager-review`,
+          method: "PATCH",
+          path: `/api/v1/admin/monthly-submissions/${encodeURIComponent(submissionId)}`,
+          payload: toMonthlySubmissionDtoPayload(payload),
         },
       ]
     : [
-        { method: "POST", path: "/monthly-submissions/self" },
-        // Backward-compat fallback (in case older backend is still deployed).
-        { method: "POST", path: "/monthly-submissions/submit" },
+        ...(cycleScopedPath ? [{ method: "POST", path: cycleScopedPath, payload: cycleScopedPayload }] : []),
       ];
 
-  async function attempt({ method, path }) {
+  async function attempt(candidate) {
+    const { method, path } = candidate;
     return fetch(buildApiUrl(path), {
       method,
       signal,
       credentials: "include",
       headers: withCsrfHeaders(baseHeaders),
-      body: JSON.stringify(preparedPayload),
+      body: JSON.stringify(candidate.payload ?? preparedPayload),
     });
   }
 
@@ -551,209 +647,76 @@ export async function submitMonthlySubmission(payload, { signal } = {}) {
   throw new Error("Monthly submission endpoint not found.");
 }
 
-export async function fetchMyMonthlySubmission({ month, signal } = {}) {
+export async function fetchMyMonthlySubmission({ month, employeeId, signal } = {}) {
   const auth = getAuthHeader();
   const monthKey = normalizeYearMonth(month) || String(month ?? "").trim();
-  const endpoints = [
-    "/api/v1/monthly-submissions/me",
-    "/monthly-submissions/me",
-  ];
-  const queryVariants = [];
-  if (monthKey) {
-    queryVariants.push(new URLSearchParams({ month: monthKey }));
-    queryVariants.push(new URLSearchParams({ monthKey: monthKey }));
-    queryVariants.push(new URLSearchParams({ cycleKey: monthKey }));
-  } else {
-    queryVariants.push(new URLSearchParams());
-  }
+  const empId = String(employeeId ?? "").trim();
 
-  let raw = null;
-  let found = false;
-  for (const endpoint of endpoints) {
-    for (const qs of queryVariants) {
-      const suffix = qs.toString() ? `?${qs.toString()}` : "";
-      const res = await fetch(buildApiUrl(`${endpoint}${suffix}`), {
-        signal,
-        credentials: "include",
-        headers: auth ? { Authorization: auth } : undefined,
-      });
-      if (res.status === 404 || res.status === 405) {
-        continue;
+  if (empId && monthKey) {
+    const cycleMeta = buildCycleMeta(monthKey);
+    const ck = cycleMeta?.cycleKey ? String(cycleMeta.cycleKey).trim() : "";
+    if (ck) {
+      const path = submissionCycleMonthlySubmissionsPath(ck, empId);
+      if (path) {
+        const res = await fetch(buildApiUrl(path), {
+          signal,
+          credentials: "include",
+          headers: auth ? { Authorization: auth } : undefined,
+        });
+        if (res.ok) {
+          const raw = await res.json().catch(() => ({}));
+          const list = unwrapGenericArray(raw);
+          const picked = pickSubmissionRowForMonth(list, monthKey);
+          if (picked) return picked;
+          if (list.length === 0) return null;
+        } else if (res.status !== 404 && res.status !== 405) {
+          throw await toHttpError(res);
+        }
       }
-      if (!res.ok) throw await toHttpError(res);
-      const contentType = res.headers.get("content-type") || "";
-      raw = contentType.includes("application/json")
-        ? await res.json().catch(() => ({}))
-        : await res.text().catch(() => "");
-      found = true;
-      break;
     }
-    if (found) break;
   }
 
-  if (!found) return null;
-  if (raw == null || typeof raw !== "object") return raw;
-
-  // Backend returns GenericResponseDTO, where `data` is usually a list.
-  const container = raw?.data ?? raw;
-  if (Array.isArray(container)) {
-    if (month) {
-      const wanted = String(month);
-      const found = container.find(
-        (x) =>
-          x &&
-          (String(x.month ?? x.monthKey ?? x.cycleMonth ?? "") === wanted ||
-            String(x.monthKey ?? "") === wanted)
-      );
-      if (found) return found;
-    }
-    return container[0] ?? null;
-  }
-
-  if (container && typeof container === "object") {
-    const maybe =
-      (Array.isArray(container?.submissions) && container.submissions) ||
-      (Array.isArray(container?.items) && container.items) ||
-      null;
-    if (maybe) {
-      if (month) {
-        const wanted = String(month);
-        const found = maybe.find(
-          (x) =>
-            x &&
-            (String(x.month ?? x.monthKey ?? x.cycleMonth ?? "") === wanted || String(x.monthKey ?? "") === wanted)
-        );
-        if (found) return found;
-      }
-      return maybe[0] ?? null;
-    }
-    return container;
-  }
-
-  return raw;
+  return null;
 }
 
 export async function fetchMyMonthlySubmissionHistory({ signal } = {}) {
-  const auth = getAuthHeader();
-  const endpoints = [
-    "/api/v1/monthly-submissions/me/history",
-    "/monthly-submissions/me/history",
-  ];
-  let lastRouteErr = null;
-  for (const endpoint of endpoints) {
-    const res = await fetch(buildApiUrl(endpoint), {
-      signal,
-      credentials: "include",
-      headers: auth ? { Authorization: auth } : undefined,
-    });
-    if (res.ok) return res.json().catch(() => []);
-    const err = await toHttpError(res);
-    if (res.status === 404 || res.status === 405) {
-      lastRouteErr = err;
-      continue;
-    }
-    throw err;
-  }
-  throw lastRouteErr || new Error("Monthly submission history endpoint not found.");
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  return [];
 }
 
 export async function fetchManagerTeamSubmissions({ month, status, limit = null, cursor = null, signal } = {}) {
-  const auth = getAuthHeader();
-  const monthKey = normalizeYearMonth(month) || String(month ?? "").trim();
-  const endpoints = [
-    "/api/v1/monthly-submissions/manager/team",
-    "/monthly-submissions/manager/team",
-  ];
-  const queryVariants = [];
-  const buildQuery = (monthField) => {
-    const qs = new URLSearchParams();
-    if (monthKey && monthField) qs.set(monthField, monthKey);
-    if (status) qs.set("status", String(status));
-    if (limit != null) qs.set("limit", String(limit));
-    if (cursor) qs.set("cursor", String(cursor));
-    return qs;
-  };
-  if (monthKey) {
-    queryVariants.push(buildQuery("month"));
-    queryVariants.push(buildQuery("monthKey"));
-    queryVariants.push(buildQuery("cycleKey"));
-  } else {
-    queryVariants.push(buildQuery(null));
-  }
-
-  let lastRouteErr = null;
-  for (const endpoint of endpoints) {
-    for (const qs of queryVariants) {
-      const suffix = qs.toString() ? `?${qs.toString()}` : "";
-      const res = await fetch(buildApiUrl(`${endpoint}${suffix}`), {
-        signal,
-        credentials: "include",
-        headers: auth ? { Authorization: auth } : undefined,
-      });
-      if (res.ok) return res.json().catch(() => ({}));
-      const err = await toHttpError(res);
-      if (res.status === 404 || res.status === 405) {
-        lastRouteErr = err;
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastRouteErr || new Error("Manager team submissions endpoint not found.");
+  const page = await fetchAdminMonthlySubmissionsPage({
+    month,
+    page: cursor ? Number.parseInt(String(cursor), 10) || 0 : 0,
+    size: limit ?? 100,
+    signal,
+  });
+  const wantedStatus = String(status ?? "").trim().toUpperCase();
+  const items = wantedStatus
+    ? page.items.filter((item) => {
+        const normalized = normalizeMonthlySubmission(item);
+        const value = String(normalized?.reviewStatus ?? normalized?.status ?? item?.status ?? "").trim().toUpperCase();
+        return value === wantedStatus;
+      })
+    : page.items;
+  return { data: items, items, content: items, totalElements: page.total };
 }
 
 export async function fetchAdminAllSubmissions({ month, status, signal } = {}) {
-  const auth = getAuthHeader();
-  const monthKey = normalizeYearMonth(month) || String(month ?? "").trim();
-  const buildQuery = (monthField) => {
-    const qs = new URLSearchParams();
-    if (monthKey && monthField) qs.set(monthField, monthKey);
-    if (status) qs.set("status", String(status));
-    return qs;
-  };
-  const queryVariants = monthKey
-    ? [buildQuery("month"), buildQuery("monthKey"), buildQuery("cycleKey")]
-    : [buildQuery(null)];
-
-  const endpoints = [
-    "/api/v1/monthly-submissions/admin/all",
-    "/monthly-submissions/admin/all",
-    "/api/v1/monthly-submissions/admin/list",
-    "/monthly-submissions/admin/list",
-  ];
-
-  let lastRouteErr = null;
-  for (const endpoint of endpoints) {
-    for (const qs of queryVariants) {
-      const suffix = qs.toString() ? `?${qs.toString()}` : "";
-      const res = await fetch(buildApiUrl(`${endpoint}${suffix}`), {
-        signal,
-        credentials: "include",
-        headers: auth ? { Authorization: auth } : undefined,
-      });
-      if (res.ok) {
-        const raw = await res.json().catch(() => ([]));
-        const data = raw?.data ?? raw;
-        if (Array.isArray(data)) return data;
-        if (Array.isArray(data?.items)) return data.items;
-        if (Array.isArray(data?.results)) return data.results;
-        if (Array.isArray(data?.content)) return data.content;
-        if (Array.isArray(raw?.items)) return raw.items;
-        if (Array.isArray(raw?.results)) return raw.results;
-        if (Array.isArray(raw?.content)) return raw.content;
-        return [];
-      }
-
-      const err = await toHttpError(res);
-      if (res.status === 404 || res.status === 405) {
-        lastRouteErr = err;
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  throw lastRouteErr || new Error("Monthly submissions endpoint not found.");
+  const page = await fetchAdminMonthlySubmissionsPage({ month, size: 500, signal });
+  const wantedStatus = String(status ?? "").trim().toUpperCase();
+  if (!wantedStatus) return page.items;
+  return page.items.filter((item) => {
+    const normalized = normalizeMonthlySubmission(item);
+    const value = String(
+      normalized?.reviewStatus ??
+      normalized?.status ??
+      item?.reviewStatus ??
+      item?.status ??
+      ""
+    ).trim().toUpperCase();
+    return value === wantedStatus;
+  });
 }
 
 function normalizeScoreBreakdown(raw, fallback = {}) {
@@ -782,55 +745,8 @@ function normalizeScoreBreakdown(raw, fallback = {}) {
 }
 
 export async function fetchMonthlySubmissionScoreBreakdown(payload, { signal } = {}) {
-  const auth = getAuthHeader();
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   const preparedPayload = toRequestPayload(payload);
-  const body = JSON.stringify(preparedPayload);
-  const makeHeaders = () => withCsrfHeaders({
-    "Content-Type": "application/json",
-    ...(auth ? { Authorization: auth } : {}),
-  });
-
-  const endpoints = [
-    "/api/v1/monthly-submissions/score-breakdown",
-    "/monthly-submissions/score-breakdown",
-  ];
-
-  for (const endpoint of endpoints) {
-    let res = await fetch(buildApiUrl(endpoint), {
-      method: "POST",
-      signal,
-      credentials: "include",
-      headers: makeHeaders(),
-      body,
-    });
-
-    if (res.status === 403) {
-      await ensureCsrfCookie({
-        signal,
-        headers: auth ? { Authorization: auth } : undefined,
-        forceRefresh: true,
-      }).catch(() => {});
-      res = await fetch(buildApiUrl(endpoint), {
-        method: "POST",
-        signal,
-        credentials: "include",
-        headers: makeHeaders(),
-        body,
-      });
-    }
-
-    if (res.ok) {
-      const raw = await res.json().catch(() => ({}));
-      return normalizeScoreBreakdown(raw, preparedPayload);
-    }
-
-    if (res.status === 404 || res.status === 405) {
-      continue;
-    }
-
-    throw await toHttpError(res);
-  }
-
   return normalizeScoreBreakdown({}, preparedPayload);
 }
 
@@ -857,42 +773,26 @@ function normalizeAdminOverview(raw, fallback = {}) {
 }
 
 export async function fetchAdminMonthlyOverview({ month, cycleKey, signal } = {}) {
-  const auth = getAuthHeader();
-  const qs = new URLSearchParams();
-  if (month) qs.set("month", String(month));
-  if (cycleKey) qs.set("cycleKey", String(cycleKey));
-  const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  const endpoints = [
-    `/api/v1/monthly-submissions/admin-overview${suffix}`,
-    `/monthly-submissions/admin-overview${suffix}`,
-  ];
-
-  for (const endpoint of endpoints) {
-    const res = await fetch(buildApiUrl(endpoint), {
-      signal,
-      credentials: "include",
-      headers: auth ? { Authorization: auth } : undefined,
-    });
-    if (res.ok) {
-      const raw = await res.json().catch(() => ({}));
-      return normalizeAdminOverview(raw, { month, cycleKey });
-    }
-    if (res.status === 404 || res.status === 405) {
-      continue;
-    }
-    throw await toHttpError(res);
-  }
-
-  return normalizeAdminOverview({}, { month, cycleKey });
+  const page = await fetchAdminMonthlySubmissionsPage({ month, cycleKey, size: 500, signal });
+  const normalized = page.items.map((item) => normalizeMonthlySubmission(item)).filter(Boolean);
+  const managerReviewedCount = normalized.filter((item) => Boolean(item.managerSubmittedAt || item.managerSubmitted)).length;
+  const pendingManagerReviews = Math.max((page.total ?? normalized.length) - managerReviewedCount, 0);
+  return normalizeAdminOverview(
+    {
+      month,
+      cycleKey: resolveCycleKey({ month, cycleKey }),
+      totalSubmissions: page.total ?? normalized.length,
+      pendingManagerReviews,
+      managerReviewedCount,
+    },
+    { month, cycleKey }
+  );
 }
 
 export async function deleteAdminMonthlySubmission(submissionId, { signal } = {}) {
   const safeId = encodeURIComponent(String(submissionId));
   const auth = getAuthHeader();
-  const endpoints = [
-    `/api/v1/monthly-submissions/admin/${safeId}`,
-    `/monthly-submissions/admin/${safeId}`,
-  ];
+  const endpoints = [`/api/v1/admin/monthly-submissions/${safeId}`];
   let lastRouteErr = null;
   for (const endpoint of endpoints) {
     const res = await fetch(buildApiUrl(endpoint), {
@@ -916,16 +816,141 @@ export async function deleteAdminMonthlySubmission(submissionId, { signal } = {}
   throw lastRouteErr || new Error("Admin monthly submission delete endpoint not found.");
 }
 
+export function normalizeEmployeeSubmissionCycleSummary(raw) {
+  const obj =
+    raw && typeof raw === "object"
+      ? raw.data !== undefined && typeof raw.data === "object"
+        ? raw.data
+        : raw
+      : null;
+  if (!obj || typeof obj !== "object") return null;
+  const ae = obj.averageEmployeeScore;
+  const am = obj.averageManagerScore;
+  return {
+    submissionCount: Number(obj.submissionCount ?? 0) || 0,
+    months: Array.isArray(obj.months) ? obj.months : [],
+    averageEmployeeScore:
+      ae != null && ae !== "" && Number.isFinite(Number(ae)) ? Number(ae) : ae ?? null,
+    averageManagerScore:
+      am != null && am !== "" && Number.isFinite(Number(am)) ? Number(am) : am ?? null,
+    monthlySubmissions: Array.isArray(obj.monthlySubmissions) ? obj.monthlySubmissions : [],
+    raw: obj,
+  };
+}
+
 /**
- * GET /monthly-submissions/cycles
+ * POST `/api/v1/submission-cycles/{cycleKey}/employees/{employeeId}/monthly-submissions`
+ * Creates one monthly submission row for the cycle (same payload shape as other submit helpers).
+ */
+export async function createMonthlySubmissionPair({ cycleKey, employeeId, payload }, { signal } = {}) {
+  const path = submissionCycleMonthlySubmissionsPath(cycleKey, employeeId);
+  if (!path) throw new Error("cycleKey and employeeId are required.");
+  await ensureCsrfCookie({ signal });
+  const auth = getAuthHeader();
+  const preparedPayload = toMonthlySubmissionDtoPayload({
+    ...(payload ?? {}),
+    cycleKey,
+    employeeId,
+  });
+
+  const candidates = [
+    { method: "POST", path },
+    // Some deployments expose the same controller without the /api/v1 prefix.
+    { method: "POST", path: path.replace(/^\/api\/v1\//, "/") },
+  ];
+
+  return requestWithFallbacks(candidates, {
+    signal,
+    headers: withCsrfHeaders({
+      "Content-Type": "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    }),
+    body: JSON.stringify(preparedPayload),
+    notFoundMessage: "Create monthly submission endpoint not found.",
+    parseFallback: {},
+  });
+}
+
+/**
+ * GET `/api/v1/submission-cycles/{cycleKey}/employees/{employeeId}/monthly-submissions`
+ */
+export async function fetchEmployeeCycleMonthlySubmissions({ cycleKey, employeeId, signal } = {}, { signal: outerSignal } = {}) {
+  const finalSignal = outerSignal ?? signal;
+  const path = submissionCycleMonthlySubmissionsPath(cycleKey, employeeId);
+  if (!path) throw new Error("cycleKey and employeeId are required.");
+  const auth = getAuthHeader();
+  const candidates = [path, path.replace(/^\/api\/v1\//, "/")];
+  const raw = await requestWithFallbacks(candidates, {
+    signal: finalSignal,
+    headers: auth ? { Authorization: auth } : undefined,
+    notFoundMessage: "Employee cycle monthly submissions endpoint not found.",
+    parseFallback: [],
+  });
+  return unwrapGenericArray(raw);
+}
+
+/**
+ * GET `/api/v1/submission-cycles/{cycleKey}/employees/{employeeId}/summary`
+ */
+export async function fetchEmployeeSubmissionCycleSummary({ cycleKey, employeeId, signal } = {}, { signal: outerSignal } = {}) {
+  const finalSignal = outerSignal ?? signal;
+  const ck = String(cycleKey ?? "").trim();
+  const id = String(employeeId ?? "").trim();
+  if (!ck || !id) throw new Error("cycleKey and employeeId are required.");
+  const auth = getAuthHeader();
+  const path = `/api/v1/submission-cycles/${encodeURIComponent(ck)}/employees/${encodeURIComponent(id)}/summary`;
+  const candidates = [path, path.replace(/^\/api\/v1\//, "/")];
+  const raw = await requestWithFallbacks(candidates, {
+    signal: finalSignal,
+    headers: auth ? { Authorization: auth } : undefined,
+    notFoundMessage: "Employee cycle summary endpoint not found.",
+    parseFallback: {},
+  });
+  return normalizeEmployeeSubmissionCycleSummary(raw);
+}
+
+export function normalizeEmployeeSubmissionCyclesList(raw) {
+  const root = raw?.data !== undefined ? raw.data : raw;
+  if (Array.isArray(root)) return root;
+  if (Array.isArray(root?.cycles)) return root.cycles;
+  if (Array.isArray(root?.items)) return root.items;
+  if (Array.isArray(root?.summaries)) return root.summaries;
+  if (root && typeof root === "object") {
+    const byKey = root.byCycleKey ?? root.cyclesByKey;
+    if (byKey && typeof byKey === "object" && !Array.isArray(byKey)) {
+      return Object.entries(byKey).map(([cycleKey, summary]) =>
+        summary && typeof summary === "object" ? { cycleKey, ...summary } : { cycleKey, summary }
+      );
+    }
+  }
+  return [];
+}
+
+/**
+ * GET `/api/v1/employees/{employeeId}/submission-cycles`
+ */
+export async function fetchEmployeeSubmissionCycles(employeeId, { signal } = {}) {
+  const id = String(employeeId ?? "").trim();
+  if (!id) throw new Error("employeeId is required.");
+  const auth = getAuthHeader();
+  const path = `/api/v1/employees/${encodeURIComponent(id)}/submission-cycles`;
+  const candidates = [path, path.replace(/^\/api\/v1\//, "/")];
+  const raw = await requestWithFallbacks(candidates, {
+    signal,
+    headers: auth ? { Authorization: auth } : undefined,
+    notFoundMessage: "Employee submission cycles endpoint not found.",
+    parseFallback: [],
+  });
+  return normalizeEmployeeSubmissionCyclesList(raw);
+}
+
+/**
+ * GET /api/v1/submission-cycles
  * Fetches available review cycles from the server.
  */
 export async function fetchSubmissionCycles({ signal } = {}) {
   const auth = getAuthHeader();
-  const endpoints = [
-    "/api/v1/list-submission-cycles",
-    "/monthly-submissions/cycles",
-  ];
+  const endpoints = ["/api/v1/submission-cycles"];
   let lastRouteErr = null;
   for (const endpoint of endpoints) {
     const res = await fetch(buildApiUrl(endpoint), {
@@ -948,10 +973,7 @@ export async function fetchSubmissionCycleById(id, { signal } = {}) {
   const safeId = encodeURIComponent(String(id ?? "").trim());
   if (!safeId) throw new Error("Submission cycle id is required.");
   const auth = getAuthHeader();
-  const endpoints = [
-    `/api/v1/get-submission-cycle/${safeId}`,
-    `/monthly-submissions/cycles/${safeId}`,
-  ];
+  const endpoints = [`/api/v1/submission-cycles/${safeId}`];
   let lastRouteErr = null;
   for (const endpoint of endpoints) {
     const res = await fetch(buildApiUrl(endpoint), {
@@ -1094,60 +1116,43 @@ export async function deleteSubmissionCycle(id, { signal } = {}) {
 
 export async function submitAdminReviewDecision(payload, { signal } = {}) {
   const auth = getAuthHeader();
-  const preparedPayload = toRequestPayload(payload);
+  const submissionId = String(payload?.submissionId ?? payload?.id ?? "").trim();
+  if (!submissionId) throw new Error("submissionId is required.");
+  const preparedPayload = toMonthlySubmissionDtoPayload(payload);
   const baseHeaders = {
     "Content-Type": "application/json",
     ...(auth ? { Authorization: auth } : {}),
   };
-  const endpoints = [
-    "/api/v1/monthly-submissions/admin/review",
-    "/api/v1/monthly-submissions/admin/reviews",
-    "/api/v1/monthly-submissions/admin/decision",
-    "/monthly-submissions/admin/review",
-    "/monthly-submissions/admin/reviews",
-    "/monthly-submissions/admin/decision",
-  ];
+  const endpoint = `/api/v1/admin/monthly-submissions/${encodeURIComponent(submissionId)}`;
 
-  for (const endpoint of endpoints) {
-    let res = await fetch(buildApiUrl(endpoint), {
-      method: "POST",
+  let res = await fetch(buildApiUrl(endpoint), {
+    method: "PATCH",
+    signal,
+    credentials: "include",
+    headers: withCsrfHeaders(baseHeaders),
+    body: JSON.stringify(preparedPayload),
+  });
+
+  if (!res.ok && res.status === 403) {
+    await ensureCsrfCookie({
+      signal,
+      headers: auth ? { Authorization: auth } : undefined,
+      forceRefresh: true,
+    });
+    res = await fetch(buildApiUrl(endpoint), {
+      method: "PATCH",
       signal,
       credentials: "include",
       headers: withCsrfHeaders(baseHeaders),
       body: JSON.stringify(preparedPayload),
     });
-
-    if (!res.ok && res.status === 403) {
-      await ensureCsrfCookie({
-        signal,
-        headers: auth ? { Authorization: auth } : undefined,
-        forceRefresh: true,
-      });
-      res = await fetch(buildApiUrl(endpoint), {
-        method: "POST",
-        signal,
-        credentials: "include",
-        headers: withCsrfHeaders(baseHeaders),
-        body: JSON.stringify(preparedPayload),
-      });
-    }
-
-    if (res.ok) {
-      const contentType = res.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) return res.json().catch(() => ({}));
-      return res.text().catch(() => "");
-    }
-
-    const err = await toHttpError(res);
-    if (res.status === 404 || res.status === 405) {
-      continue;
-    }
-    throw err;
   }
 
-  const action = String(preparedPayload?.adminReview?.action ?? "").trim().toUpperCase();
-  if (action === "REJECT") {
-    return saveMonthlyDraft(preparedPayload, { signal });
+  if (res.ok) {
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) return res.json().catch(() => ({}));
+    return res.text().catch(() => "");
   }
-  return submitMonthlySubmission(preparedPayload, { signal });
+
+  throw await toHttpError(res);
 }

@@ -28,6 +28,7 @@ function toWindowResponse(raw, fallback = {}) {
     obj?.openAt ??
     obj?.openFrom ??
     obj?.opensAt ??
+    obj?.windowStartAt ??
     obj?.startDate ??
     obj?.windowStart ??
     fallback.startAt ??
@@ -38,6 +39,7 @@ function toWindowResponse(raw, fallback = {}) {
     obj?.closeAt ??
     obj?.closeFrom ??
     obj?.closesAt ??
+    obj?.windowEndAt ??
     obj?.endDate ??
     obj?.windowEnd ??
     fallback.endAt ??
@@ -88,10 +90,7 @@ export async function fetchMonthlySubmissions({ cycleKey, scope, signal } = {}) 
   if (String(scope ?? "").trim()) qs.set("scope", normalizedScope);
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
 
-  const endpoints = [
-    `/api/v1/monthly-submissions${suffix}`,
-    `/monthly-submissions${suffix}`,
-  ];
+  const endpoints = [`/api/v1/submission-cycles${suffix}`];
 
   let lastRouteErr = null;
   for (const endpoint of endpoints) {
@@ -120,13 +119,11 @@ export async function fetchCurrentMonthlySubmission(scope, { signal } = {}) {
   const auth = getAuthHeader();
   const qs = new URLSearchParams();
   const normalizedScope = normalizeScope(scope);
+  qs.set("cycleKey", monthCycleKey());
   if (String(scope ?? "").trim()) qs.set("scope", normalizedScope);
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
 
-  const endpoints = [
-    `/api/v1/monthly-submissions/current${suffix}`,
-    `/monthly-submissions/current${suffix}`,
-  ];
+  const endpoints = [`/api/v1/submission-cycles/search${suffix}`];
   let lastRouteErr = null;
 
   for (const endpoint of endpoints) {
@@ -171,32 +168,31 @@ export async function upsertMonthlySubmissionWindow({
   const auth = getAuthHeader();
   const normalizedScope = normalizeScope(scope);
   const key = String(cycleKey || monthCycleKey()).trim();
+  const existing = await fetchCurrentMonthlySubmission(normalizedScope, { signal }).catch(() => null);
+  const existingId = existing?.id ?? existing?.submissionCycleId ?? null;
+  const resolvedStartAt = startAt ?? existing?.startAt ?? new Date().toISOString();
 
   const payload = {
+    ...(existingId != null ? { id: existingId } : {}),
     cycleKey: key,
-    monthKey: key,
     scope: normalizedScope,
-    startAt: startAt ?? null,
-    start: startAt ?? null,
-    openAt: startAt ?? null,
-    endAt: endAt ?? null,
-    end: endAt ?? null,
-    closeAt: endAt ?? null,
+    windowStartAt: resolvedStartAt,
+    windowEndAt: endAt ?? existing?.endAt ?? null,
     manualClosed: Boolean(manualClosed),
-    ...(typeof isOpen === "boolean" ? { isOpen, open: isOpen, active: isOpen } : {}),
+    updatedBy: "frontend",
   };
+  if (typeof isOpen === "boolean") payload.manualClosed = !isOpen;
 
   await ensureCsrfCookie({ signal });
 
-  const endpoints = [
-    "/api/v1/monthly-submissions/upsert",
-    "/monthly-submissions/upsert",
-  ];
+  const endpoints = existingId != null
+    ? [{ method: "PUT", path: `/api/v1/submission-cycles/${encodeURIComponent(String(existingId))}` }]
+    : [{ method: "POST", path: "/api/v1/submission-cycles" }];
   let lastRouteErr = null;
 
   for (const endpoint of endpoints) {
-    const res = await fetch(buildApiUrl(endpoint), {
-      method: "POST",
+    const res = await fetch(buildApiUrl(endpoint.path), {
+      method: endpoint.method,
       signal,
       credentials: "include",
       headers: withCsrfHeaders({
@@ -320,52 +316,40 @@ export async function openSubmissionWindowForEmployeeNow(employeeId, { signal } 
   const id = String(employeeId ?? "").trim();
   if (!id) throw new Error("employeeId is required.");
 
-  const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/submission-window/employee/open-now"), {
-    method: "POST",
+  const now = new Date();
+  const defaultEnd = new Date(now);
+  defaultEnd.setDate(defaultEnd.getDate() + 1);
+  const response = await upsertMonthlySubmissionWindow({
+    cycleKey: monthCycleKey(),
+    scope: "EMPLOYEE",
+    startAt: now.toISOString(),
+    endAt: defaultEnd.toISOString(),
+    manualClosed: false,
+    isOpen: true,
     signal,
-    credentials: "include",
-    headers: withCsrfHeaders({
-      "Content-Type": "application/json",
-      ...(auth ? { Authorization: auth } : {}),
-    }),
-    body: JSON.stringify({ employeeId: id }),
   });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json();
+  return { ...response, employeeId: id };
 }
 
 export async function closeSubmissionWindowForEmployeeNow(employeeId, { signal } = {}) {
   const id = String(employeeId ?? "").trim();
   if (!id) throw new Error("employeeId is required.");
 
-  const auth = getAuthHeader();
-  const safeId = encodeURIComponent(id);
-  const res = await fetch(buildApiUrl(`/submission-window/employee/${safeId}/close-now`), {
-    method: "POST",
+  const response = await upsertMonthlySubmissionWindow({
+    cycleKey: monthCycleKey(),
+    scope: "EMPLOYEE",
+    endAt: new Date().toISOString(),
+    manualClosed: true,
+    isOpen: false,
     signal,
-    credentials: "include",
-    headers: withCsrfHeaders({
-      "Content-Type": "application/json",
-      ...(auth ? { Authorization: auth } : {}),
-    }),
-    body: JSON.stringify({}),
   });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json();
+  return { ...response, employeeId: id };
 }
 
 export async function fetchEmployeeSubmissionWindowStatus(employeeId, { signal } = {}) {
   const id = String(employeeId ?? "").trim();
   if (!id) throw new Error("employeeId is required.");
 
-  const auth = getAuthHeader();
-  const safeId = encodeURIComponent(id);
-  const res = await fetch(buildApiUrl(`/submission-window/employee/${safeId}`), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json();
+  const response = await fetchCurrentMonthlySubmission("EMPLOYEE", { signal });
+  return { ...response, employeeId: id };
 }

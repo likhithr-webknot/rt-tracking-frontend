@@ -52,6 +52,7 @@ function canonicalRoleFromKey(key) {
   const k = normalizeRoleKey(key);
   if (!k) return "";
   if (k.includes("admin") || k === "hr") return "Admin";
+  if (k.includes("finance") || k.includes("asset")) return "Admin";
   if (k.includes("manager")) return "Manager";
   if (k.includes("employee") || k.includes("user")) return "Employee";
   return "";
@@ -97,6 +98,7 @@ function bestRole(...values) {
 
   // Privilege precedence: Admin > Manager > Employee.
   if (keys.some((k) => k.includes("admin") || k === "hr")) return "Admin";
+  if (keys.some((k) => k.includes("finance") || k.includes("asset"))) return "Admin";
   if (keys.some((k) => k.includes("manager"))) return "Manager";
   if (keys.some((k) => k.includes("employee") || k.includes("user"))) return "Employee";
 
@@ -547,7 +549,7 @@ export async function fetchMe({ signal } = {}) {
     }
     const raw = await res.json().catch(() => ({}));
     const normalized = normalizeMePayload(raw);
-    // Always prefer dedicated role endpoint when available.
+    const roleFromProfile = extractRole(normalized);
     const roleHintEmail =
       normalized?.email ??
       normalized?.employeeEmail ??
@@ -555,8 +557,28 @@ export async function fetchMe({ signal } = {}) {
       normalized?.claims?.sub ??
       "";
     const roleHint = await fetchRoleHint({ signal, headers, email: roleHintEmail }).catch(() => "");
-    if (!roleHint) return normalized;
-    return { ...normalized, role: roleHint };
+    const header = getAuthHeader();
+    let roleFromJwt = "";
+    if (header) {
+      const h = String(header).trim();
+      const bearer = /^Bearer\s+(.+)$/i.exec(h);
+      const token = bearer ? bearer[1].trim() : h;
+      if (token) {
+        const payload = decodeJwtPayload(token);
+        if (payload && typeof payload === "object") {
+          roleFromJwt = extractRole(payload);
+        }
+      }
+    }
+    // Merge profile, JWT, and /user/role so a wrong hint cannot downgrade ADMIN from the token.
+    const mergedRole = firstNonEmptyString(
+      bestRole(roleFromJwt, roleFromProfile, roleHint, normalized?.role),
+      roleHint,
+      roleFromProfile,
+      normalized?.role
+    );
+    if (!mergedRole) return normalized;
+    return { ...normalized, role: mergedRole };
   }
 
   if (lastNon404Error) throw lastNon404Error;

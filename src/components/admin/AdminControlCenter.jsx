@@ -3,7 +3,7 @@ import { AnimatePresence, motion as Motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Settings, LogOut, ChevronLeft, ChevronRight,
   ClipboardCheck, Search, Plus, Trash2, Edit3, Sparkles, Target, Award, Bot, X, Layers3,
-  Bell, BellDot, CheckCheck, FileUp, Calendar, RefreshCw, FileBarChart2, ChevronDown, FolderKanban
+  Bell, BellDot, CheckCheck, FileUp, Calendar, RefreshCw, FileBarChart2, ChevronDown, FolderKanban, ServerCog
 } from "lucide-react";
 
 import AdminDashboard from "./AdminDashboard.jsx";
@@ -16,6 +16,7 @@ import SettingsPanel from "./SettingsPanel.jsx";
 import WebknotValueDirectory from "./WebknotValueDirectory.jsx";
 import BandStreamDirectory from "./BandStreamDirectory.jsx";
 import CsvImportPanel from "./CsvImportPanel.jsx";
+import OperationsWorkspace from "./OperationsWorkspace.jsx";
 import ConfirmDialog from "../shared/ConfirmDialog.jsx";
 import Toast from "../shared/Toast.jsx";
 import ThemeToggle from "../shared/ThemeToggle.jsx";
@@ -85,6 +86,7 @@ const Sidebar = ({ isOpen, setIsOpen, activeTab, setActiveTab, onLogout, account
     { id: "band-streams", icon: <Layers3 size={20} />, label: "Bands & Streams" },
     { id: "certifications", icon: <Award size={20} />, label: "Certifications" },
     { id: "values", icon: <Sparkles size={20} />, label: "Webknot Values" },
+    { id: "operations", icon: <ServerCog size={20} />, label: "API Operations" },
     { id: "csv-import", icon: <FileUp size={20} />, label: "CSV Import" },
     ...(isAdmin ? [{ id: "agents", icon: <Bot size={20} />, label: "AI Agents" }] : []),
     { id: "settings", icon: <Settings size={20} />, label: "Settings" },
@@ -535,7 +537,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
   const VALID_TABS = useMemo(() => new Set([
     "dashboard", "submissions", "directory", "kpi", "band-streams",
-    "certifications", "values", "csv-import", "agents", "settings",
+    "certifications", "values", "operations", "csv-import", "agents", "settings",
   ]), []);
 
   const getTabFromPath = useCallback(() => {
@@ -2481,6 +2483,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
         )}
 
         {activeTab === "band-streams" && <BandStreamDirectory />}
+
+        {activeTab === "operations" && <OperationsWorkspace />}
 
         {activeTab === "csv-import" && (
           <CsvImportPanel

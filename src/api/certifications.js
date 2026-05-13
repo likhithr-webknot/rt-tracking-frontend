@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { getApiBaseUrl, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
 
 function toNullableBoolean(value) {
   if (value == null) return null;
@@ -119,41 +119,47 @@ function extractItemsArrayFromResponse(raw) {
   return [];
 }
 
-function buildCertificationsUrl(path) {
-  const base = getApiBaseUrl();
-  const normalizedPath = String(path || "").startsWith("/") ? String(path) : `/${path}`;
-  if (!base) return normalizedPath;
-
-  // Some backend endpoints are mounted at `/certifications` (no `/api/v1`),
-  // while our app setting may include `/api/v1`. Strip `/api/v1` when present.
-  const suffix = "/api/v1";
-  const baseNoApiV1 = base.endsWith(suffix) ? base.slice(0, -suffix.length) : base;
-  return `${baseNoApiV1}${normalizedPath}`;
-}
-
 export async function fetchCertifications({ limit = null, cursor = null, signal } = {}) {
   const auth = getAuthHeader();
 
-  // Your backend mapping uses: GET /certifications?limit={limit}&offset={offset}
-  // The UI pager passes `cursor`, so we interpret cursor as `offset`.
+  // Webtrak uses Spring Page params: GET /api/v1/certifications?page={page}&size={size}.
+  // The UI pager passes `cursor`, so we keep cursor as an offset and translate it to a page.
   const fallbackLimit = 20;
   const resolvedLimit = limit != null ? Number.parseInt(String(limit), 10) : fallbackLimit;
   const safeLimit = Number.isFinite(resolvedLimit) && resolvedLimit > 0 ? resolvedLimit : fallbackLimit;
   const resolvedOffset = cursor != null ? Number.parseInt(String(cursor), 10) : 0;
   const safeOffset = Number.isFinite(resolvedOffset) && resolvedOffset >= 0 ? resolvedOffset : 0;
+  const safePage = Math.floor(safeOffset / safeLimit);
 
-  const suffix = `?limit=${encodeURIComponent(String(safeLimit))}&offset=${encodeURIComponent(String(safeOffset))}`;
-  const res = await fetch(buildCertificationsUrl(`/certifications${suffix}`), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
+  const suffix = `?page=${encodeURIComponent(String(safePage))}&size=${encodeURIComponent(String(safeLimit))}`;
 
-  if (!res.ok) {
-    throw await toHttpError(res);
+  const endpoints = [
+    `/api/v1/certifications${suffix}`,
+    `/api/v1/certification-list${suffix}`,
+  ];
+
+  let raw = null;
+  let lastRouteErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) {
+      raw = await res.json().catch(() => ({}));
+      break;
+    }
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastRouteErr = err;
+      continue;
+    }
+    throw err;
   }
 
-  const raw = await res.json().catch(() => ({}));
+  if (raw == null) throw lastRouteErr || new Error("Certifications endpoint not found.");
+
   const items = extractItemsArrayFromResponse(raw);
   const nextCursor = items.length === safeLimit ? String(safeOffset + safeLimit) : null;
   return { items, nextCursor };
@@ -164,7 +170,7 @@ export async function fetchCertification(id, { signal } = {}) {
   if (!safeId) throw new Error("Certification id is required.");
 
   const auth = getAuthHeader();
-  const res = await fetch(buildCertificationsUrl(`/certifications/get/${safeId}`), {
+  const res = await fetch(buildApiUrl(`/api/v1/certifications/${safeId}`), {
     signal,
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
@@ -184,7 +190,7 @@ export async function addCertification({ name, listed = true }, { signal } = {})
     name: String(name || "").trim(),
     ...(active != null ? { active } : {}),
   });
-  const res = await fetch(buildCertificationsUrl("/certifications/add-certification"), {
+  const res = await fetch(buildApiUrl("/api/v1/certifications"), {
     method: "POST",
     signal,
     credentials: "include",
@@ -218,7 +224,7 @@ export async function updateCertification(id, { name, listed = true }, { signal 
     ...(auth ? { Authorization: auth } : {}),
   });
 
-  const res = await fetch(buildCertificationsUrl(`/certifications/update/${safeId}`), {
+  const res = await fetch(buildApiUrl(`/api/v1/certifications/${safeId}`), {
     method: "PUT",
     signal,
     credentials: "include",
@@ -233,7 +239,7 @@ export async function deleteCertification(id, { signal } = {}) {
   const safeId = encodeURIComponent(String(id));
   const auth = getAuthHeader();
   const headers = withCsrfHeaders(auth ? { Authorization: auth } : {});
-  const res = await fetch(buildCertificationsUrl(`/certifications/delete/${safeId}`), {
+  const res = await fetch(buildApiUrl(`/api/v1/certifications/${safeId}`), {
     method: "DELETE",
     signal,
     credentials: "include",

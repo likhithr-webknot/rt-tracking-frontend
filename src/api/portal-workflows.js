@@ -1,5 +1,11 @@
 import { getAuthHeader } from "./auth.js";
 import { buildApiUrl, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
+import {
+  createUserRequest as createUserRequestMultipart,
+  deleteUserRequest as deleteUserRequestApi,
+  updateUserRequest as updateUserRequestMultipart,
+  updateUserRequestStatus as updateUserRequestStatusApi,
+} from "./user-requests.js";
 
 function trim(value) {
   return String(value ?? "").trim();
@@ -100,7 +106,8 @@ export async function updateTimelogEntry(payload = {}, { signal } = {}) {
 }
 
 export async function createUserRequest(payload = {}, { signal } = {}) {
-  return requestJson("/api/v1/userRequest", { method: "POST", payload, signal });
+  const { file = null, ...requestPayload } = payload && typeof payload === "object" ? payload : {};
+  return createUserRequestMultipart(requestPayload, { file, signal });
 }
 
 export async function fetchUserRequest(pathSuffix = "", { signal } = {}) {
@@ -112,11 +119,12 @@ export async function fetchUserRequestByCreateDate(pathSuffix = "", { signal } =
 }
 
 export async function updateUserRequest(payload = {}, { signal } = {}) {
-  return requestJson("/api/v1/userRequest", { method: "PUT", payload, signal });
+  const { file = null, ...requestPayload } = payload && typeof payload === "object" ? payload : {};
+  return updateUserRequestMultipart(requestPayload, { file, signal });
 }
 
 export async function deleteUserRequest(payload = {}, { signal } = {}) {
-  return requestJson("/api/v1/userRequest", { method: "DELETE", payload, signal });
+  return deleteUserRequestApi(payload?.userRequestId ?? payload?.id ?? payload, { signal });
 }
 
 export async function createAllocationExtensionRequest(payload = {}, { signal } = {}) {
@@ -157,7 +165,7 @@ export async function exportTimelogs(pathSuffix = "", { signal } = {}) {
 }
 
 export async function updateUserRequestStatus(payload = {}, { signal } = {}) {
-  return requestJson("/api/v1/userRequest/status", { method: "PUT", payload, signal });
+  return updateUserRequestStatusApi(payload, { signal });
 }
 
 export async function createAllocation(payload = {}, { signal } = {}) {

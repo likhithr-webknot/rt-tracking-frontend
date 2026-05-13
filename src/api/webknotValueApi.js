@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { getApiBaseUrl, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, parseResponse, toHttpError, withCsrfHeaders } from "./http.js";
 
 function toCleanString(value, depth = 0) {
     if (value == null) return "";
@@ -60,16 +60,7 @@ function pickDeep(obj, keys, depth = 0) {
 }
 
 function buildWebknotValueUrl(path) {
-    const p = String(path || "");
-    const normalizedPath = p.startsWith("/") ? p : `/${p}`;
-    const base = getApiBaseUrl();
-    if (!base) return normalizedPath;
-
-    // Backend controller is mounted at `/webknot-value/*` (no `/api/v1`),
-    // but our app base URL may be configured as `.../api/v1`.
-    const suffix = "/api/v1";
-    const baseNoApiV1 = base.endsWith(suffix) ? base.slice(0, -suffix.length) : base;
-    return `${baseNoApiV1}${normalizedPath}`;
+    return buildApiUrl(path);
 }
 
 function makeFallbackId(title, index) {
@@ -167,10 +158,9 @@ export async function fetchValues(activeOnly = true, { limit = null, cursor = nu
     qs.set("_ts", Date.now().toString()); // cache-buster
 
     const endpoints = [
-        // Actual controller routes in this backend are mounted at `/webknot-value/*` (no `/api/v1`, no plural).
-        `/webknot-value/list?${qs.toString()}`,
-        // Backwards compatibility: older deployments might be mounted at `/api/v1`.
         `/api/v1/webknot-value/list?${qs.toString()}`,
+        `/api/v1/webknot-values/list?${qs.toString()}`,
+        `/api/v1/webknot-values?${qs.toString()}`,
     ];
 
     let lastRouteErr = null;
@@ -263,7 +253,7 @@ export async function addValue(data) {
         "Content-Type": "application/json",
         ...(auth ? { Authorization: auth } : {}),
     });
-    const endpoints = ["/webknot-value/add", "/api/v1/webknot-value/add"];
+    const endpoints = ["/api/v1/webknot-value/add", "/api/v1/webknot-value"];
     let lastRouteErr = null;
 
     for (const endpoint of endpoints) {
@@ -318,15 +308,9 @@ export async function updateValue(id, data) {
         ...(auth ? { Authorization: auth } : {}),
     });
     const endpoints = [
-        // Primary controller routes (no `/api/v1`)
-        { method: "PUT", path: `/webknot-value/update/${safeId}` },
-        { method: "PATCH", path: `/webknot-value/update/${safeId}` },
-        { method: "POST", path: `/webknot-value/update/${safeId}` },
-        { method: "PUT", path: `/webknot-value/edit/${safeId}` },
-        { method: "PATCH", path: `/webknot-value/edit/${safeId}` },
-        { method: "POST", path: `/webknot-value/edit/${safeId}` },
-
-        // Backwards compatibility for older mounts.
+        { method: "PUT", path: `/api/v1/webknot-value/${safeId}` },
+        { method: "PATCH", path: `/api/v1/webknot-value/${safeId}` },
+        { method: "POST", path: `/api/v1/webknot-value/${safeId}` },
         { method: "PUT", path: `/api/v1/webknot-value/update/${safeId}` },
         { method: "PATCH", path: `/api/v1/webknot-value/update/${safeId}` },
         { method: "POST", path: `/api/v1/webknot-value/update/${safeId}` },
@@ -360,7 +344,7 @@ export async function deleteValue(id) {
     if (!safeId) throw new Error("Value id is required.");
     const auth = getAuthHeader();
     const headers = withCsrfHeaders(auth ? { Authorization: auth } : undefined);
-    const endpoints = [`/webknot-value/delete/${safeId}`, `/api/v1/webknot-value/delete/${safeId}`];
+    const endpoints = [`/api/v1/webknot-value/${safeId}`, `/api/v1/webknot-value/delete/${safeId}`];
     let lastRouteErr = null;
     for (const endpoint of endpoints) {
         const res = await fetch(buildWebknotValueUrl(endpoint), {

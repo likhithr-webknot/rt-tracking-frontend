@@ -12,6 +12,8 @@ export const CSV_ENTITY_MAP = {
   "kpi-definitions": "kpi-definitions",
   certifications: "certifications",
   "designation-lookups": "designation-lookups",
+  "monthly-submissions": "monthly-submissions",
+  projects: "projects",
 };
 
 /**
@@ -26,6 +28,8 @@ export const CSV_BULK_FIELD_MAP = {
   kpiDefinitions: "kpiDefinitions",
   certifications: "certifications",
   designationLookups: "designationLookups",
+  monthlySubmissions: "monthlySubmissions",
+  projects: "projects",
 };
 
 /**
@@ -48,7 +52,7 @@ export async function importCsvSingle(entity, file, opts = {}) {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(buildApiUrl(`/admin/imports/csv/${entityPath}`), {
+  const res = await fetch(buildApiUrl(`/api/v1/admin/imports/csv/${entityPath}`), {
     method: "POST",
     credentials: "include",
     headers: withCsrfHeaders({}),
@@ -89,7 +93,7 @@ export async function importCsvBulk(filesByField, opts = {}) {
 
   await ensureCsrfCookie({ signal: opts.signal });
 
-  const res = await fetch(buildApiUrl("/admin/imports/csv/all"), {
+  const res = await fetch(buildApiUrl("/api/v1/admin/imports/csv/all"), {
     method: "POST",
     credentials: "include",
     headers: withCsrfHeaders({}),
@@ -105,7 +109,7 @@ export async function importCsvBulk(filesByField, opts = {}) {
 /**
  * Import leave data from CSV file.
  *
- * POST /api/v1/upload/csv
+ * POST /api/v1/upload
  * Content-Type: multipart/form-data  (field name: "file")
  *
  * @param {File}   file    – the CSV File object
@@ -122,7 +126,7 @@ export async function importLeaveDataCsv(file, opts = {}) {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(buildApiUrl("/api/v1/upload/csv"), {
+  const res = await fetch(buildApiUrl("/api/v1/upload"), {
     method: "POST",
     credentials: "include",
     headers: withCsrfHeaders({}),
@@ -138,7 +142,7 @@ export async function importLeaveDataCsv(file, opts = {}) {
 /**
  * Import allocation data from CSV file.
  *
- * POST /api/v1/upload-allocation/csv
+ * POST /api/v1/upload-allocation
  * Content-Type: multipart/form-data  (field name: "file")
  *
  * @param {File}   file    – the CSV File object
@@ -155,7 +159,7 @@ export async function importAllocationsCsv(file, opts = {}) {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(buildApiUrl("/api/v1/upload-allocation/csv"), {
+  const res = await fetch(buildApiUrl("/api/v1/upload-allocation"), {
     method: "POST",
     credentials: "include",
     headers: withCsrfHeaders({}),
@@ -171,7 +175,7 @@ export async function importAllocationsCsv(file, opts = {}) {
 /**
  * Import user data from CSV file.
  *
- * POST /api/v1/upload/user-data/csv
+ * POST /api/v1/upload/user-data
  * Content-Type: multipart/form-data  (field name: "file")
  *
  * @param {File}   file    – the CSV File object
@@ -188,7 +192,7 @@ export async function importUserDataCsv(file, opts = {}) {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(buildApiUrl("/api/v1/upload/user-data/csv"), {
+  const res = await fetch(buildApiUrl("/api/v1/upload/user-data"), {
     method: "POST",
     credentials: "include",
     headers: withCsrfHeaders({}),

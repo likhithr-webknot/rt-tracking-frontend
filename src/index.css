@@ -5,7 +5,7 @@
   :root {
     color-scheme: light;
 
-    --bg: 243 246 250;
+    --bg: 246 248 251;
     --surface: 255 255 255;
     --surface-2: 248 251 253;
     --surface-3: 238 244 249;
@@ -15,10 +15,10 @@
     --text: 17 24 39;
     --muted: 98 112 131;
 
-    --primary: 14 116 144;
+    --primary: 15 118 110;
     --primary-foreground: 255 255 255;
-    --primary-soft: 207 250 254;
-    --primary-hover: 15 130 158;
+    --primary-soft: 204 251 241;
+    --primary-hover: 13 148 136;
     --success: 5 150 105;
     --success-soft: 220 252 231;
     --danger: 185 28 28;
@@ -26,7 +26,7 @@
     --warning: 161 98 7;
     --warning-soft: 254 243 199;
 
-    --sidebar-bg: 15 23 42;
+    --sidebar-bg: 18 24 36;
     --sidebar-text: 226 232 240;
     --sidebar-muted: 148 163 184;
     --sidebar-active: 45 212 191;
@@ -81,16 +81,12 @@
   body {
     margin: 0;
     color: rgb(var(--text));
-    background:
-      radial-gradient(900px 380px at 0% -10%, rgb(var(--primary) / 0.06), transparent 62%),
-      linear-gradient(180deg, rgb(var(--bg)) 0%, rgb(236 241 247) 100%);
+    background: linear-gradient(180deg, rgb(var(--bg)) 0%, rgb(239 243 248) 100%);
     background-attachment: fixed;
   }
 
   .dark body {
-    background:
-      radial-gradient(860px 360px at 4% -12%, rgb(var(--primary) / 0.12), transparent 65%),
-      linear-gradient(180deg, rgb(var(--bg)) 0%, rgb(8 13 22) 100%);
+    background: linear-gradient(180deg, rgb(var(--bg)) 0%, rgb(8 13 22) 100%);
     background-attachment: fixed;
   }
 
@@ -107,7 +103,7 @@
   h5,
   h6 {
     font-family: "Manrope", system-ui, sans-serif;
-    letter-spacing: -0.025em;
+    letter-spacing: 0;
     color: rgb(var(--text));
     margin: 0;
     font-weight: 700;
@@ -260,7 +256,7 @@
   }
 
   .rt-stepper {
-    border-radius: 0.75rem;
+    border-radius: 8px;
     border: 1px solid rgb(var(--border));
     background: rgb(var(--surface));
     padding: 0.625rem;
@@ -270,7 +266,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    border-radius: 0.5rem;
+    border-radius: 6px;
     border: 1px solid rgb(var(--border));
     padding: 0.4rem 0.65rem;
     background: rgb(var(--surface));
@@ -332,13 +328,13 @@
   }
 
   .rt-panel {
-    border-radius: 1rem;
+    border-radius: 8px;
     border: 1px solid rgb(var(--border));
     background: rgb(var(--surface));
     max-width: 100%;
     box-shadow:
       0 1px 2px rgb(15 23 42 / 0.04),
-      0 8px 24px rgb(15 23 42 / 0.06);
+      0 6px 16px rgb(15 23 42 / 0.05);
   }
 
   .dark .rt-panel {
@@ -350,7 +346,7 @@
   }
 
   .rt-panel-subtle {
-    border-radius: 0.9rem;
+    border-radius: 8px;
     border: 1px solid rgb(var(--border));
     background: rgb(var(--surface-2));
     max-width: 100%;
@@ -496,7 +492,7 @@
 
   .rt-input {
     width: 100%;
-    border-radius: 0.75rem;
+    border-radius: 6px;
     border: 1px solid rgb(var(--border));
     background: rgb(var(--surface));
     color: rgb(var(--text));
@@ -551,7 +547,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    border-radius: 0.75rem;
+    border-radius: 6px;
     font-family: "Manrope", system-ui, sans-serif;
     font-weight: 600;
     font-size: 0.875rem;
@@ -591,7 +587,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    border-radius: 0.75rem;
+    border-radius: 6px;
     font-family: "Manrope", system-ui, sans-serif;
     font-weight: 600;
     font-size: 0.875rem;
@@ -605,7 +601,7 @@
     color: rgb(var(--primary-foreground));
     border: 1px solid rgb(var(--primary));
     box-shadow:
-      0 6px 14px rgb(var(--primary) / 0.2),
+      0 4px 10px rgb(var(--primary) / 0.16),
       0 1px 2px rgb(15 23 42 / 0.1);
     transition: background-color 170ms ease, border-color 170ms ease, box-shadow 170ms ease, transform 170ms ease;
   }
@@ -614,7 +610,7 @@
     background: rgb(var(--primary-hover));
     border-color: rgb(var(--primary-hover));
     box-shadow:
-      0 8px 16px rgb(var(--primary) / 0.24),
+      0 5px 12px rgb(var(--primary) / 0.2),
       0 2px 3px rgb(15 23 42 / 0.1);
     transform: translateY(-1px);
   }
@@ -654,7 +650,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    border-radius: 0.75rem;
+    border-radius: 6px;
     font-family: "Manrope", system-ui, sans-serif;
     font-weight: 500;
     font-size: 0.875rem;
@@ -703,7 +699,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    border-radius: 0.75rem;
+    border-radius: 6px;
     font-family: "Manrope", system-ui, sans-serif;
     font-weight: 600;
     font-size: 0.875rem;
@@ -716,12 +712,12 @@
     background: rgb(var(--danger));
     color: #fff;
     border: 1px solid rgb(var(--danger));
-    box-shadow: 0 8px 14px rgb(var(--danger) / 0.2);
+    box-shadow: 0 4px 10px rgb(var(--danger) / 0.16);
     transition: background-color 170ms ease, border-color 170ms ease, box-shadow 170ms ease, transform 170ms ease;
   }
 
   .rt-btn-danger:hover {
-    box-shadow: 0 10px 16px rgb(var(--danger) / 0.24);
+    box-shadow: 0 5px 12px rgb(var(--danger) / 0.2);
     transform: translateY(-1px);
   }
 
@@ -790,7 +786,7 @@
     background: rgb(var(--sidebar-bg));
     color: rgb(var(--sidebar-text));
     border-right: 1px solid rgb(var(--sidebar-border));
-    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.03), 10px 0 28px rgb(2 6 23 / 0.28);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.03), 8px 0 20px rgb(2 6 23 / 0.2);
     transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1), width 520ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 260ms ease;
     will-change: transform, width;
   }
@@ -800,7 +796,7 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.625rem 0.75rem;
-    border-radius: 0.75rem;
+    border-radius: 6px;
     font-size: 0.875rem;
     font-weight: 500;
     color: rgb(var(--sidebar-muted));

@@ -360,9 +360,9 @@ export default function BandStreamDirectory() {
   const activeStreams = streams.filter((x) => x.active).length;
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-        <div>
+    <div className="w-full min-w-0 max-w-7xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <header className="flex w-full min-w-0 flex-col md:flex-row justify-between items-start md:items-end gap-6">
+        <div className="min-w-0">
           <h2 className="rt-title">Bands & Departments</h2>
           <p className="text-slate-500 text-sm mt-2">
             Manage canonical bands and streams used across KPI and employee workflows.
@@ -382,8 +382,8 @@ export default function BandStreamDirectory() {
         </div>
       </header>
 
-      <div className="flex flex-wrap gap-3 items-center justify-between">
-        <div className="relative max-w-xl flex-1 min-w-[260px]">
+      <div className="flex w-full min-w-0 flex-wrap gap-3 items-center justify-between">
+        <div className="relative max-w-xl min-w-0 flex-1 basis-[min(100%,260px)]">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
           <input
             value={query}
@@ -408,29 +408,33 @@ export default function BandStreamDirectory() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <section className="rt-panel overflow-hidden">
+      <div className="grid w-full min-w-0 grid-cols-1 gap-6 xl:grid-cols-2">
+        <section className="rt-panel min-w-0 overflow-hidden">
           <div className="p-6 flex items-center justify-between">
             <div className="rt-section-header">
               <h3 className="rt-section-title">Bands</h3>
               <p className="rt-section-subtitle">Used in employee profiles and KPI mapping.</p>
             </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
+          <div className="min-w-0 overflow-x-auto">
+            <table className="w-full min-w-0 text-left table-fixed">
               <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-slate-500 border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="p-5 font-semibold">Code</th>
+                <th className="w-[22%] p-5 font-semibold">Code</th>
                 <th className="p-5 font-semibold">Label</th>
-                <th className="p-5 font-semibold">Type</th>
-                <th className="p-5 text-right font-semibold">Actions</th>
+                <th className="w-[18%] p-5 font-semibold">Type</th>
+                <th className="w-[140px] p-5 text-right font-semibold">Actions</th>
               </tr>
               </thead>
               <tbody className="divide-y divide-[rgb(var(--border))]">
               {filteredBands.map((row) => (
                 <tr key={`band:${row.code}`} className="hover:bg-[rgb(var(--surface-2))]">
-                  <td className="p-5 font-mono text-[rgb(var(--text))]">{row.code}</td>
-                  <td className="p-5 text-[rgb(var(--text))]">{row.label}</td>
+                  <td className="p-5 font-mono text-[rgb(var(--text))] align-top">
+                    <span className="block truncate" title={row.code}>{row.code}</span>
+                  </td>
+                  <td className="min-w-0 p-5 text-[rgb(var(--text))] align-top">
+                    <span className="block break-words" title={row.label}>{row.label}</span>
+                  </td>
                   <td className="p-5">
                     <span className="inline-flex rounded-lg px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest bg-blue-500/10 text-blue-300">
                       {String(row.bandType || "BOTH")}
@@ -458,28 +462,32 @@ export default function BandStreamDirectory() {
           </div>
         </section>
 
-        <section className="rt-panel overflow-hidden">
+        <section className="rt-panel min-w-0 overflow-hidden">
           <div className="p-6 flex items-center justify-between">
             <div className="rt-section-header">
               <h3 className="rt-section-title">Departments</h3>
               <p className="rt-section-subtitle">Departments in the organization.</p>
             </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
+          <div className="min-w-0 overflow-x-auto">
+            <table className="w-full min-w-0 text-left table-fixed">
               <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-slate-500 border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="p-5 font-semibold">Code</th>
+                <th className="w-[22%] p-5 font-semibold">Code</th>
                 <th className="p-5 font-semibold">Label</th>
-                <th className="p-5 font-semibold">State</th>
-                <th className="p-5 text-right font-semibold">Actions</th>
+                <th className="w-[18%] p-5 font-semibold">State</th>
+                <th className="w-[160px] p-5 text-right font-semibold">Actions</th>
               </tr>
               </thead>
               <tbody className="divide-y divide-[rgb(var(--border))]">
               {filteredStreams.map((row) => (
                 <tr key={`stream:${row.code}`} className="hover:bg-[rgb(var(--surface-2))]">
-                  <td className="p-5 font-mono text-[rgb(var(--text))]">{row.code}</td>
-                  <td className="p-5 text-[rgb(var(--text))]">{row.label}</td>
+                  <td className="p-5 font-mono text-[rgb(var(--text))] align-top">
+                    <span className="block truncate" title={row.code}>{row.code}</span>
+                  </td>
+                  <td className="min-w-0 p-5 text-[rgb(var(--text))] align-top">
+                    <span className="block break-words" title={row.label}>{row.label}</span>
+                  </td>
                   <td className="p-5">
                     <span className={`inline-flex rounded-lg px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest ${row.active ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/20 text-slate-300"}`}>
                       {row.active ? "Active" : "Inactive"}

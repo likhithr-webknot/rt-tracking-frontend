@@ -1,5 +1,5 @@
 import { getAuthHeader } from "./auth.js";
-import { buildApiUrl, toHttpError, withCsrfHeaders } from "./http.js";
+import { buildApiUrl, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http.js";
 
 export function normalizeEmployees(data) {
   const root = data && typeof data === "object" ? data : {};
@@ -25,7 +25,7 @@ export function normalizeEmployees(data) {
     if (!raw || !raw.includes("@")) return "";
     const local = raw.split("@")[0];
     return local
-      .replace(/[._+\-]+/g, " ")
+      .replace(/[._+-]+/g, " ")
       .replace(/\d+/g, "")
       .trim()
       .split(/\s+/)
@@ -68,6 +68,7 @@ export function normalizeEmployees(data) {
       managerId: String(e.managerId ?? e.reportingManagerId ?? e.managerEmpId ?? ""),
       createdAt: e.createdAt ? String(e.createdAt) : null,
       updatedAt: e.updatedAt ? String(e.updatedAt) : null,
+      status: String(e.status ?? e.userStatus ?? "").trim(),
       submitted: Boolean(e.submitted ?? e.hasSubmitted ?? false),
       recognitions: Number(e.recognitions ?? e.recognitionCount ?? 0) || 0,
       certifications: Array.isArray(e.certifications) ? e.certifications : [],
@@ -77,7 +78,7 @@ export function normalizeEmployees(data) {
       abilityScoreFromRatings: abilityFromRatings,
       abilityFromRatings,
     };
-  });
+  }).filter((e) => !["inactive", "deleted", "disabled"].includes(String(e.status || "").toLowerCase()));
 }
 
 function extractUsersArray(raw) {
@@ -111,27 +112,35 @@ function extractUsersArray(raw) {
 
 export async function fetchEmployees({ limit = null, cursor = null, signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/api/v1/"), {
-    signal,
-    credentials: "include",
-    headers: auth ? { Authorization: auth } : undefined,
-  });
-  if (!res.ok) throw await toHttpError(res);
-  const raw = await res.json().catch(() => ({}));
-  const allUsers = extractUsersArray(raw);
-
   const fallbackLimit = 10;
   const parsedLimit = limit != null ? Number.parseInt(String(limit), 10) : fallbackLimit;
   const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : fallbackLimit;
   const parsedOffset = cursor != null ? Number.parseInt(String(cursor), 10) : 0;
   const safeOffset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
+  const page = Math.floor(safeOffset / safeLimit);
+  const endpoints = [
+    `/api/v1/employees`,
+    `/api/v1/users?page=${encodeURIComponent(String(page))}&size=${encodeURIComponent(String(safeLimit))}`,
+    `/api/v1/employee-profile?page=${encodeURIComponent(String(page))}&size=${encodeURIComponent(String(safeLimit))}`,
+  ];
+  const raw = await requestWithFallbacks(endpoints, {
+    signal,
+    headers: auth ? { Authorization: auth } : undefined,
+    fallbackStatuses: [400, 403, 404, 405],
+    notFoundMessage: "Employees list endpoint not found.",
+  });
+  const allUsers = extractUsersArray(raw);
 
-  const items = allUsers.slice(safeOffset, safeOffset + safeLimit);
-  const nextCursor = safeOffset + safeLimit < allUsers.length ? String(safeOffset + safeLimit) : null;
+  const root = raw && typeof raw === "object" ? raw : {};
+  const data = root?.data && typeof root.data === "object" ? root.data : root;
+  const total =
+    Number(data?.totalElements ?? data?.total ?? data?.count ?? allUsers.length) || allUsers.length;
+  const items = allUsers.length > safeLimit ? allUsers.slice(0, safeLimit) : allUsers;
+  const nextCursor = safeOffset + items.length < total ? String(safeOffset + items.length) : null;
   return {
     items,
     nextCursor,
-    total: allUsers.length,
+    total,
     managerCount: allUsers.filter((u) => String(u?.empRole ?? u?.role ?? "").toLowerCase() === "manager").length,
     adminCount: allUsers.filter((u) => String(u?.empRole ?? u?.role ?? "").toLowerCase() === "admin").length,
     employeeCount: allUsers.filter((u) => String(u?.empRole ?? u?.role ?? "").toLowerCase() === "employee").length,
@@ -143,23 +152,29 @@ export async function fetchEmployees({ limit = null, cursor = null, signal } = {
 
 export async function addEmployee(payload) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/employees/add"), {
-    method: "POST",
-    credentials: "include",
-    headers: withCsrfHeaders({
-      "Content-Type": "application/json",
-      ...(auth ? { Authorization: auth } : {}),
-    }),
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw await toHttpError(res);
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json();
-  return null;
+  const endpoints = ["/api/v1/employees", "/api/v1/users"];
+  for (const path of endpoints) {
+    const res = await fetch(buildApiUrl(path), {
+      method: "POST",
+      credentials: "include",
+      headers: withCsrfHeaders({
+        "Content-Type": "application/json",
+        ...(auth ? { Authorization: auth } : {}),
+      }),
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) return res.json();
+      return null;
+    }
+    if (![404, 405].includes(res.status)) throw await toHttpError(res);
+  }
+  throw new Error("Employee create endpoint not found.");
 }
 export async function addEmployeeWithManager(payload) {
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/employees/add-with-manager"), {
+  const res = await fetch(buildApiUrl("/api/v1/users"), {
     method: "POST",
     credentials: "include",
     headers: withCsrfHeaders({
@@ -180,54 +195,53 @@ export async function updateEmployee(employeeId, payload, { signal } = {}) {
   const body = JSON.stringify(payload && typeof payload === "object" ? payload : {});
 
   const endpoints = [
+    `/api/v1/employees/${safeId}`,
+    `/api/v1/employee-profile/${safeId}`,
     `/employees/${safeId}/edit`,
     `/employees/edit/${safeId}`,
     `/employees/update/${safeId}`,
   ];
 
-  let lastRouteErr = null;
-  for (const endpoint of endpoints) {
-    const res = await fetch(buildApiUrl(endpoint), {
-      method: "PUT",
+  return requestWithFallbacks(
+    endpoints.map((path) => ({ method: "PUT", path })),
+    {
       signal,
-      credentials: "include",
       headers: withCsrfHeaders({
         "Content-Type": "application/json",
         ...(auth ? { Authorization: auth } : {}),
       }),
       body,
-    });
-
-    if (res.ok) {
-      const contentType = res.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) return res.json();
-      return null;
+      fallbackStatuses: [404, 405],
+      notFoundMessage: "Employee edit endpoint not found.",
+      parseFallback: null,
     }
-
+  );
+}
+export async function deleteEmployee(employeeId, { signal } = {}) {
+  const safeId = encodeURIComponent(String(employeeId ?? "").trim());
+  const auth = getAuthHeader();
+  if (!safeId) throw new Error("employee id is required.");
+  const endpoints = [
+    `/api/v1/employees/${safeId}`,
+    `/api/v1/employees/${safeId}?hardDelete=true`,
+  ];
+  let lastErr = null;
+  for (const path of endpoints) {
+    const res = await fetch(buildApiUrl(path), {
+      method: "DELETE",
+      signal,
+      credentials: "include",
+      headers: withCsrfHeaders(auth ? { Authorization: auth } : undefined),
+    });
+    if (res.ok) return parseResponse(res, true);
     const err = await toHttpError(res);
-    if (res.status === 404 || res.status === 405) {
-      lastRouteErr = err;
+    if ([404, 405].includes(res.status)) {
+      lastErr = err;
       continue;
     }
     throw err;
   }
-
-  throw lastRouteErr || new Error("Employee edit endpoint not found.");
-}
-export async function deleteEmployee(employeeId, { signal } = {}) {
-  const safeId = encodeURIComponent(String(employeeId));
-  const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(`/employees/delete/${safeId}`), {
-    method: "DELETE",
-    signal,
-    credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
-  });
-  if (!res.ok) throw await toHttpError(res);
-
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json();
-  return null;
+  throw lastErr || new Error("Employee delete endpoint not found.");
 }
 
 export function normalizeManagers(data) {
@@ -268,64 +282,46 @@ export async function fetchManagers({ signal } = {}) {
   ];
 
   const toRoleKey = (value) => String(value ?? "").trim().toLowerCase().replace(/^role_/, "");
-  let lastRouteErr = null;
-
   for (const endpoint of endpoints) {
-    const res = await fetch(buildApiUrl(endpoint), {
+    const raw = await requestWithFallbacks([endpoint], {
       signal,
-      credentials: "include",
       headers: auth ? { Authorization: auth } : undefined,
+      fallbackStatuses: [400, 403, 404, 405],
+      notFoundMessage: "Managers endpoint not found.",
+    }).catch((err) => {
+      if (err?.name === "AbortError" || err?.status === 401) throw err;
+      return null;
     });
-    if (res.ok) {
-      const raw = await res.json().catch(() => ({}));
-      const rows = extractUsersArray(raw);
-      if (!Array.isArray(rows)) return [];
+    if (!raw) continue;
+    const rows = extractUsersArray(raw);
+    if (!Array.isArray(rows)) return [];
 
-      // Manager endpoints are expected to already be manager-only.
-      const endpointLooksManagerSpecific = endpoint.includes("managers") || endpoint.includes("/manager");
-      if (endpointLooksManagerSpecific) return rows;
+    // Manager endpoints are expected to already be manager-only.
+    const endpointLooksManagerSpecific = endpoint.includes("managers") || endpoint.includes("/manager");
+    if (endpointLooksManagerSpecific) return rows;
 
-      const managerOnly = rows.filter((row) => {
-        const roleKey = toRoleKey(row?.empRole ?? row?.role ?? row?.userRole ?? "");
-        return roleKey === "manager";
-      });
-      if (managerOnly.length > 0) return managerOnly;
-      continue;
-    }
-    const err = await toHttpError(res);
-    if (res.status === 400 || res.status === 403 || res.status === 404 || res.status === 405) {
-      lastRouteErr = err;
-      continue;
-    }
-    throw err;
+    const managerOnly = rows.filter((row) => {
+      const roleKey = toRoleKey(row?.empRole ?? row?.role ?? row?.userRole ?? "");
+      return roleKey === "manager";
+    });
+    if (managerOnly.length > 0) return managerOnly;
   }
-
-  if (lastRouteErr) throw lastRouteErr;
   return [];
 }
 export async function fetchManagerReportees(managerId, { signal } = {}) {
-  const safeId = encodeURIComponent(String(managerId));
+  void managerId;
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(`/employees/manager/${safeId}/reportees`), {
+  const path = "/api/v1/manager-projects-with-roles";
+  const res = await fetch(buildApiUrl(path), {
     signal,
     credentials: "include",
     headers: auth ? { Authorization: auth } : undefined,
   });
-  if (!res.ok) throw await toHttpError(res);
-  return res.json();
+  if (!res.ok) throw await toHttpError(res, { method: "GET", path });
+  return parseResponse(res, {});
 }
 
 export async function promoteEmployee(employeeId) {
-  const safeId = encodeURIComponent(String(employeeId));
-  const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl(`/employees/${safeId}/promote`), {
-    method: "POST",
-    credentials: "include",
-    headers: withCsrfHeaders(auth ? { Authorization: auth } : {}),
-  });
-  if (!res.ok) throw await toHttpError(res);
-
-  const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) return res.json();
-  return null;
+  void employeeId;
+  throw new Error("Webtrak backend does not expose an employee promotion endpoint yet.");
 }
