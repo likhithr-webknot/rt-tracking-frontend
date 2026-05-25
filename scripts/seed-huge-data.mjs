@@ -406,6 +406,34 @@ function comboCatalogToList(catalog) {
     .filter((entry) => entry.band && entry.stream && entry.designations.length > 0);
 }
 
+function buildBandCodeToIdMap(rows) {
+  const map = new Map();
+  for (const row of rows || []) {
+    const id = row?.id;
+    if (id == null || !/^\d+$/.test(String(id))) continue;
+    const numericId = Number.parseInt(String(id), 10);
+    for (const key of [row.code, row.name, row.band, row.label]) {
+      const code = String(key ?? "").trim();
+      if (!code) continue;
+      map.set(code.toLowerCase(), numericId);
+    }
+  }
+  return map;
+}
+
+function toWebtrakStartDate() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()}`;
+}
+
+function roleLabelForSeed(role) {
+  const r = String(role ?? "").trim().toLowerCase();
+  if (r === "admin") return "Admin";
+  if (r === "manager") return "Manager";
+  return "Employee";
+}
+
 async function fetchAllWithCursor(
   client,
   path,
@@ -626,6 +654,18 @@ async function main() {
     console.log("[seed] skipping band/stream seed (set SEED_SKIP_BAND_STREAM_SEED=false to enable)");
   }
 
+  const bandsForCreate = await fetchAllWithCursor(client, "/bands/list", {
+    limit: 200,
+    query: { activeOnly: true },
+    tolerateStatus: [403, 404],
+  });
+  const bandCodeToId = buildBandCodeToIdMap(
+    bandsForCreate.length > 0 ? bandsForCreate : allBandsRaw
+  );
+  if (bandCodeToId.size === 0) {
+    console.warn("[seed] no numeric band ids resolved — employee create may fail until bands exist in Webtrak");
+  }
+
   console.log("[seed] seeding certifications");
   for (let i = 1; i <= config.certCount; i += 1) {
     const name = `Seed Certification ${pad(i, 4)} (${config.seedPrefix.toUpperCase()})`;
@@ -776,7 +816,6 @@ async function main() {
     role,
     displayName,
     combos,
-    managerId = null,
     counters,
     onSuccess,
   }) {
@@ -789,20 +828,31 @@ async function main() {
         ? combo.designations
         : ["Software Engineer"];
       const designation = String(designations[(index + attempt - 1) % designations.length] || "").trim() || "Software Engineer";
+      const bandCode = String(combo?.band ?? "").trim();
+      const department = String(combo?.stream ?? "").trim() || "Development";
+      const bandId = bandCode ? bandCodeToId.get(bandCode.toLowerCase()) : null;
+      if (!bandId) continue;
 
       const payload = {
-        employeeId: identity.id,
-        employeeName: displayName,
         email: identity.email,
-        empRole: role,
-        designation,
-        band: String(combo?.band ?? "").trim() || null,
-        stream: String(combo?.stream ?? "").trim() || null,
-        managerId: managerId || null,
+        name: displayName,
+        role: roleLabelForSeed(role),
+        department,
+        bandId,
+        userType: "FULLTIME",
+        workMode: "HYBRID",
+        startDate: toWebtrakStartDate(),
+        assetRequired: false,
+        salaryDetails: {
+          base: 1,
+          variable: 1,
+          payoutCycle: "monthly",
+          description: designation,
+        },
       };
 
       const result = await safeCreate({
-        fn: () => client.request("/employees/add-with-manager", { method: "POST", body: payload }),
+        fn: () => client.request("/api/v1/employees", { method: "POST", body: payload }),
         label: `${String(role).toLowerCase()} ${identity.id}`,
         counters,
         onSuccess: () => {
@@ -878,14 +928,12 @@ async function main() {
   console.log("[seed] creating employee users");
   for (let i = 1; i <= config.employeeCount; i += 1) {
     const identity = nextEmployeeIdentity("employee");
-    const managerId = createdManagerIds[(i - 1) % createdManagerIds.length];
     await createUserWithCombos({
       identity,
       index: i,
       role: "Employee",
       displayName: `Seed Employee ${pad(i, 4)}`,
       combos: employeeSeedCombos,
-      managerId,
       counters: createCounters.employees,
       onSuccess: (id) => createdEmployeeIds.push(id),
     });

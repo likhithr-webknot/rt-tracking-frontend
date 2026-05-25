@@ -1,0 +1,134 @@
+import type { ApiOptions } from "../types/api-options";
+
+export const RTP_SCORE_WEIGHTS = {
+  kpi: 0.5,
+  values: 0.35,
+  certifications: 0.15,
+} as const;
+
+export const PROMOTION_MIN_SCORE = 4.0;
+
+function toFiniteNumber(value) {
+  const num = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(num) ? num : null;
+}
+
+function round1(value) {
+  const num = toFiniteNumber(value);
+  if (num == null) return null;
+  return Math.round(num * 10) / 10;
+}
+
+function clampScore(value, min = 1, max = 5) {
+  const num = toFiniteNumber(value);
+  if (num == null) return null;
+  return Math.min(max, Math.max(min, num));
+}
+
+export function averageRatings(ratings) {
+  if (!ratings || typeof ratings !== "object") return null;
+  const nums = Object.values(ratings)
+    .map((value) => toFiniteNumber(value))
+    .filter((value) => value != null && value >= 1 && value <= 5);
+  if (!nums.length) return null;
+  const avg = nums.reduce((sum, value) => sum + value, 0) / nums.length;
+  return round1(avg);
+}
+
+/** @deprecated Use {@link computeWeightedScore503515} — RTP spec is 50/35/15. */
+export function computeWeightedScore85_15(kpiAverage, valueAverage) {
+  return computeWeightedScore503515(kpiAverage, valueAverage, null);
+}
+
+/**
+ * Certifications / recognitions / admin tech showcase → 1–5 component (15% weight).
+ */
+export function computeCertificationComponentScore({
+  certificationsCount = 0,
+  recognitionsCount = 0,
+  techShowcase = "",
+} = {} as ApiOptions) {
+  const certs = Math.max(0, Number.parseInt(String(certificationsCount ?? 0), 10) || 0);
+  const recognitions = Math.max(0, Number.parseInt(String(recognitionsCount ?? 0), 10) || 0);
+  const hasTechShowcase = String(techShowcase ?? "").trim().length > 0;
+  let score = certs * 0.5 + recognitions * 0.25;
+  if (hasTechShowcase) score = Math.max(score, 2);
+  return clampScore(Math.min(5, score), 0, 5);
+}
+
+/**
+ * RTP final score: 50% KPI + 35% values + 15% certifications (1–5 scale).
+ */
+export function computeWeightedScore503515(kpiAverage, valueAverage, certificationAverage) {
+  const kpi = toFiniteNumber(kpiAverage);
+  const values = toFiniteNumber(valueAverage);
+  const certs = toFiniteNumber(certificationAverage);
+  if (kpi == null && values == null && certs == null) return null;
+
+  const weighted =
+    (kpi ?? 0) * RTP_SCORE_WEIGHTS.kpi +
+    (values ?? 0) * RTP_SCORE_WEIGHTS.values +
+    (certs ?? 0) * RTP_SCORE_WEIGHTS.certifications;
+
+  return round1(clampScore(weighted, 1, 5));
+}
+
+export function isPromotionEligible(finalScore) {
+  const num = toFiniteNumber(finalScore);
+  return num != null && num >= PROMOTION_MIN_SCORE;
+}
+
+export function performanceGrade(finalScore) {
+  const num = toFiniteNumber(finalScore);
+  if (num == null) return null;
+  if (num >= 4.5) return "Outstanding";
+  if (num >= 4.0) return "Exceeds Expectations";
+  if (num >= 3.0) return "Meets Expectations";
+  if (num >= 2.0) return "Needs Improvement";
+  return "Below Expectations";
+}
+
+export function computeBrowniePoints({ certificationsCount = 0, recognitionsCount = 0, techShowcase = "" } = {} as ApiOptions) {
+  const certs = Math.max(0, Number.parseInt(String(certificationsCount ?? 0), 10) || 0);
+  const recognitions = Math.max(0, Number.parseInt(String(recognitionsCount ?? 0), 10) || 0);
+  const hasTechShowcase = String(techShowcase ?? "").trim().length > 0;
+  return certs + recognitions + (hasTechShowcase ? 1 : 0);
+}
+
+export function computeSubmissionScoreBreakdown({
+  managerKpiRatings,
+  managerWebknotValueRatings,
+  certifications = [],
+  recognitionsCount = 0,
+  techShowcase = "",
+} = {} as ApiOptions) {
+  const managerKpiAverage = averageRatings(managerKpiRatings);
+  const managerWebknotValueAverage = averageRatings(managerWebknotValueRatings);
+  const certificationsCount = Array.isArray(certifications) ? certifications.length : 0;
+  const certificationAverage = computeCertificationComponentScore({
+    certificationsCount,
+    recognitionsCount,
+    techShowcase,
+  });
+  const browniePoints = computeBrowniePoints({
+    certificationsCount,
+    recognitionsCount,
+    techShowcase,
+  });
+
+  return {
+    managerKpiAverage,
+    managerWebknotValueAverage,
+    certificationAverage,
+    weightedScore: computeWeightedScore503515(
+      managerKpiAverage,
+      managerWebknotValueAverage,
+      certificationAverage,
+    ),
+    certificationsCount,
+    recognitionsCount: Number.parseInt(String(recognitionsCount ?? 0), 10) || 0,
+    techShowcase: String(techShowcase ?? "").trim(),
+    techShowcasePoints: String(techShowcase ?? "").trim() ? 1 : 0,
+    browniePoints,
+  };
+}

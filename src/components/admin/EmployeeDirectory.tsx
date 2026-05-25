@@ -1,0 +1,1961 @@
+// @ts-nocheck
+import type { ApiOptions } from "../../types/api-options";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Search,
+  Trash2,
+  ArrowUpCircle,
+  Edit3,
+  X,
+  Plus,
+  Play,
+  Square,
+} from "lucide-react";
+import Toast from "../shared/Toast";
+import CursorPagination from "../shared/CursorPagination";
+import ConfirmDialog from "../shared/ConfirmDialog";
+import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
+import ModalOverlay from "../shared/ModalOverlay";
+import EntityCsvToolbar from "../shared/EntityCsvToolbar";
+import { exportEmployeesCsv } from "../../utils/entityCsvExport";
+
+import {
+  addEmployee,
+  deleteEmployee,
+  promoteEmployee as promoteEmployeeApi,
+  fetchPromotionEligibility,
+  resolveBandCodeFromDisplay,
+  resolveEmployeeEmpId,
+  updateEmployee,
+  normalizeEmployees,
+  resolveRoleStatsBucket,
+} from "../../api/employees";
+import {
+  fetchBands,
+  fetchStreams,
+  fetchBandDesignation,
+  normalizeDirectoryPage,
+  collapseRepeatedSegments,
+} from "../../api/band-stream-directory";
+import { designationLabelFromRow, fetchDesignations } from "../../api/designations";
+import { isWebknotWorkEmail, WEBKNOT_WORK_EMAIL_SUFFIX } from "../../utils/webknotEmail";
+import { getAuthHeader } from "../../api/auth";
+import { buildApiUrl, friendlyProxyUnreachableMessage, parseResponse } from "../../api/http";
+import {
+  getPromotionPreview,
+  normalizePromotionErrorMessage,
+  PROMOTION_MIN_PERFORMANCE_SCORE,
+  TECH_MAX_BAND,
+  NON_TECH_MAX_BAND,
+} from "../../utils/careerPromotion";
+
+/** Small label when account status is not active (so admins see inactive users in the list). */
+function DirectoryStatusBadge({ status }) {
+  const st = String(status ?? "").trim().toLowerCase();
+  if (!st || st === "active" || st === "enabled" || st === "activated") return null;
+  const label = st.replace(/_/g, " ");
+  return (
+    <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide border border-amber-500/35 bg-amber-500/10 text-amber-900 dark:text-amber-100">
+      {label}
+    </span>
+  );
+}
+
+function normalizeAllocationRoleRow(raw) {
+  if (typeof raw === "string") {
+    const v = raw.trim();
+    return v ? { value: v, label: v } : null;
+  }
+  if (!raw || typeof raw !== "object") return null;
+  const value = String(raw.code ?? raw.roleCode ?? raw.key ?? raw.name ?? raw.role ?? raw.id ?? "").trim();
+  if (!value) return null;
+  const label = String(raw.displayName ?? raw.label ?? raw.description ?? raw.name ?? value).trim();
+  return { value, label: label || value };
+}
+
+async function fetchDesignationHintForBandStream({ band, stream, bandId, signal }) {
+  const labels = new Set();
+  const numericBandId =
+    bandId != null && /^\d+$/.test(String(bandId)) ? String(bandId) : null;
+
+  try {
+    const list = numericBandId
+      ? await fetchDesignations({
+          bandId: numericBandId,
+          department: stream,
+          stream,
+          signal,
+        })
+      : [];
+    for (const row of Array.isArray(list) ? list : []) {
+      const label = designationLabelFromRow(row);
+      if (label) labels.add(label);
+    }
+  } catch {
+    /* try legacy band designation route */
+  }
+
+  if (!labels.size) {
+    try {
+      const hint = await fetchBandDesignation({ band, stream, signal });
+      const primary = String(hint?.designation ?? "").trim();
+      if (primary) labels.add(primary);
+      const titles = String(hint?.designationTitles ?? "")
+        .split(/[,;|]/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      for (const t of titles) labels.add(t);
+    } catch {
+      /* no designation hints */
+    }
+  }
+
+  const designations = Array.from(labels);
+  return {
+    designation: designations[0] || null,
+    designations,
+    band,
+    stream,
+  };
+}
+
+function buildOptionStats(employees, key, { emptyLabel = "Unassigned" } = {} as ApiOptions) {
+  const map = new Map(); // value -> { count }
+  for (const emp of employees) {
+    const raw = emp?.[key];
+    const value = String(raw ?? "").trim() || emptyLabel;
+    const prev = map.get(value) || { count: 0 };
+    prev.count += 1;
+    map.set(value, prev);
+  }
+  return Array.from(map.entries())
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+    .map(([value, stats]) => ({ value, count: stats.count }));
+}
+
+function todayInput() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function AddFormField({ label, required = false, hint = null, children, className = "" }) {
+  return (
+    <div className={className}>
+      <label className="block text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+        {label}
+        {required ? <span className="text-[rgb(var(--primary))] ml-0.5">*</span> : null}
+      </label>
+      <div className="mt-2">{children}</div>
+      {hint ? <p className="mt-1.5 text-[10px] text-[rgb(var(--muted))] leading-relaxed">{hint}</p> : null}
+    </div>
+  );
+}
+
+function AddFormSection({ title, subtitle = null, children }) {
+  return (
+    <section className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))]/50 p-4 sm:p-5 space-y-4">
+      <div className="border-b border-[rgb(var(--border))]/80 pb-3">
+        <h4 className="text-[11px] font-bold uppercase tracking-wider text-[rgb(var(--text))]">{title}</h4>
+        {subtitle ? (
+          <p className="mt-1 text-[11px] text-[rgb(var(--muted))] leading-relaxed">{subtitle}</p>
+        ) : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export default function EmployeeDirectory({
+  employees,
+  allEmployees = null,
+  allEmployeesLoading = false,
+  setEmployees,
+  reloadEmployees,
+  reloadAllEmployees = null,
+  employeesLoading,
+  employeesError,
+  totalEmployeesCount = null,
+  directoryTotals = null,
+  currentEmployeeId,
+  pager,
+  onSetEmployeeSubmissionWindow,
+  globalWindowOpen = false,
+}) {
+  const [query, setQuery] = useState("");
+  const [roleFilter, setRoleFilter] = useState("all"); // "all" | role value
+  const [designationFilter, setDesignationFilter] = useState("all"); // "all" | designation value
+  const [bandFilter, setBandFilter] = useState("all"); // "all" | band value
+
+  const [toast, setToast] = useState(null); // { title: string, message?: string }
+  const toastTimerRef = useRef(null);
+
+  const [mutating, setMutating] = useState(false);
+  const [promotingId, setPromotingId] = useState(null);
+  const [windowUpdatingId, setWindowUpdatingId] = useState(null);
+  const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState(null);
+  const [pendingPromoteEmployee, setPendingPromoteEmployee] = useState(null);
+  const [promoteBandType, setPromoteBandType] = useState("BOTH");
+  const [promoteEligibility, setPromoteEligibility] = useState(null);
+  const [promoteEligibilityLoading, setPromoteEligibilityLoading] = useState(false);
+  const [promoteForceOverride, setPromoteForceOverride] = useState(false);
+
+  const promoteDialogPreview = useMemo(
+    () =>
+      getPromotionPreview(
+        pendingPromoteEmployee?.band,
+        promoteBandType,
+        promoteEligibility?.averageApprovedScore ?? null,
+      ),
+    [pendingPromoteEmployee?.band, promoteBandType, promoteEligibility],
+  );
+
+  const promoteConfirmDisabled =
+    promoteDialogPreview.isMaxBand ||
+    (!promoteDialogPreview.promotionScoreEligible &&
+      !promoteForceOverride &&
+      Boolean(promoteDialogPreview.nextBand));
+
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addDraft, setAddDraft] = useState({
+    employeeName: "",
+    email: "",
+    empRole: "Employee",
+    userType: "FULLTIME",
+    workMode: "HYBRID",
+    startDate: todayInput(),
+    designation: "",
+    band: "B4",
+    stream: "",
+  });
+  const [addDesignation, setAddDesignation] = useState(null);
+  const [addDesignationOptions, setAddDesignationOptions] = useState([]);
+  const [addDesignationLoading, setAddDesignationLoading] = useState(false);
+  const [directoryBands, setDirectoryBands] = useState([]);
+  const [directoryStreams, setDirectoryStreams] = useState([]);
+  const [allocationRoleOptions, setAllocationRoleOptions] = useState([]);
+
+  const searchUniverse = useMemo(() => {
+    if (query.trim() && Array.isArray(allEmployees) && allEmployees.length) return allEmployees;
+    return employees;
+  }, [allEmployees, employees, query]);
+
+  useEffect(() => {
+    if (!query.trim()) return;
+    if (!reloadAllEmployees) return;
+    if (allEmployeesLoading) return;
+    if (Array.isArray(allEmployees) && allEmployees.length) return;
+    reloadAllEmployees({ silent: true }).catch(() => {});
+  }, [allEmployees, allEmployeesLoading, query, reloadAllEmployees]);
+
+  function showToast(nextToast) {
+    setToast(nextToast);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
+  }
+
+  async function safeReloadEmployees(options = {}) {
+    if (!reloadEmployees) return false;
+    try {
+      await reloadEmployees(options);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** After mutations, reload page 1 and refresh the full list used for search (cursor was left on page 2+, new rows never appeared). */
+  async function refreshDirectoryAfterMutation() {
+    const ok = await safeReloadEmployees({ cursor: null, pageAction: "reset" });
+    if (reloadAllEmployees) {
+      await reloadAllEmployees({ silent: true }).catch(() => {});
+    }
+    return ok;
+  }
+
+  const [editingEmployeeId, setEditingEmployeeId] = useState(null);
+  const editingEmployee = useMemo(() => {
+    if (!editingEmployeeId) return null;
+    const findEmp = (list) =>
+      Array.isArray(list)
+        ? list.find((e) => String(e?.id) === String(editingEmployeeId)) ?? null
+        : null;
+    return findEmp(employees) ?? findEmp(allEmployees);
+  }, [allEmployees, employees, editingEmployeeId]);
+
+  const [draft, setDraft] = useState({
+    name: "",
+    role: "Employee",
+    designation: "",
+    band: "B4",
+    stream: "",
+  });
+  const [editDesignation, setEditDesignation] = useState(null);
+  const [editDesignationOptions, setEditDesignationOptions] = useState([]);
+  const [editDesignationLoading, setEditDesignationLoading] = useState(false);
+
+  const filtered = useMemo(() => {
+    const pool = Array.isArray(searchUniverse) ? searchUniverse : [];
+    const q = query.trim().toLowerCase();
+
+    return pool.filter((e) => {
+      const emailLower = String(e.email ?? "").trim().toLowerCase();
+      const matchesText = !q
+        ? true
+        : e.name.toLowerCase().includes(q) ||
+          emailLower.includes(q) ||
+          e.id.toLowerCase().includes(q) ||
+          e.role.toLowerCase().includes(q) ||
+          e.band.toLowerCase().includes(q) ||
+          String(e.stream || "").toLowerCase().includes(q) ||
+          (e.designation ?? "").toLowerCase().includes(q);
+
+      const roleValue = String(e.role ?? "").trim() || "Unassigned";
+      const designationValue = String(e.designation ?? "").trim() || "Unassigned";
+      const bandValue = String(e.band ?? "").trim() || "Unassigned";
+
+      const roleOk = roleFilter === "all" ? true : roleValue === roleFilter;
+      const designationOk = designationFilter === "all" ? true : designationValue === designationFilter;
+      const bandOk = bandFilter === "all" ? true : bandValue === bandFilter;
+
+      return matchesText && roleOk && designationOk && bandOk;
+    });
+  }, [searchUniverse, query, roleFilter, designationFilter, bandFilter]);
+
+  const directoryStats = useMemo(() => {
+    const list = Array.isArray(searchUniverse) ? searchUniverse : [];
+    const uniqueBands = new Set(
+      list
+        .map((emp) => String(emp?.band ?? "").trim())
+        .filter(Boolean)
+    );
+    const roleCounts = list.reduce(
+      (acc, emp) => {
+        const bucket = resolveRoleStatsBucket(emp);
+        if (bucket === "manager") acc.managers += 1;
+        else if (bucket === "admin") acc.admins += 1;
+        else acc.employees += 1;
+        return acc;
+      },
+      { managers: 0, admins: 0, employees: 0 }
+    );
+
+    return {
+      totalEmployees: list.length,
+      totalBands: uniqueBands.size,
+      ...roleCounts,
+    };
+  }, [searchUniverse]);
+
+  const isSelf = useCallback(
+    (emp) => Boolean(currentEmployeeId) && String(emp?.id) === String(currentEmployeeId),
+    [currentEmployeeId]
+  );
+
+  const visibleEmployees = filtered;
+
+  const roleOptions = useMemo(() => buildOptionStats(searchUniverse, "role"), [searchUniverse]);
+  const designationOptions = useMemo(
+    () => buildOptionStats(searchUniverse, "designation"),
+    [searchUniverse]
+  );
+  const bandOptions = useMemo(() => buildOptionStats(searchUniverse, "band"), [searchUniverse]);
+  const bandLabelMap = useMemo(() => {
+    const map = new Map();
+    for (const row of directoryBands) {
+      const code = String(row?.code || "").trim();
+      if (!code) continue;
+      const label = collapseRepeatedSegments(String(row?.label || row?.name || code).trim()) || code;
+      map.set(code, label);
+    }
+    return map;
+  }, [directoryBands]);
+
+  const streamLabelMap = useMemo(() => {
+    const map = new Map();
+    for (const row of directoryStreams) {
+      const code = String(row?.code || "").trim();
+      if (!code) continue;
+      const label = collapseRepeatedSegments(String(row?.label || row?.name || code).trim()) || code;
+      map.set(code, label);
+    }
+    return map;
+  }, [directoryStreams]);
+
+  const bandSelectOptions = useMemo(() => {
+    const fromDirectory = directoryBands
+      .filter((row) => row?.active !== false)
+      .map((row) => {
+        const value = String(row?.code ?? row?.band ?? "").trim();
+        if (!value) return null;
+        const id = row?.id != null && String(row.id).trim() !== "" ? row.id : null;
+        const labelExtra = collapseRepeatedSegments(String(row?.label ?? "").trim());
+        const displayCode = collapseRepeatedSegments(value);
+        const label =
+          labelExtra && labelExtra !== displayCode ? `${displayCode} — ${labelExtra}` : displayCode;
+        return { id, value: displayCode, label };
+      })
+      .filter(Boolean);
+    if (fromDirectory.length) return fromDirectory;
+
+    const defaults = ["B1", "B2", "B3", "B4", "B5", "B5H", "B5L", "B6H", "B6L", "B7H", "B7L", "B8"];
+    const fromEmployees = searchUniverse
+      .map((emp) => String(emp?.band ?? "").trim())
+      .filter(Boolean)
+      .map((value) => ({ value, label: value }));
+    const withIds = fromEmployees.map((row) => ({ ...row, id: null }));
+    return Array.from(
+      new Map([
+        ...defaults.map((value) => [value, { id: null, value, label: value }]),
+        ...withIds.map((row) => [row.value, row]),
+      ]).values()
+    ).sort((a, b) => a.value.localeCompare(b.value, undefined, { numeric: true }));
+  }, [directoryBands, searchUniverse]);
+
+  const streamSelectOptions = useMemo(() => {
+    const fromDirectory = directoryStreams
+      .filter((row) => row?.active !== false)
+      .map((row) => {
+        const code = String(row?.code || "").trim();
+        const label =
+          collapseRepeatedSegments(String(row?.label || row?.name || row?.code || "").trim()) ||
+          code;
+        return { value: label || code, label: label || code, code };
+      })
+      .filter((row) => Boolean(row.value));
+    if (fromDirectory.length) return fromDirectory;
+
+    const fromEmployees = Array.from(
+      new Set(
+        searchUniverse
+          .map((emp) => String(emp?.stream ?? "").trim())
+          .filter(Boolean)
+      )
+    )
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((value) => ({ value, label: value }));
+    if (fromEmployees.length > 0) return fromEmployees;
+    return [{ value: "Development", label: "Development" }];
+  }, [directoryStreams, searchUniverse]);
+
+  const defaultAddBand = useMemo(
+    () =>
+      bandSelectOptions.find((opt) => opt.id != null && opt.value === "B4")?.value ||
+      bandSelectOptions.find((opt) => opt.id != null)?.value ||
+      bandSelectOptions[0]?.value ||
+      "B4",
+    [bandSelectOptions]
+  );
+  const defaultAddStream = useMemo(
+    () => streamSelectOptions[0]?.value || "",
+    [streamSelectOptions]
+  );
+  const addRoleIsAdmin = String(addDraft.empRole || "").trim().toLowerCase() === "admin";
+  const addFormCanSubmit = useMemo(() => {
+    if (employeesLoading || mutating) return false;
+    if (!addDraft.employeeName.trim() || !addDraft.email.trim() || !isWebknotWorkEmail(addDraft.email)) {
+      return false;
+    }
+    if (!addRoleIsAdmin) {
+      if (!addDraft.band.trim() || !addDraft.stream.trim()) return false;
+      if (addDesignationOptions.length > 0 && !addDraft.designation.trim()) return false;
+    }
+    return true;
+  }, [
+    addDraft.band,
+    addDraft.designation,
+    addDraft.email,
+    addDraft.employeeName,
+    addDraft.stream,
+    addDesignationOptions.length,
+    addRoleIsAdmin,
+    employeesLoading,
+    mutating,
+  ]);
+  const editRoleIsAdmin = String(draft.role || "").trim().toLowerCase() === "admin";
+  const managerCount = useMemo(
+    () => {
+      const value = directoryTotals?.managerCount;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      return employees.filter((emp) => String(emp?.role || "").trim().toLowerCase() === "manager").length;
+    },
+    [directoryTotals?.managerCount, employees]
+  );
+  const adminCount = useMemo(
+    () => {
+      const value = directoryTotals?.adminCount;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      return directoryStats.admins;
+    },
+    [directoryStats.admins, directoryTotals?.adminCount]
+  );
+  const employeeCount = useMemo(
+    () => {
+      const value = directoryTotals?.employeeCount;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      return directoryStats.employees;
+    },
+    [directoryStats.employees, directoryTotals?.employeeCount]
+  );
+  const bandCount = useMemo(
+    () => {
+      const value = directoryTotals?.bandCount;
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      return directoryStats.totalBands;
+    },
+    [directoryStats.totalBands, directoryTotals?.bandCount]
+  );
+  const totalEmployeesDisplay = useMemo(() => {
+    if (typeof totalEmployeesCount === "number" && Number.isFinite(totalEmployeesCount)) {
+      return totalEmployeesCount;
+    }
+    return directoryStats.totalEmployees;
+  }, [directoryStats.totalEmployees, totalEmployeesCount]);
+
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+
+    async function loadDirectory(fetcher) {
+      const rows = [];
+      let cursor = null;
+      for (let i = 0; i < 20; i += 1) {
+        const data = await fetcher({ limit: 100, cursor, activeOnly: true, signal: controller.signal });
+        const page = normalizeDirectoryPage(data);
+        rows.push(...page.items);
+        if (!page.nextCursor) break;
+        cursor = page.nextCursor;
+      }
+      return rows;
+    }
+
+    (async () => {
+      try {
+        const [bands, streams] = await Promise.all([
+          loadDirectory(fetchBands),
+          loadDirectory(fetchStreams),
+        ]);
+        if (!mounted) return;
+        setDirectoryBands(bands);
+        setDirectoryStreams(streams);
+      } catch {
+        if (!mounted) return;
+        setDirectoryBands([]);
+        setDirectoryStreams([]);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showAddModal) return undefined;
+    let cancelled = false;
+    const auth = getAuthHeader();
+    (async () => {
+      try {
+        const res = await fetch(buildApiUrl("/api/v1/allocation/roles"), {
+          credentials: "include",
+          headers: auth ? { Authorization: auth } : undefined,
+        });
+        if (!res.ok || cancelled) return;
+        const raw = await parseResponse(res, {});
+        const list = Array.isArray(raw) ? raw : raw?.data ?? raw?.roles ?? raw?.content ?? [];
+        const opts = list.map(normalizeAllocationRoleRow).filter(Boolean);
+        const dedup = [];
+        const seen = new Set();
+        for (const o of opts) {
+          const k = o.value.toLowerCase();
+          if (seen.has(k)) continue;
+          seen.add(k);
+          dedup.push(o);
+        }
+        if (!cancelled) setAllocationRoleOptions(dedup.slice(0, 100));
+      } catch {
+        if (!cancelled) setAllocationRoleOptions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showAddModal]);
+
+  // Auto-fetch designation options for add modal based on selected band/department
+  useEffect(() => {
+    const controller = new AbortController();
+    const band = String(addDraft.band || "").trim();
+    const stream = String(addDraft.stream || "").trim();
+    const bandRow = bandSelectOptions.find((opt) => opt.value === band) || null;
+    if (!band || !stream) {
+      setAddDesignation(null);
+      setAddDesignationOptions([]);
+      setAddDesignationLoading(false);
+      return () => controller.abort();
+    }
+    setAddDesignationLoading(true);
+    (async () => {
+      try {
+        const res = await fetchDesignationHintForBandStream({
+          band,
+          stream,
+          bandId: bandRow?.id ?? band,
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) {
+          const options = Array.isArray(res?.designations) ? res.designations : [];
+          setAddDesignation(res);
+          setAddDesignationOptions(options);
+          setAddDraft((d) => {
+            const current = String(d.designation || "").trim();
+            if (current && options.includes(current)) return d;
+            if (options.length === 1) return { ...d, designation: options[0] };
+            if (options.length > 0 && !current) return { ...d, designation: options[0] };
+            return d;
+          });
+        }
+      } catch {
+        if (controller.signal.aborted) return;
+        setAddDesignation(null);
+        setAddDesignationOptions([]);
+      } finally {
+        if (!controller.signal.aborted) setAddDesignationLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [addDraft.band, addDraft.stream, bandSelectOptions]);
+
+  // Auto-fetch designation options for edit modal based on selected band/stream
+  useEffect(() => {
+    if (!editingEmployee) {
+      setEditDesignation(null);
+      setEditDesignationOptions([]);
+      setEditDesignationLoading(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    const band = String(draft.band || "").trim();
+    const stream = String(draft.stream || "").trim();
+    const bandRow = bandSelectOptions.find((opt) => opt.value === band) || null;
+    if (editRoleIsAdmin || !band || !stream) {
+      setEditDesignation(null);
+      setEditDesignationOptions([]);
+      setEditDesignationLoading(false);
+      return () => controller.abort();
+    }
+    setEditDesignationLoading(true);
+    (async () => {
+      try {
+        const res = await fetchDesignationHintForBandStream({
+          band,
+          stream,
+          bandId: bandRow?.id ?? band,
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) {
+          const options = Array.isArray(res?.designations) ? res.designations : [];
+          setEditDesignation(res);
+          setEditDesignationOptions(options);
+          setDraft((d) => {
+            const current = String(d.designation || "").trim();
+            if (current && options.includes(current)) return d;
+            if (options.length === 1) return { ...d, designation: options[0] };
+            return d;
+          });
+        }
+      } catch {
+        if (controller.signal.aborted) return;
+        setEditDesignation(null);
+        setEditDesignationOptions([]);
+      } finally {
+        if (!controller.signal.aborted) setEditDesignationLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [draft.band, draft.stream, editRoleIsAdmin, editingEmployee, bandSelectOptions]);
+
+  async function commitPromotion(employeeId, bandType, forceOverride = false) {
+    const findEmp = (list) =>
+      Array.isArray(list) ? list.find((e) => String(e?.id) === String(employeeId)) ?? null : null;
+    const emp = findEmp(employees) ?? findEmp(allEmployees);
+    if (!emp) {
+      showToast({ title: "Promotion failed", message: "Employee not found in the current directory view.", tone: "error" });
+      return;
+    }
+    setPromotingId(employeeId);
+    try {
+      await promoteEmployeeApi(employeeId, bandType, { forceOverride });
+      await refreshDirectoryAfterMutation();
+      showToast({ title: "Promotion applied", message: `${emp.name} moved to the next band on this track.` });
+    } catch (err) {
+      showToast({
+        title: "Promotion failed",
+        message: normalizePromotionErrorMessage(err?.message),
+        tone: "error",
+      });
+    } finally {
+      setPromotingId(null);
+    }
+  }
+
+  async function requestPromoteEmployee(emp) {
+    if (!emp?.id) return;
+    setPromoteBandType("BOTH");
+    setPromoteForceOverride(false);
+    setPromoteEligibility(null);
+    setPendingPromoteEmployee({
+      id: String(emp.id),
+      name: String(emp.name || emp.id),
+      band: emp.band ?? "",
+    });
+    setPromoteEligibilityLoading(true);
+    try {
+      const data = await fetchPromotionEligibility(emp.id);
+      setPromoteEligibility(data);
+    } catch {
+      setPromoteEligibility(null);
+    } finally {
+      setPromoteEligibilityLoading(false);
+    }
+  }
+
+  async function confirmPromoteEmployee() {
+    if (!pendingPromoteEmployee?.id) return;
+    if (promoteConfirmDisabled) {
+      setPendingPromoteEmployee(null);
+      return;
+    }
+    try {
+      await commitPromotion(pendingPromoteEmployee.id, promoteBandType, promoteForceOverride);
+    } finally {
+      setPendingPromoteEmployee(null);
+      setPromoteEligibility(null);
+      setPromoteForceOverride(false);
+    }
+  }
+
+  async function setEmployeeSubmissionWindow(emp, mode) {
+    if (!emp?.id || typeof onSetEmployeeSubmissionWindow !== "function") {
+      showToast({ title: "Action unavailable", message: "Employee-level window control is not configured." });
+      return;
+    }
+
+    const action = String(mode || "").trim().toLowerCase();
+    if (action !== "open" && action !== "close") return;
+
+    setWindowUpdatingId(emp.id);
+    try {
+      await onSetEmployeeSubmissionWindow(emp.id, action);
+      showToast({
+        title: action === "open" ? "Window opened" : "Window closed",
+        message:
+          action === "open"
+            ? `${emp.name} can now submit.`
+            : `${emp.name} can no longer submit.`,
+      });
+    } catch (err) {
+      showToast({
+        title: "Update failed",
+        message: err?.message || "Please try again.",
+      });
+    } finally {
+      setWindowUpdatingId(null);
+    }
+  }
+
+  function requestRemoveEmployee(emp) {
+    const employeeId = String(emp?.id || "").trim();
+    if (!employeeId) return;
+    if (/^EMP_\d+$/i.test(employeeId)) {
+      showToast({
+        title: "Cannot delete",
+        message: "This row has no server id. Refresh the directory or check the API payload.",
+        tone: "error",
+      });
+      return;
+    }
+    if (currentEmployeeId && String(employeeId) === String(currentEmployeeId)) {
+      showToast({ title: "Not allowed", message: "You can't delete your own user." });
+      return;
+    }
+    setPendingDeleteEmployee({
+      row: emp,
+      name: String(emp?.name || employeeId),
+    });
+  }
+
+  async function removeEmployee(employeeRow, employeeName) {
+    try {
+      setMutating(true);
+      const apiEmpId = await resolveEmployeeEmpId(employeeRow);
+      await deleteEmployee(apiEmpId);
+      const reloaded = await refreshDirectoryAfterMutation();
+      if (!reloaded) {
+        setEmployees((prev) =>
+          prev.filter((e) => String(e.id) !== String(employeeRow?.id) && String(e.empId) !== apiEmpId),
+        );
+      }
+      showToast({
+        title: "Employee deactivated",
+        message: `${employeeName || apiEmpId} is now inactive and hidden from active directory views.`,
+      });
+    } catch (err) {
+      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+    } finally {
+      setMutating(false);
+    }
+  }
+
+  async function confirmDeleteEmployee() {
+    if (!pendingDeleteEmployee?.row) return;
+    try {
+      await removeEmployee(pendingDeleteEmployee.row, pendingDeleteEmployee.name);
+    } finally {
+      setPendingDeleteEmployee(null);
+    }
+  }
+
+  function openEdit(emp) {
+    const bandCode = resolveBandCodeFromDisplay(emp.band, bandSelectOptions) || defaultAddBand;
+    const streamValue =
+      streamSelectOptions.find(
+        (opt) =>
+          opt.value === emp.stream ||
+          opt.label === emp.stream ||
+          opt.code === emp.stream,
+      )?.value || emp.stream || defaultAddStream;
+
+    setEditDesignationOptions([]);
+    setEditDesignation(null);
+    setEditingEmployeeId(emp.id);
+    setDraft({
+      name: emp.name ?? "",
+      role: emp.role ?? "Employee",
+      designation: emp.designation ?? "",
+      band: bandCode,
+      stream: streamValue,
+    });
+  }
+
+  function closeEdit() {
+    setEditingEmployeeId(null);
+    setEditDesignationOptions([]);
+    setEditDesignation(null);
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault();
+    if (!editingEmployeeId) return;
+
+    const current =
+      (Array.isArray(employees)
+        ? employees.find((emp) => String(emp?.id) === String(editingEmployeeId))
+        : null) ||
+      (Array.isArray(allEmployees)
+        ? allEmployees.find((emp) => String(emp?.id) === String(editingEmployeeId))
+        : null) ||
+      null;
+    if (!current) {
+      showToast({ title: "Update failed", message: "Employee not found." });
+      return;
+    }
+
+    const roleKey = String(draft.role || "").trim().toLowerCase();
+    const isAdminRole = roleKey === "admin";
+    const bandCode = String(draft.band || "").trim();
+    const department = String(draft.stream ?? current.stream ?? "").trim();
+
+    const bandRow = isAdminRole
+      ? null
+      : bandSelectOptions.find((opt) => opt.value === bandCode) || null;
+    const bandId =
+      bandRow?.id != null && /^\d+$/.test(String(bandRow.id))
+        ? Number.parseInt(String(bandRow.id), 10)
+        : null;
+
+    if (!isAdminRole && bandId == null) {
+      showToast({
+        title: "Band not resolved",
+        message:
+          "Could not map the selected band to a server id. Open Band & Stream directory, ensure bands are loaded, then try again.",
+      });
+      return;
+    }
+    if (!isAdminRole && !department) {
+      showToast({ title: "Department required", message: "Choose a department from the list." });
+      return;
+    }
+
+    const payload = {
+      name: draft.name.trim(),
+      email: String(current.email ?? "").trim(),
+      role: draft.role,
+      department: isAdminRole ? department || null : department || null,
+      bandId: isAdminRole ? null : bandId,
+    };
+
+    if (!payload.name) {
+      showToast({ title: "Missing field", message: "Employee name is required." });
+      return;
+    }
+
+    try {
+      setMutating(true);
+      const apiEmpId = await resolveEmployeeEmpId(current);
+      await updateEmployee(apiEmpId, payload);
+      const reloaded = await refreshDirectoryAfterMutation();
+      if (!reloaded) {
+        setEmployees((prev) =>
+          prev.map((emp) =>
+            emp.id === editingEmployeeId
+              ? {
+                  ...emp,
+                  name: payload.name || emp.name,
+                  role: payload.role || emp.role,
+                  designation: draft.designation || emp.designation,
+                  band: draft.band || emp.band,
+                  stream: payload.department || emp.stream,
+                }
+              : emp
+          )
+        );
+      }
+      showToast({ title: "Employee updated", message: payload.name || String(editingEmployeeId) });
+      closeEdit();
+    } catch (err) {
+      showToast({ title: "Update failed", message: err?.message || "Please try again." });
+    } finally {
+      setMutating(false);
+    }
+  }
+
+  function openAdd() {
+    setAddDesignation(null);
+    setAddDesignationOptions([]);
+    setAddDraft({
+      employeeName: "",
+      email: "",
+      empRole: "Employee",
+      userType: "FULLTIME",
+      workMode: "HYBRID",
+      startDate: todayInput(),
+      designation: "",
+      band: defaultAddBand,
+      stream: defaultAddStream,
+    });
+    setShowAddModal(true);
+  }
+
+  function closeAdd() {
+    setShowAddModal(false);
+    setAddDesignation(null);
+    setAddDesignationOptions([]);
+  }
+
+  useEffect(() => {
+    if (!showAddModal) return;
+    setAddDraft((d) => ({
+      ...d,
+      band: d.band || defaultAddBand,
+      stream: d.stream || defaultAddStream,
+    }));
+  }, [showAddModal, defaultAddBand, defaultAddStream]);
+
+  async function submitAdd(e) {
+    e.preventDefault();
+
+    const employeeName = addDraft.employeeName.trim();
+    const email = addDraft.email.trim().toLowerCase();
+    const empRole = addDraft.empRole.trim() || "Employee";
+    const roleKey = empRole.toLowerCase();
+    const isAdminRole = roleKey === "admin";
+    const bandCode = String(addDraft.band || "").trim();
+    const stream = String(addDraft.stream || "").trim();
+
+    if (!employeeName) {
+      showToast({ title: "Missing field", message: "Employee name is required." });
+      return;
+    }
+    if (!email) {
+      showToast({ title: "Missing field", message: "Email is required." });
+      return;
+    }
+    if (!isWebknotWorkEmail(email)) {
+      showToast({
+        title: "Invalid email",
+        message: `Use a company address ending in ${WEBKNOT_WORK_EMAIL_SUFFIX}.`,
+      });
+      return;
+    }
+    if (!isAdminRole && !bandCode) {
+      showToast({ title: "Band required", message: "Choose a band from the list." });
+      return;
+    }
+    if (!isAdminRole && !stream) {
+      showToast({ title: "Department required", message: "Choose a department from the list." });
+      return;
+    }
+
+    const designationValue = String(
+      addDraft.designation.trim() ||
+        addDesignation?.designation ||
+        addDesignationOptions[0] ||
+        "",
+    ).trim();
+
+    if (!isAdminRole && addDesignationOptions.length > 0 && !designationValue) {
+      showToast({
+        title: "Designation required",
+        message: "Select a designation that matches this band and department (import lookups first if the list is empty).",
+      });
+      return;
+    }
+
+    const resolvedDesignation = designationValue || empRole || "Employee";
+
+    const bandRow = isAdminRole
+      ? bandSelectOptions.find((opt) => opt.value === "B4") || bandSelectOptions[0]
+      : bandSelectOptions.find((opt) => opt.value === bandCode);
+    const bandId =
+      bandRow?.id != null && /^\d+$/.test(String(bandRow.id))
+        ? Number.parseInt(String(bandRow.id), 10)
+        : null;
+
+    if (bandId == null) {
+      showToast({
+        title: "Band not resolved",
+        message:
+          "Could not map the selected band to a server id. Open Band & Stream directory, ensure bands are loaded, then try again.",
+      });
+      return;
+    }
+
+    const payload = {
+      employeeName,
+      email,
+      empRole,
+      designation: resolvedDesignation,
+      bandId,
+      band: bandRow?.value ?? bandCode,
+      stream: isAdminRole ? streamSelectOptions[0]?.value || "Development" : stream,
+      department: isAdminRole ? streamSelectOptions[0]?.value || "Development" : stream,
+      userType: addDraft.userType,
+      workMode: addDraft.workMode,
+      startDate: addDraft.startDate,
+    };
+
+    try {
+      setMutating(true);
+      const createdRaw = await addEmployee(payload);
+
+      showToast({ title: "Employee added", message: `${employeeName} created successfully.` });
+
+      closeAdd();
+      await refreshDirectoryAfterMutation();
+
+      const inner =
+        createdRaw &&
+        typeof createdRaw === "object" &&
+        !Array.isArray(createdRaw) &&
+        createdRaw.data &&
+        typeof createdRaw.data === "object" &&
+        !Array.isArray(createdRaw.data)
+          ? createdRaw.data
+          : createdRaw;
+      const createdRows = Array.isArray(inner) ? normalizeEmployees(inner) : normalizeEmployees([inner]);
+      const created = createdRows[0];
+      if (created && setEmployees) {
+        setEmployees((prev) => {
+          if (prev.some((e) => String(e.id) === String(created.id))) return prev;
+          return [created, ...prev];
+        });
+      }
+    } catch (err) {
+      const raw = friendlyProxyUnreachableMessage(err?.message || "");
+      const pathNote = err?.path ? ` (${err.path})` : "";
+      const lower = raw.toLowerCase();
+      let message = `${raw || "Please try again."}${pathNote}`;
+      if (
+        lower.includes("email") &&
+        (lower.includes("exist") || lower.includes("duplicate") || lower.includes("already") || lower.includes("taken"))
+      ) {
+        message =
+          "That email is already registered. Use search (name or email) to find the existing profile in this list— they may be marked inactive. You can edit them instead of adding a duplicate.";
+      } else if (
+        lower.includes("httprequestmethodnotsupported") ||
+        lower.includes("method not supported")
+      ) {
+        message =
+          "Employee create failed on the server. Confirm Webtrak is running and POST /api/v1/employees accepts your payload (band id, department, salary placeholders).";
+      } else if (
+        lower.includes("designation") ||
+        lower.includes("band") ||
+        lower.includes("stream") ||
+        lower.includes("department")
+      ) {
+        message =
+          `${raw} Check that band, department, and designation match your designation lookup table (Bands & Departments → CSV Import).`;
+      }
+      showToast({ title: "Add failed", message });
+    } finally {
+      setMutating(false);
+    }
+  }
+
+  return (
+    <AdminPageShell className="space-y-6" maxWidth="max-w-[1600px]">
+      <AdminPageHeader
+        title="Employees"
+        subtitle="Search and manage employee profiles. Import replaces the roster from CSV (users not in the file are deactivated)."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <EntityCsvToolbar
+            entityKey="employees"
+            onImportComplete={() => reloadEmployees?.()}
+            onExport={() => exportEmployeesCsv(employees)}
+            confirmImportMessage="Import the full employee roster from CSV? Anyone not listed will be marked inactive (admins are kept)."
+            showToast={showToast}
+          />
+          <button type="button" onClick={openAdd} className="rt-btn-primary text-sm" title="Add employee">
+            <Plus size={15} /> Add Employee
+          </button>
+        </div>
+      </AdminPageHeader>
+
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
+          <div className="rt-kicker">Total</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{totalEmployeesDisplay}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
+          <div className="rt-kicker">Managers</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{managerCount}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
+          <div className="rt-kicker">Filtered</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--primary))]">{visibleEmployees.length}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
+          <div className="rt-kicker">Bands</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{bandCount}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
+          <div className="rt-kicker">Admins</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{adminCount}</div>
+        </div>
+        <div className="rt-panel-subtle rounded-xl px-4 py-3">
+          <div className="rt-kicker">Employees</div>
+          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{employeeCount}</div>
+        </div>
+      </section>
+
+      {employeesError ? (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
+          <div className="font-semibold">
+            {/Could not reach the backend API from the dev proxy/i.test(employeesError)
+              ? "API unavailable"
+              : "Failed to load employees"}
+          </div>
+          <p className="mt-1.5 text-xs sm:text-sm opacity-95">{employeesError}</p>
+        </div>
+      ) : null}
+
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={16} />
+          <input
+            type="text"
+            placeholder="Search by name, email, id, role, designation, band..."
+            className="w-full rt-input py-3 pl-11 pr-4 text-sm"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 sm:flex sm:gap-2">
+          <select
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value)}
+            className="w-full sm:w-auto rt-input py-3 px-3 text-xs sm:text-sm"
+            title="Filter by role"
+          >
+            <option value="all">All roles</option>
+            {roleOptions.map((opt) => (
+              <option key={`role:${opt.value}`} value={opt.value}>
+                {opt.value} ({opt.count})
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={designationFilter}
+            onChange={(e) => setDesignationFilter(e.target.value)}
+            className="w-full sm:w-auto rt-input py-3 px-3 text-xs sm:text-sm"
+            title="Filter by designation"
+          >
+            <option value="all">All designations</option>
+            {designationOptions.map((opt) => (
+              <option key={`designation:${opt.value}`} value={opt.value}>
+                {opt.value} ({opt.count})
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={bandFilter}
+            onChange={(e) => setBandFilter(e.target.value)}
+            className="w-full sm:w-auto rt-input py-3 px-3 text-xs sm:text-sm"
+            title="Filter by band"
+          >
+            <option value="all">All bands</option>
+            {bandOptions.map((opt) => (
+              <option key={`band:${opt.value}`} value={opt.value}>
+                {opt.value} ({opt.count})
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* ── Desktop Table View (hidden below lg) ── */}
+      <div className="rt-panel overflow-hidden hidden lg:block">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
+              <tr>
+                <th className="px-4 py-3 font-semibold">Emp ID</th>
+                <th className="px-4 py-3 font-semibold">Name</th>
+                <th className="px-4 py-3 font-semibold">Email</th>
+                <th className="px-4 py-3 font-semibold">Role</th>
+                <th className="px-4 py-3 font-semibold">Designation</th>
+                <th className="px-4 py-3 font-semibold">Band</th>
+                <th className="px-4 py-3 font-semibold">Department</th>
+                <th className="px-4 py-3 font-semibold text-center">Last Promo</th>
+                <th className="px-4 py-3 text-right font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[rgb(var(--border))]">
+              {visibleEmployees.map((emp) => {
+                const promoteGate = getPromotionPreview(emp.band, "BOTH");
+                return (
+                <tr key={emp.id} className="hover:bg-[rgb(var(--surface-2))]/60 transition-colors group">
+                  <td className="px-4 py-3 text-sm font-mono text-[rgb(var(--text))]">{emp.id || "—"}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-semibold text-[rgb(var(--text))] flex flex-wrap items-center gap-x-1">
+                      {emp.name}
+                      <DirectoryStatusBadge status={emp.status} />
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-[rgb(var(--text))]">{emp.email || "—"}</td>
+                  <td className="px-4 py-3">
+                    <span className={[
+                      "inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold border",
+                      emp.role === "Admin" ? "bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/20" :
+                      emp.role === "Manager" ? "bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20" :
+                      "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
+                    ].join(" ")}>
+                      {emp.role}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-[rgb(var(--text))]">{emp.designation ?? emp.role}</td>
+                  <td className="px-4 py-3">
+                    <div className="font-mono text-sm font-semibold text-[rgb(var(--text))]">{emp.band}</div>
+                    {bandLabelMap.get(emp.band) && bandLabelMap.get(emp.band) !== emp.band ? (
+                      <div className="text-[11px] text-[rgb(var(--muted))]">{bandLabelMap.get(emp.band)}</div>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="font-mono text-sm font-semibold text-[rgb(var(--text))]">{emp.stream || "—"}</div>
+                    {emp.stream && streamLabelMap.get(emp.stream) && streamLabelMap.get(emp.stream) !== emp.stream ? (
+                      <div className="text-[11px] text-[rgb(var(--muted))]">{streamLabelMap.get(emp.stream)}</div>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                     {emp.lastPromotionDate ? (
+                        <div className="text-[11px] font-black text-teal-400 bg-teal-500/5 px-2 py-1 rounded-lg border border-teal-500/20 tabular-nums">
+                           {new Date(emp.lastPromotionDate).toLocaleDateString(undefined, { month: 'short', day: '2-digit' })}
+                        </div>
+                     ) : (
+                        <span className="text-[10px] text-slate-500 opacity-40">—</span>
+                     )}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => openEdit(emp)}
+                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
+                        title="Edit"
+                      >
+                        <Edit3 size={16} />
+                      </button>
+
+                      <button
+                        onClick={() => requestPromoteEmployee(emp)}
+                        disabled={promotingId === emp.id || promoteGate.isMaxBand}
+                        className="p-2 rounded-md text-blue-600 dark:text-blue-300 hover:bg-blue-500/10 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={
+                          promoteGate.isMaxBand
+                            ? promoteGate.reasonIfBlocked || "Already at highest band on default track"
+                            : "Promote to next band"
+                        }
+                      >
+                        <ArrowUpCircle size={16} />
+                      </button>
+
+                      <button
+                        onClick={() => requestRemoveEmployee(emp)}
+                        disabled={isSelf(emp)}
+                        className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Remove"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                );
+              })}
+
+              {!employeesLoading && filtered.length === 0 ? (
+                <tr>
+                  <td className="py-16 text-center" colSpan={8}>
+                    <div className="flex flex-col items-center gap-3">
+                      <Search size={32} className="text-[rgb(var(--muted))]/40" />
+                      <p className="text-[rgb(var(--muted))] text-sm">No employees match your filters.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Mobile Card View (visible below lg) ── */}
+      <div className="lg:hidden space-y-3">
+        {visibleEmployees.map((emp) => {
+          const promoteGate = getPromotionPreview(emp.band, "BOTH");
+          return (
+          <div key={emp.id} className="rt-panel rounded-xl p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-semibold text-[rgb(var(--text))] truncate flex flex-wrap items-center gap-x-1">
+                  {emp.name}
+                  <DirectoryStatusBadge status={emp.status} />
+                </div>
+                <div className="text-[11px] text-[rgb(var(--muted))] truncate">{emp.email || "—"}</div>
+              </div>
+              <span className={[
+                "shrink-0 inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold border",
+                emp.role === "Admin" ? "bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/20" :
+                emp.role === "Manager" ? "bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20" :
+                "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
+              ].join(" ")}>
+                {emp.role}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 text-[11px]">
+              <div>
+                <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Designation</div>
+                <div className="text-[rgb(var(--text))] font-medium truncate">{emp.designation ?? emp.role}</div>
+              </div>
+              <div>
+                <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Band</div>
+                <div className="text-[rgb(var(--text))] font-mono font-semibold">{emp.band}</div>
+              </div>
+              <div>
+                <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Stream</div>
+                <div className="text-[rgb(var(--text))] font-mono font-semibold">{emp.stream || "—"}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-1 border-t border-[rgb(var(--border))]">
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setEmployeeSubmissionWindow(emp, "open")}
+                  disabled={windowUpdatingId === emp.id || globalWindowOpen}
+                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-300 transition-all hover:bg-emerald-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Play size={10} /> Open
+                </button>
+                <button
+                  onClick={() => setEmployeeSubmissionWindow(emp, "close")}
+                  disabled={windowUpdatingId === emp.id || !globalWindowOpen || emp.submissionWindowForceClosed}
+                  className="inline-flex items-center gap-1 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-2 py-1 text-[10px] font-semibold text-[rgb(var(--muted))] transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Square size={9} /> Close
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => openEdit(emp)}
+                  className="p-1.5 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500 hover:text-white rounded-md transition-all border border-blue-500/20"
+                  title="Edit"
+                >
+                  <Edit3 size={14} />
+                </button>
+                <button
+                  onClick={() => requestPromoteEmployee(emp)}
+                  disabled={promotingId === emp.id || promoteGate.isMaxBand}
+                  className="p-1.5 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500 hover:text-white rounded-md transition-all border border-blue-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={
+                    promoteGate.isMaxBand
+                      ? promoteGate.reasonIfBlocked || "Already at highest band on default track"
+                      : "Promote to next band"
+                  }
+                >
+                  <ArrowUpCircle size={14} />
+                </button>
+                <button
+                  onClick={() => requestRemoveEmployee(emp)}
+                  disabled={isSelf(emp)}
+                  className="p-1.5 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500 hover:text-white rounded-md transition-all border border-red-500/20"
+                  title="Remove"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+          );
+        })}
+
+        {!employeesLoading && filtered.length === 0 ? (
+          <div className="rt-panel rounded-xl p-10 flex flex-col items-center gap-3">
+            <Search size={28} className="text-[rgb(var(--muted))]/40" />
+            <p className="text-[rgb(var(--muted))] text-sm">No employees match your filters.</p>
+          </div>
+        ) : null}
+      </div>
+
+      {pager ? (
+        <div className="pt-2">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={pager.onReset}
+              disabled={Boolean(pager.loading) || !pager.onReset}
+              className={[
+                "rt-btn-ghost transition-all text-sm",
+                Boolean(pager.loading) || !pager.onReset ? "opacity-50 cursor-not-allowed" : "",
+              ].join(" ")}
+              title="First page"
+            >
+              First Page
+            </button>
+            <CursorPagination
+              canPrev={Boolean(pager.canPrev)}
+              canNext={Boolean(pager.canNext)}
+              onPrev={pager.onPrev}
+              onNext={pager.onNext}
+              onPageChange={pager.onPageChange}
+              page={pager.page}
+              maxPage={pager.maxPage}
+              loading={Boolean(pager.loading)}
+              label={pager.label}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteEmployee)}
+        title="Deactivate Employee"
+        message={
+          pendingDeleteEmployee
+            ? `Deactivate ${pendingDeleteEmployee.name}? They will be marked inactive in WebTrak and removed from active directory lists. This does not purge historical records.`
+            : "Deactivate this employee?"
+        }
+        confirmText="Deactivate"
+        cancelText="Cancel"
+        confirmVariant="danger"
+        busy={mutating}
+        onCancel={() => setPendingDeleteEmployee(null)}
+        onConfirm={confirmDeleteEmployee}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingPromoteEmployee)}
+        title="Promote employee"
+        message={
+          pendingPromoteEmployee
+            ? promoteDialogPreview.nextBand
+              ? `Move ${pendingPromoteEmployee.name} from ${promoteDialogPreview.currentCode || pendingPromoteEmployee.band || "current band"} → ${promoteDialogPreview.nextBand}?`
+              : `Promote ${pendingPromoteEmployee.name} one step on the Webtrak band ladder?`
+            : "Promote this employee?"
+        }
+        confirmText={
+          promoteDialogPreview.nextBand
+            ? `Promote → ${promoteDialogPreview.nextBand}`
+            : "Promote"
+        }
+        cancelText="Cancel"
+        confirmVariant="primary"
+        busy={Boolean(promotingId)}
+        onCancel={() => {
+          setPendingPromoteEmployee(null);
+          setPromoteEligibility(null);
+          setPromoteForceOverride(false);
+        }}
+        onConfirm={confirmPromoteEmployee}
+        confirmDisabled={promoteConfirmDisabled || promoteEligibilityLoading}
+      >
+        <div className="space-y-3">
+          {promoteEligibilityLoading ? (
+            <p className="text-xs text-[rgb(var(--muted))]">Checking promotion eligibility…</p>
+          ) : promoteEligibility?.averageApprovedScore != null ? (
+            <p className="text-xs text-[rgb(var(--text-secondary))]">
+              Average approved score:{" "}
+              <span className="font-bold text-[rgb(var(--text))]">
+                {Number(promoteEligibility.averageApprovedScore).toFixed(1)} / 5
+              </span>
+              {" "}
+              (minimum {PROMOTION_MIN_PERFORMANCE_SCORE} required)
+            </p>
+          ) : null}
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))] mb-1.5">
+              Career track (Webtrak BandType)
+            </label>
+            <select
+              value={promoteBandType}
+              onChange={(e) => setPromoteBandType(e.target.value)}
+              className="rt-input w-full text-sm"
+              disabled={Boolean(promotingId)}
+            >
+              <option value="BOTH">Automatic (tech if eligible, else non-tech)</option>
+              <option value="TECH">Tech — up to {TECH_MAX_BAND}</option>
+              <option value="NON_TECH">Non-tech — up to {NON_TECH_MAX_BAND}</option>
+            </select>
+            <p className="mt-2 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
+              Tech and non-tech ladders differ. Use the track that matches the role. Ceilings: tech max{" "}
+              <span className="font-mono">{TECH_MAX_BAND}</span>, non-tech max{" "}
+              <span className="font-mono">{NON_TECH_MAX_BAND}</span>.
+            </p>
+          </div>
+          {promoteDialogPreview.reasonIfBlocked ? (
+            <div
+              className={[
+                "rounded-lg border px-3 py-2 text-xs",
+                promoteDialogPreview.isMaxBand
+                  ? "border-amber-500/30 bg-amber-500/5 text-amber-800 dark:text-amber-100"
+                  : "border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))]",
+              ].join(" ")}
+            >
+              {promoteDialogPreview.reasonIfBlocked}
+            </div>
+          ) : null}
+          {!promoteDialogPreview.promotionScoreEligible && promoteDialogPreview.nextBand ? (
+            <label className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={promoteForceOverride}
+                onChange={(e) => setPromoteForceOverride(e.target.checked)}
+                className="mt-0.5"
+                disabled={Boolean(promotingId)}
+              />
+              <span className="text-amber-900 dark:text-amber-100">
+                HR override — promote without meeting the score threshold (document exception).
+              </span>
+            </label>
+          ) : null}
+        </div>
+      </ConfirmDialog>
+
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
+
+      
+      {showAddModal ? (
+        <ModalOverlay
+          open={showAddModal}
+          onClose={closeAdd}
+          maxWidth="max-w-xl"
+          zIndex={60}
+          header={
+            <div>
+              <h3 className="rt-section-title">Add Employee</h3>
+              <p className="mt-1 text-sm text-[rgb(var(--muted))]">
+                Register a new person in Pulse. Fields marked with * are required.
+              </p>
+            </div>
+          }
+        >
+          <form onSubmit={submitAdd} className="space-y-5">
+            <AddFormSection
+              title="Identity"
+              subtitle="How this person appears in the directory and signs in."
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <AddFormField label="Full name" required>
+                  <input
+                    value={addDraft.employeeName}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, employeeName: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                    placeholder="e.g., Alice Johnson"
+                    autoComplete="name"
+                  />
+                </AddFormField>
+                <AddFormField
+                  label="Work email"
+                  required
+                  hint={`Must be a ${WEBKNOT_WORK_EMAIL_SUFFIX} address.`}
+                >
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    value={addDraft.email}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, email: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                    placeholder={`name${WEBKNOT_WORK_EMAIL_SUFFIX}`}
+                  />
+                </AddFormField>
+              </div>
+            </AddFormSection>
+
+            <AddFormSection
+              title="Role & access"
+              subtitle="Portal permissions. Project allocations are set up after the person is created."
+            >
+              <AddFormField label="Portal role" required>
+                <select
+                  className="rt-input w-full text-sm"
+                  value={addDraft.empRole}
+                  onChange={(e) => setAddDraft((d) => ({ ...d, empRole: e.target.value }))}
+                >
+                  <option value="Employee">Employee</option>
+                  <option value="Manager">Manager</option>
+                  <option value="Admin">Admin</option>
+                  {allocationRoleOptions.map((o) => (
+                    <option key={`alloc-role:${o.value}`} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </AddFormField>
+              {addRoleIsAdmin ? (
+                <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2.5 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
+                  Admin profiles do not require band, department, or designation.
+                </div>
+              ) : null}
+            </AddFormSection>
+
+            {!addRoleIsAdmin ? (
+              <AddFormSection
+                title="Organization"
+                subtitle="Must match bands, departments, and designation lookups already in the system."
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <AddFormField label="Band" required>
+                    <select
+                      value={addDraft.band}
+                      onChange={(e) =>
+                        setAddDraft((d) => ({ ...d, band: e.target.value, designation: "" }))
+                      }
+                      className="rt-input w-full text-sm"
+                    >
+                      {bandSelectOptions.map((band) => (
+                        <option key={`add-band:${band.value}`} value={band.value}>
+                          {band.label}
+                        </option>
+                      ))}
+                    </select>
+                    {directoryBands.length === 0 ? (
+                      <p className="mt-1.5 text-[10px] text-amber-600 dark:text-amber-400">
+                        Band list not loaded — refresh Bands &amp; Departments if options look wrong.
+                      </p>
+                    ) : null}
+                  </AddFormField>
+                  <AddFormField label="Department" required>
+                    <select
+                      value={addDraft.stream}
+                      onChange={(e) =>
+                        setAddDraft((d) => ({ ...d, stream: e.target.value, designation: "" }))
+                      }
+                      className="rt-input w-full text-sm"
+                    >
+                      {streamSelectOptions.length === 0 ? (
+                        <option value="">No departments loaded</option>
+                      ) : null}
+                      {streamSelectOptions.map((stream) => (
+                        <option key={`add-stream:${stream.value}`} value={stream.value}>
+                          {stream.label}
+                        </option>
+                      ))}
+                    </select>
+                  </AddFormField>
+                </div>
+
+                <AddFormField
+                  label="Designation"
+                  required={addDesignationOptions.length > 0}
+                  hint={
+                    addDesignationLoading
+                      ? "Loading designations for this band and department…"
+                      : addDesignationOptions.length > 0
+                        ? "Pick a title from your designation lookup table."
+                        : "No lookup for this band and department — enter a title or import designation lookups via CSV Import."
+                  }
+                >
+                  {addDesignationOptions.length > 0 ? (
+                    <select
+                      value={addDraft.designation}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, designation: e.target.value }))}
+                      className="rt-input w-full text-sm"
+                      disabled={addDesignationLoading}
+                    >
+                      <option value="">Select designation</option>
+                      {addDesignationOptions.map((label) => (
+                        <option key={`add-des:${label}`} value={label}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={addDraft.designation}
+                      onChange={(e) => setAddDraft((d) => ({ ...d, designation: e.target.value }))}
+                      className="rt-input w-full text-sm"
+                      placeholder="e.g., Software Engineer II"
+                      disabled={addDesignationLoading}
+                    />
+                  )}
+                </AddFormField>
+              </AddFormSection>
+            ) : null}
+
+            <AddFormSection
+              title="Employment details"
+              subtitle="Optional metadata stored with the employee record."
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <AddFormField label="User type">
+                  <select
+                    value={addDraft.userType}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, userType: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                  >
+                    <option value="FULLTIME">Full-time</option>
+                    <option value="INTERN">Intern</option>
+                    <option value="FREELANCER">Freelancer</option>
+                  </select>
+                </AddFormField>
+                <AddFormField label="Work mode">
+                  <select
+                    value={addDraft.workMode}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, workMode: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                  >
+                    <option value="HYBRID">Hybrid</option>
+                    <option value="INOFFICE">In office</option>
+                    <option value="REMOTE">Remote</option>
+                  </select>
+                </AddFormField>
+                <AddFormField label="Start date">
+                  <input
+                    type="date"
+                    value={addDraft.startDate}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, startDate: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                  />
+                </AddFormField>
+              </div>
+            </AddFormSection>
+
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 border-t border-[rgb(var(--border))] pt-4">
+              <button type="button" onClick={closeAdd} className="rt-btn-ghost w-full sm:w-auto">
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!addFormCanSubmit}
+                className={[
+                  "rt-btn-primary w-full sm:w-auto transition-all",
+                  !addFormCanSubmit ? "opacity-60 cursor-not-allowed" : "",
+                ].join(" ")}
+              >
+                {mutating ? "Adding…" : "Create employee"}
+              </button>
+            </div>
+          </form>
+        </ModalOverlay>
+      ) : null}
+
+      
+      {editingEmployee ? (
+        <ModalOverlay
+          open={Boolean(editingEmployee)}
+          onClose={closeEdit}
+          maxWidth="max-w-xl"
+          zIndex={60}
+          header={
+            <div>
+              <h3 className="rt-section-title">Edit Employee</h3>
+              <p className="mt-1 text-sm text-[rgb(var(--muted))]">
+                Update directory details for{" "}
+                <span className="font-mono text-[rgb(var(--text))]">{editingEmployee.id}</span>
+                {editingEmployee.email ? (
+                  <>
+                    {" "}
+                    · <span className="text-[rgb(var(--text))]">{editingEmployee.email}</span>
+                  </>
+                ) : null}
+              </p>
+            </div>
+          }
+        >
+          <form onSubmit={saveEdit} className="space-y-5">
+            <AddFormSection title="Identity" subtitle="Name and sign-in email (email is read-only).">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <AddFormField label="Employee ID">
+                  <input
+                    value={String(editingEmployee.id || "")}
+                    readOnly
+                    className="rt-input w-full text-sm font-mono opacity-70 cursor-not-allowed"
+                  />
+                </AddFormField>
+                <AddFormField label="Work email">
+                  <input
+                    value={String(editingEmployee.email || "")}
+                    readOnly
+                    className="rt-input w-full text-sm opacity-70 cursor-not-allowed"
+                  />
+                </AddFormField>
+              </div>
+              <AddFormField label="Full name" required>
+                <input
+                  value={draft.name}
+                  onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                  className="rt-input w-full text-sm"
+                  placeholder="e.g., Alice Johnson"
+                  required
+                />
+              </AddFormField>
+            </AddFormSection>
+
+            <AddFormSection
+              title="Role & access"
+              subtitle="Portal role. Band and department apply to non-admin profiles."
+            >
+              <AddFormField label="Portal role" required>
+                <select
+                  value={draft.role}
+                  onChange={(e) => setDraft((d) => ({ ...d, role: e.target.value }))}
+                  className="rt-input w-full text-sm"
+                >
+                  <option value="Employee">Employee</option>
+                  <option value="Manager">Manager</option>
+                  <option value="HR">HR</option>
+                  <option value="Finance">Finance</option>
+                  <option value="Admin">Admin</option>
+                </select>
+              </AddFormField>
+              {editRoleIsAdmin ? (
+                <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2.5 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
+                  Admin profiles do not require band or department updates.
+                </div>
+              ) : null}
+            </AddFormSection>
+
+            {!editRoleIsAdmin ? (
+              <AddFormSection
+                title="Organization"
+                subtitle="Band and department must match your directory lookups."
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <AddFormField label="Band" required>
+                    <select
+                      value={draft.band}
+                      onChange={(e) =>
+                        setDraft((d) => ({ ...d, band: e.target.value, designation: "" }))
+                      }
+                      className="rt-input w-full text-sm"
+                    >
+                      {bandSelectOptions.map((band) => (
+                        <option key={`edit-band:${band.value}`} value={band.value}>
+                          {band.label}
+                        </option>
+                      ))}
+                    </select>
+                  </AddFormField>
+                  <AddFormField label="Department" required>
+                    <select
+                      value={draft.stream}
+                      onChange={(e) =>
+                        setDraft((d) => ({ ...d, stream: e.target.value, designation: "" }))
+                      }
+                      className="rt-input w-full text-sm"
+                    >
+                      <option value="">Select department</option>
+                      {streamSelectOptions.map((stream) => (
+                        <option key={`edit-stream:${stream.value}`} value={stream.value}>
+                          {stream.label}
+                        </option>
+                      ))}
+                    </select>
+                  </AddFormField>
+                </div>
+
+                <AddFormField
+                  label="Designation"
+                  hint={
+                    editDesignationLoading
+                      ? "Loading designations for this band and department…"
+                      : "Designation is derived from band on the server; shown here for reference."
+                  }
+                >
+                  {editDesignationOptions.length > 0 ? (
+                    <select
+                      value={draft.designation}
+                      onChange={(e) => setDraft((d) => ({ ...d, designation: e.target.value }))}
+                      className="rt-input w-full text-sm"
+                      disabled={editDesignationLoading}
+                    >
+                      <option value="">Select designation</option>
+                      {editDesignationOptions.map((label) => (
+                        <option key={`edit-des:${label}`} value={label}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={draft.designation}
+                      onChange={(e) => setDraft((d) => ({ ...d, designation: e.target.value }))}
+                      className="rt-input w-full text-sm"
+                      placeholder={
+                        editDesignation?.designation || "e.g., Software Engineer II"
+                      }
+                      disabled={editDesignationLoading}
+                    />
+                  )}
+                </AddFormField>
+              </AddFormSection>
+            ) : null}
+
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 border-t border-[rgb(var(--border))] pt-4">
+              <button
+                type="button"
+                onClick={closeEdit}
+                disabled={mutating}
+                className="rt-btn-ghost w-full sm:w-auto disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={mutating}
+                className={[
+                  "rt-btn-primary w-full sm:w-auto transition-all",
+                  mutating ? "opacity-60 cursor-not-allowed" : "",
+                ].join(" ")}
+              >
+                {mutating ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </form>
+        </ModalOverlay>
+      ) : null}
+    </AdminPageShell>
+  );
+}

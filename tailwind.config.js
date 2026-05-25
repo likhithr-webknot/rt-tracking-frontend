@@ -1,12 +1,12 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./index.html", "./src/**/*.{js,jsx}"],
+  content: ["./index.html", "./src/**/*.{js,jsx,ts,tsx}"],
   darkMode: "class",
   theme: {
     extend: {
       fontFamily: {
         sans: [
-          "Plus Jakarta Sans",
+          '"Source Sans 3"',
           "ui-sans-serif",
           "system-ui",
           "-apple-system",
@@ -14,9 +14,7 @@ export default {
           "Roboto",
           "Helvetica Neue",
           "Arial",
-          "Noto Sans",
-          "Apple Color Emoji",
-          "Segoe UI Emoji",
+          "sans-serif",
         ],
         mono: [
           "ui-monospace",
@@ -24,10 +22,12 @@ export default {
           "Menlo",
           "Monaco",
           "Consolas",
-          "Liberation Mono",
-          "Courier New",
           "monospace",
         ],
+      },
+      boxShadow: {
+        card: "0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.06)",
+        "card-dark": "0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px rgba(0, 0, 0, 0.35)",
       },
     },
   },
