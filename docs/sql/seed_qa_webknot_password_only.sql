@@ -41,6 +41,11 @@
 
 -- COMMIT;
 
+-- Prefer API seed when Webtrak runs with dev profile:
+--   POST http://localhost:8080/api/v1/dev/seed-qa-users
+-- List who can use password login:
+--   GET  http://localhost:8080/api/v1/dev/auth-users
+
 -- --- Optional: Spring-style authorities (if your stack uses this table) ----------
 -- INSERT INTO authorities (username, authority) VALUES
 --   ('qa.employee.one@webknot.in', 'ROLE_EMPLOYEE'),

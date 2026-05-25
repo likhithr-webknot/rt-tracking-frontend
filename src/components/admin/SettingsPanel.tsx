@@ -24,12 +24,18 @@ import {
   Wrench,
   Cloud,
   Briefcase,
+  Mail,
 } from "lucide-react";
+import {
+  sendMonthlyWorkflowReminders,
+  sendSubmissionWindowClosingReminders,
+} from "../../api/portal-notifications";
 import { fetchDriveStorageStats } from "../../api/webknot-drive";
 import Toast from "../shared/Toast";
 import ConfirmDialog from "../shared/ConfirmDialog";
 import ModalOverlay, { DialogFooter } from "../shared/ModalOverlay";
 import AdminPageHeader from "./AdminPageHeader";
+import EmployeeSubmissionOverride from "./EmployeeSubmissionOverride";
 import {
   APP_SETTINGS_DEFAULTS,
   getAppSettings,
@@ -45,9 +51,6 @@ import {
   scheduleRoleSubmissionWindow,
   openRoleSubmissionWindowNow,
   closeRoleSubmissionWindowNow,
-  openSubmissionWindowForEmployeeNow,
-  closeSubmissionWindowForEmployeeNow,
-  fetchEmployeeSubmissionWindowStatus,
 } from "../../api/submission-window";
 import {
   createSetting as createServerSetting,
@@ -219,7 +222,7 @@ function WindowCard({ icon: Icon, iconColor, title, win, setWin, isOpen, busy, o
   );
 }
 
-export default function SettingsPanel() {
+export default function SettingsPanel({ employees = [], employeesLoading = false }) {
   const [settings, setSettings] = useState(() => getAppSettings());
   const [toast, setToast] = useState(null);
   const [hasUnsaved, setHasUnsaved] = useState(false);
@@ -244,12 +247,8 @@ export default function SettingsPanel() {
   const [mgrBusy, setMgrBusy] = useState(false);
   const [winLoading, setWinLoading] = useState(true);
 
-  /* per-employee override */
-  const [empOverrideId, setEmpOverrideId] = useState("");
-  const [empOverrideResult, setEmpOverrideResult] = useState(null);
-  const [empOverrideBusy, setEmpOverrideBusy] = useState(false);
-  const [empOverrideModalOpen, setEmpOverrideModalOpen] = useState(false);
   const [settingKeyToDelete, setSettingKeyToDelete] = useState(null);
+  const [emailReminderBusy, setEmailReminderBusy] = useState("");
 
   const globalIsOpen = useMemo(() => isWindowOpenLocal(globalWin), [globalWin]);
   const empIsOpen = useMemo(() => isWindowOpenLocal(empWin), [empWin]);
@@ -343,46 +342,6 @@ export default function SettingsPanel() {
 
   const empHandlers = useMemo(() => makeRoleHandlers("employee", empWin, setEmpWin, empIsOpen, setEmpBusy), [empWin, empIsOpen]);
   const mgrHandlers = useMemo(() => makeRoleHandlers("manager", mgrWin, setMgrWin, mgrIsOpen, setMgrBusy), [mgrWin, mgrIsOpen]);
-
-  /* Per-employee override handlers */
-  async function lookupEmployeeWindow() {
-    const id = String(empOverrideId).trim();
-    if (!id) { showToastMsg({ title: "Missing", message: "Enter an employee ID." }); return; }
-    setEmpOverrideBusy(true);
-    setEmpOverrideResult(null);
-    try {
-      const res = await fetchEmployeeSubmissionWindowStatus(id);
-      setEmpOverrideResult({ type: "status", data: parseSettingsWindowFields(res), employeeId: id });
-    } catch (err) {
-      showToastMsg({ title: "Lookup failed", message: err?.message || "Please try again." });
-    } finally { setEmpOverrideBusy(false); }
-  }
-
-  async function openWindowForEmployee() {
-    const id = String(empOverrideId).trim();
-    if (!id) return;
-    setEmpOverrideBusy(true);
-    try {
-      const res = await openSubmissionWindowForEmployeeNow(id);
-      setEmpOverrideResult({ type: "status", data: parseSettingsWindowFields(res), employeeId: id });
-      showToastMsg({ title: "Window opened", message: `Opened for ${id}.` });
-    } catch (err) {
-      showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
-    } finally { setEmpOverrideBusy(false); }
-  }
-
-  async function closeWindowForEmployee() {
-    const id = String(empOverrideId).trim();
-    if (!id) return;
-    setEmpOverrideBusy(true);
-    try {
-      const res = await closeSubmissionWindowForEmployeeNow(id);
-      setEmpOverrideResult({ type: "status", data: parseSettingsWindowFields(res), employeeId: id });
-      showToastMsg({ title: "Window closed", message: `Closed for ${id}.` });
-    } catch (err) {
-      showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
-    } finally { setEmpOverrideBusy(false); }
-  }
 
   useEffect(() => {
     function onUpdated(event) {
@@ -967,104 +926,82 @@ export default function SettingsPanel() {
               />
             </div>
 
-            <div className="border-t border-[rgb(var(--border))] pt-5 mt-2 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <div className="rounded-md p-1.5 bg-amber-500/10 text-amber-500"><Users size={14} /></div>
-                <div>
-                  <div className="text-sm font-semibold text-[rgb(var(--text))]">Per-employee override</div>
-                  <div className="text-[10px] text-[rgb(var(--muted))]">Open, close, or check submission window for one employee</div>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="rt-btn-primary text-sm"
-                onClick={() => setEmpOverrideModalOpen(true)}
-              >
-                Manage override…
-              </button>
-            </div>
-
-            <ModalOverlay
-              open={empOverrideModalOpen}
-              onClose={() => setEmpOverrideModalOpen(false)}
-              maxWidth="max-w-lg"
-              zIndex={140}
-              title="Per-employee window"
-              subtitle="Override global and role windows for a single employee ID."
-            >
-              <div className="space-y-4">
-              <div className="flex items-end gap-3 flex-wrap">
-                <div className="flex-1 min-w-[200px]">
-                  <FieldLabel>Employee ID</FieldLabel>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={14} />
-                    <input
-                      value={empOverrideId}
-                      onChange={(e) => setEmpOverrideId(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") lookupEmployeeWindow(); }}
-                      className="w-full rt-input py-2.5 pl-9 pr-3 text-sm font-mono"
-                      placeholder="e.g. EMP001"
-                    />
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={lookupEmployeeWindow}
-                  disabled={empOverrideBusy || !empOverrideId.trim()}
-                  className={["rt-btn-ghost text-sm py-2.5", empOverrideBusy ? " opacity-60 cursor-not-allowed" : ""].join("")}
-                >
-                  <Search size={13} /> Lookup
-                </button>
-                <button
-                  type="button"
-                  onClick={openWindowForEmployee}
-                  disabled={empOverrideBusy || !empOverrideId.trim()}
-                  className={["rt-btn-primary text-sm py-2.5 !bg-emerald-500 !text-white hover:!bg-emerald-400", empOverrideBusy ? " opacity-60 cursor-not-allowed" : ""].join("")}
-                >
-                  <Play size={13} /> Open
-                </button>
-                <button
-                  type="button"
-                  onClick={closeWindowForEmployee}
-                  disabled={empOverrideBusy || !empOverrideId.trim()}
-                  className={["rt-btn-primary text-sm py-2.5 !bg-red-500/10 !text-red-700 dark:!text-red-300 !border-red-500/20 hover:!bg-red-500 hover:!text-white", empOverrideBusy ? " opacity-60 cursor-not-allowed" : ""].join("")}
-                >
-                  <Square size={13} /> Close
-                </button>
-              </div>
-
-              {empOverrideResult?.data ? (
-                <div className="mt-3 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs font-semibold text-[rgb(var(--text))]">
-                      Window for <span className="font-mono">{empOverrideResult.employeeId}</span>
-                    </span>
-                    <span
-                      className={`ml-auto text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${
-                        empOverrideResult.data.isOpen || isWindowOpenLocal(empOverrideResult.data)
-                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
-                          : "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20"
-                      }`}
-                    >
-                      {empOverrideResult.data.isOpen || isWindowOpenLocal(empOverrideResult.data) ? "Open" : "Closed"}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <span className="text-[rgb(var(--muted))]">Opens:</span>{" "}
-                      <span className="font-mono text-[rgb(var(--text))]">{empOverrideResult.data.start || "—"}</span>
-                    </div>
-                    <div>
-                      <span className="text-[rgb(var(--muted))]">Closes:</span>{" "}
-                      <span className="font-mono text-[rgb(var(--text))]">{empOverrideResult.data.end || "—"}</span>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              </div>
-            </ModalOverlay>
+            <EmployeeSubmissionOverride
+              employees={employees}
+              employeesLoading={employeesLoading}
+              showToast={showToastMsg}
+            />
           </>
         )}
+      </SectionCard>
+
+      <SectionCard
+        icon={Mail}
+        title="Email reminders"
+        description="Notify people about the monthly RT sheet and pending reviews (requires SMTP in Webtrak)"
+        defaultOpen
+      >
+        <p className="text-sm text-[rgb(var(--muted))] leading-relaxed">
+          Emails are sent from the Webtrak server using <code className="text-xs">SMTP_USERNAME</code> /{" "}
+          <code className="text-xs">SMTP_PASSWORD</code> in your backend <code className="text-xs">.env</code>.
+          Open the global submission window first so people know the closing date.
+        </p>
+        <div className="flex flex-wrap gap-3 pt-2">
+          <button
+            type="button"
+            className="rt-btn-primary text-sm"
+            disabled={Boolean(emailReminderBusy)}
+            onClick={async () => {
+              setEmailReminderBusy("closing");
+              try {
+                const res = await sendSubmissionWindowClosingReminders();
+                const data = res?.data ?? res;
+                setToast({
+                  title: "RT sheet reminders sent",
+                  message: `Emailed ${data?.sent ?? 0} people. Skipped ${data?.skippedAlreadySubmitted ?? 0} who already submitted.`,
+                });
+              } catch (err) {
+                setToast({
+                  title: "Email failed",
+                  message: err?.message || "Could not send reminders. Check SMTP settings on the server.",
+                  tone: "error",
+                });
+              } finally {
+                setEmailReminderBusy("");
+              }
+            }}
+          >
+            {emailReminderBusy === "closing" ? "Sending…" : "Remind: RT sheet closing"}
+          </button>
+          <button
+            type="button"
+            className="rt-btn-secondary text-sm"
+            disabled={Boolean(emailReminderBusy)}
+            onClick={async () => {
+              setEmailReminderBusy("workflow");
+              try {
+                await sendMonthlyWorkflowReminders();
+                setToast({
+                  title: "Workflow reminders sent",
+                  message: "Managers and HR were emailed about pending monthly reviews.",
+                });
+              } catch (err) {
+                setToast({
+                  title: "Email failed",
+                  message: err?.message || "Could not send workflow reminders.",
+                  tone: "error",
+                });
+              } finally {
+                setEmailReminderBusy("");
+              }
+            }}
+          >
+            {emailReminderBusy === "workflow" ? "Sending…" : "Remind: pending manager reviews"}
+          </button>
+        </div>
+        <p className="text-xs text-[rgb(var(--muted))]">
+          Cron (optional): <code className="text-[11px]">GET /api/v1/monthly-submission-reminders</code> on the server.
+        </p>
       </SectionCard>
 
       {/* ── Save / Reset bar ── */}

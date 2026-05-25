@@ -69,7 +69,13 @@ export async function fetchEmployeePortalKpiDefinitions({
   const emp = sanitizeEmployeeIdForApi(employeeId);
   if (emp) qs.set("employeeId", emp);
   if (band) qs.set("band", String(band));
-  if (stream) qs.set("department", String(stream));
+  if (stream) {
+    qs.set("department", String(stream));
+    qs.set("stream", String(stream));
+  }
+  if (band && stream) {
+    qs.set("limit", String(Math.max(Number(limit) || 0, 100)));
+  }
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   const headers = auth ? { Authorization: auth } : undefined;
   const listPaths = [

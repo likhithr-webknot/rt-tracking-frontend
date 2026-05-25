@@ -80,35 +80,10 @@ import { getAppSettings } from "../../utils/appSettings.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
 import ResubmissionPlaybook from "../shared/ResubmissionPlaybook";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
+import { EMPLOYEE_NAV_GROUPS, EMPLOYEE_TAB_COPY } from "../../config/portalNavigation";
 
 const DEFAULT_PAGE_LIMIT = 10;
 const EMPLOYEE_SIDEBAR_PREF_KEY = "rt_tracking_employee_sidebar_open_v1";
-
-const EMPLOYEE_NAV_ITEMS = [
-  { id: "profile", icon: <UserCircle2 size={18} />, label: "Profile" },
-  { id: "kpis", icon: <Target size={18} />, label: "KPIs" },
-  { id: "values", icon: <Sparkles size={18} />, label: "Values" },
-  { id: "certifications", icon: <Award size={18} />, label: "Certifications" },
-  { id: "recognitions", icon: <Award size={18} />, label: "Recognitions" },
-  { id: "review", icon: <ClipboardCheck size={18} />, label: "Review" },
-  { id: "timelogs", icon: <Clock size={18} />, label: "Time Logs" },
-  { id: "leave-requests", icon: <Calendar size={18} />, label: "Leave" },
-  { id: "notes", icon: <StickyNote size={18} />, label: "Notes" },
-  { id: "drive", icon: <Cloud size={18} />, label: "My Drive" },
-];
-
-const EMPLOYEE_TAB_COPY = {
-  profile: { title: "Profile", subtitle: "Your employee record and contact details." },
-  kpis: { title: "KPIs", subtitle: "Rate KPIs assigned to your band and department." },
-  values: { title: "Webknot Values", subtitle: "Reflect on Webknot values for this review cycle." },
-  certifications: { title: "Certifications", subtitle: "Select credentials that apply to you this cycle." },
-  recognitions: { title: "Recognitions", subtitle: "Highlight peer and project recognitions." },
-  review: { title: "Review", subtitle: "Write your self review and submit for manager evaluation." },
-  timelogs: { title: "Time Logs", subtitle: "Log effort and hours against your projects." },
-  "leave-requests": { title: "Leave", subtitle: "Request leave, WFH, or comp off." },
-  notes: { title: "Notes", subtitle: "Private sections and pages — only you can see these." },
-  drive: { title: "My Drive", subtitle: "Your personal files — not visible to other employees or managers." },
-};
 
 function getEmployeeValuesPageSize() {
   const n = Number.parseInt(String(getAppSettings()?.employeeValuesPageSize ?? DEFAULT_PAGE_LIMIT), 10);
@@ -202,18 +177,24 @@ function hasReadableValueItems(items) {
   return items.some((v) => !isPlaceholderValueTitle(v?.title, v?.id));
 }
 
+function employeeBandAndStream(employee) {
+  const band = normalizeBandKey(employee?.band);
+  const stream = normalizeStreamKey(employee?.stream ?? employee?.department);
+  return { band, stream };
+}
+
+/** Employees only see KPIs that match their exact band and department (no global/wildcard rows). */
 function kpiAppliesToEmployee(kpi, employee) {
-  const empBand = normalizeBandKey(employee?.band);
-  const empStream = normalizeStreamKey(employee?.stream);
-  if (!empBand && !empStream) return true;
+  const { band: empBand, stream: empStream } = employeeBandAndStream(employee);
+  if (!empBand || !empStream) return false;
 
-  const kpiBand = normalizeBandKey(kpi?.band);
-  const kpiStream = normalizeStreamKey(kpi?.stream);
+  const kpiBand = normalizeBandKey(kpi?.band ?? kpi?.bandName ?? kpi?.bandCode);
+  const kpiStream = normalizeStreamKey(kpi?.stream ?? kpi?.department);
 
-  const bandOk = isWildcardValue(kpiBand) || !kpiBand || !empBand || kpiBand === empBand;
-  const streamOk = isWildcardValue(kpiStream) || !kpiStream || !empStream || kpiStream === empStream;
+  if (!kpiBand || !kpiStream) return false;
+  if (isWildcardValue(kpiBand) || isWildcardValue(kpiStream)) return false;
 
-  return bandOk && streamOk;
+  return kpiBand === empBand && kpiStream === empStream;
 }
 
 function normalizeEmployeeFromMe(me, { fallbackEmail, fallbackRole } = {}) {
@@ -234,7 +215,7 @@ function normalizeEmployeeFromMe(me, { fallbackEmail, fallbackRole } = {}) {
   );
   const designation = String(obj.designation ?? obj.title ?? obj.jobTitle ?? "").trim() || null;
   const band = String(obj.band ?? obj.level ?? "").trim() || null;
-  const stream = String(obj.stream ?? obj.context ?? "").trim() || null;
+  const stream = String(obj.stream ?? obj.department ?? obj.dept ?? obj.context ?? "").trim() || null;
   const managerId = String(obj.managerId ?? "").trim() || null;
 
   return {
@@ -258,7 +239,8 @@ function normalizeEmployeeFromAuth(auth, { fallbackEmail, fallbackRole } = {}) {
     role: resolvePortalRoleLabel(obj.role, obj.empRole, obj.userRole, fallbackRole),
     designation: String(obj.designation ?? "").trim() || null,
     band: String(obj.band ?? "").trim() || null,
-    stream: String(obj.stream ?? "").trim() || null,
+    stream: String(obj.stream ?? obj.department ?? "").trim() || null,
+    department: String(obj.department ?? obj.stream ?? "").trim() || null,
     managerId: String(obj.managerId ?? "").trim() || null,
   };
 }
@@ -2542,6 +2524,7 @@ export default function EmployeePortal({ onLogout, auth }) {
             designation: normalized.designation ?? prev?.designation,
             band: normalized.band ?? prev?.band,
             stream: normalized.stream ?? prev?.stream,
+            department: normalized.department ?? normalized.stream ?? prev?.department,
           }));
           const session = getAuth();
           const profileRole = formatPortalRoleLabel(
@@ -2642,17 +2625,31 @@ export default function EmployeePortal({ onLogout, auth }) {
       setKpisError("");
       setKpiPageLoading(true);
       setKpisFullyLoaded(false);
+      const { band: empBand, stream: empStream } = employeeBandAndStream(employee);
+      if (!empBand || !empStream) {
+        setKpis([]);
+        setKpiPage({ cursor: null, nextCursor: null, stack: [], items: [] });
+        kpiPrefetchCursorRef.current = null;
+        setKpisFullyLoaded(true);
+        setKpisError(
+          "Your profile is missing a band or department. Ask HR to update your record — KPIs are shown only for your level and team.",
+        );
+        setKpiPageLoading(false);
+        return;
+      }
       try {
         const data = await fetchEmployeePortalKpiDefinitions({
           limit: DEFAULT_PAGE_LIMIT,
           cursor: null,
           employeeId: employee?.id || null,
-          band: employee?.band || null,
-          stream: employee?.stream || null,
+          band: empBand,
+          stream: empStream,
           signal: controller.signal,
         });
         const page = normalizeCursorPage(data);
-        const normalized = normalizeKpiDefinitions(page.items);
+        const normalized = normalizeKpiDefinitions(page.items).filter((k) =>
+          kpiAppliesToEmployee(k, employee),
+        );
         if (!mounted) return;
         setKpiPage({ cursor: null, nextCursor: page.nextCursor, stack: [], items: normalized });
         kpiPrefetchCursorRef.current = page.nextCursor;
@@ -3526,8 +3523,8 @@ export default function EmployeePortal({ onLogout, auth }) {
           setIsOpen={setIsSidebarOpen}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          portalTag="Employee Workspace"
-          navItems={EMPLOYEE_NAV_ITEMS}
+          portalTag="Your monthly review"
+          navGroups={EMPLOYEE_NAV_GROUPS}
           showThemeToggle
           onSettingsClick={() => setSettingsOpen(true)}
         />

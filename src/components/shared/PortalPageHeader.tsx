@@ -1,10 +1,10 @@
 // @ts-nocheck
 
-export default function PortalPageHeader({ title, subtitle, children, className = "" }) {
+export default function PortalPageHeader({ title, subtitle, sectionLabel = "This page", children, className = "" }) {
   return (
     <header
       className={[
-        "mb-10 flex w-full min-w-0 flex-col gap-5",
+        "mb-8 sm:mb-10 flex w-full min-w-0 flex-col gap-5",
         "md:flex-row md:items-end md:justify-between",
         className,
       ]
@@ -12,7 +12,7 @@ export default function PortalPageHeader({ title, subtitle, children, className 
         .join(" ")}
     >
       <div className="min-w-0 space-y-2">
-        <p className="rt-kicker">My workspace</p>
+        {sectionLabel ? <p className="rt-kicker">{sectionLabel}</p> : null}
         <h1 className="rt-page-title">{title}</h1>
         {subtitle ? <p className="rt-page-subtitle">{subtitle}</p> : null}
       </div>

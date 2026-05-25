@@ -75,14 +75,13 @@ export function normalizeProjects(data) {
 export async function fetchProjects({ signal } = {} as ApiOptions) {
   const auth = getAuthHeader();
   /**
-   * Backend (Webtrak) often returns 403 on GET /api/v1/projects for non-SUPER_ADMIN roles,
-   * while GET /api/v1/project-assigned-to-user succeeds for the same session (see scripts/api-smoke-report.md).
+   * Prefer full catalog (Admin/HR/Manager). Fall back to assigned projects for other roles.
    */
   return requestWithFallbacks(
     [
-      "/api/v1/projects/all?page=0&size=500",
       "/api/v1/projects/all",
       "/api/v1/projects?page=0&size=500",
+      "/api/v1/getAllprojects",
       "/api/v1/projects",
       "/api/v1/project-assigned-to-user",
     ],
@@ -241,10 +240,10 @@ export async function fetchAvailableProjects({ signal } = {} as ApiOptions) {
   const auth = getAuthHeader();
   return requestWithFallbacks(
     [
-      "/api/v1/projects/all?page=0&size=500",
-      "/api/v1/projects/all",
       "/api/v1/projects?page=0&size=500",
       "/api/v1/projects",
+      "/api/v1/projects/all?page=0&size=500",
+      "/api/v1/projects/all",
       "/api/v1/project-assigned-to-user",
     ],
     {

@@ -45,8 +45,17 @@ function csvSingleImportPaths(entityPath) {
 
   if (entityPath === "designation-lookups") {
     paths.unshift(
-      "/designations/import-csv",
+      "/api/v1/designation-lookups/import-csv",
       "/api/v1/designations/import-csv",
+      "/designations/import-csv",
+    );
+  }
+
+  if (entityPath === "kpi-definitions") {
+    paths.unshift(
+      "/api/v1/kpi-definitions/import-csv",
+      "/api/v1/kpi-definition/import-csv",
+      "/api/v1/kpi-directions/import-csv",
     );
   }
 
@@ -116,6 +125,11 @@ export const CSV_BULK_FIELD_TO_ENTITY = Object.fromEntries(
   Object.entries(CSV_ENTITY_TO_BULK_FIELD).map(([entity, field]) => [field, entity]),
 );
 
+function withReplaceQuery(path, replaceCatalog) {
+  if (!replaceCatalog) return path;
+  return path.includes("?") ? `${path}&replace=true` : `${path}?replace=true`;
+}
+
 async function postCsvMultipart(path, file, { signal, headers, fieldName = "file" }) {
   const formData = new FormData();
   formData.append(fieldName, file, file.name || "import.csv");
@@ -163,7 +177,9 @@ export async function importCsvSingle(entity, file, opts = {}) {
 
   await ensureCsrfCookie({ signal: opts.signal });
 
-  const paths = csvSingleImportPaths(entityPath);
+  const paths = csvSingleImportPaths(entityPath).map((path) =>
+    withReplaceQuery(path, Boolean(opts.replaceCatalog)),
+  );
   const headers = withCsrfHeaders({});
   const fieldNames = ["file", "csv", "csvFile"];
   let lastErr = null;

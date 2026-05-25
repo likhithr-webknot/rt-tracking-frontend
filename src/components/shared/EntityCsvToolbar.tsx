@@ -23,6 +23,7 @@ export default function EntityCsvToolbar({
   showToast,
   allowMissingRequired = false,
   confirmImportMessage = null,
+  replaceCatalog = false,
 }) {
   const [busy, setBusy] = useState(false);
   const [pendingFile, setPendingFile] = useState(null);
@@ -33,7 +34,7 @@ export default function EntityCsvToolbar({
     if (!file || busy) return;
     setBusy(true);
     try {
-      const res = await importCsvSingle(entityKey, file, { allowMissingRequired });
+      const res = await importCsvSingle(entityKey, file, { allowMissingRequired, replaceCatalog });
       const msg = res?.message || `Imported ${schema?.label || entityKey}.`;
       showToast?.({ title: "Import complete", message: msg, tone: "success" });
       await onImportComplete?.();

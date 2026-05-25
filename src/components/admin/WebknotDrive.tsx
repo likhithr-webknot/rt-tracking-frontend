@@ -43,9 +43,17 @@ export default function WebknotDrive({ auth = null, portalLabel = "your account"
   const [fileToDelete, setFileToDelete] = useState(null);
   const uploadLockRef = useRef(false);
 
-  const appSettings = useMemo(() => getAppSettings(), []);
+  const [appSettings, setAppSettings] = useState(() => getAppSettings());
   const maxUploadBytes = (Number(appSettings.driveMaxUploadMb) || 10) * 1024 * 1024;
   const quotaBytes = (Number(appSettings.driveQuotaGb) || 50) * 1024 * 1024 * 1024;
+
+  useEffect(() => {
+    const onSettings = (event) => {
+      setAppSettings(event?.detail ?? getAppSettings());
+    };
+    window.addEventListener("rt:app-settings-updated", onSettings);
+    return () => window.removeEventListener("rt:app-settings-updated", onSettings);
+  }, []);
 
   const loadFiles = useCallback(async () => {
     setLoading(true);

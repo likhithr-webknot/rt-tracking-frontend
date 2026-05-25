@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Edit3, Eye, EyeOff, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { Edit3, Eye, EyeOff, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import SearchField from "../shared/SearchField";
 import { STANDARD_BAND_CODES } from "../../utils/directoryCatalog";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import EntityCsvToolbar from "../shared/EntityCsvToolbar";
@@ -482,40 +483,55 @@ export default function BandStreamDirectory() {
         </div>
       </AdminPageHeader>
 
-      <div className="flex w-full min-w-0 flex-wrap items-center gap-3 justify-between">
-        <div className="relative min-w-0 flex-1 max-w-md">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={16} />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search code or label…"
-            className="rt-input w-full pl-10"
-          />
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="rt-toolbar-panel">
+        <SearchField
+          label="Find a band or department"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onClear={() => setQuery("")}
+          placeholder="Type a code or name, e.g. B4 or Developer"
+          hint="Matches both tables below. Use Clear to show everything again."
+        />
+        {query.trim() ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[rgb(var(--muted))]">
+            <span>
+              Showing {filteredBands.length} band{filteredBands.length === 1 ? "" : "s"} and{" "}
+              {filteredStreams.length} department{filteredStreams.length === 1 ? "" : "s"}
+            </span>
+            <button type="button" className="rt-btn-ghost !py-1.5 !px-3 text-sm" onClick={() => setQuery("")}>
+              Clear all
+            </button>
+          </div>
+        ) : null}
+        <div className="rt-toolbar-actions border-t border-[rgb(var(--border))] pt-4">
           <button
             type="button"
             onClick={() => refetchDirectory()}
             disabled={loading}
-            className="rt-btn-ghost"
-            title="Refresh"
+            className="rt-btn-secondary"
+            title="Refresh lists"
           >
             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+            Refresh
           </button>
           <EntityCsvToolbar
             entityKey="bands"
             importLabel="Import bands"
             exportLabel="Export bands"
+            replaceCatalog
             onExport={() => exportBandsCsv(bands)}
             onImportComplete={() => refetchDirectory()}
+            confirmImportMessage="Replace all bands from CSV? Unused bands not assigned to anyone are removed."
             showToast={showToast}
           />
           <EntityCsvToolbar
             entityKey="streams"
             importLabel="Import depts"
             exportLabel="Export depts"
+            replaceCatalog
             onExport={() => exportDepartmentsCsv(streams)}
             onImportComplete={() => refetchDirectory()}
+            confirmImportMessage="Replace department list from CSV? Streams not in the file are deactivated."
             showToast={showToast}
           />
           <button onClick={() => openAdd("band")} className="rt-btn-primary" type="button">
@@ -531,7 +547,7 @@ export default function BandStreamDirectory() {
         <section className="rt-panel min-w-0 flex flex-col max-h-[min(70vh,640px)] overflow-hidden">
           <div className="shrink-0 border-b border-[rgb(var(--border))] px-5 py-4">
             <h3 className="rt-section-title">Bands</h3>
-            <p className="rt-section-subtitle">Employee level codes used in KPI and roster mapping.</p>
+            <p className="rt-section-subtitle">Employee level codes — scroll inside this panel.</p>
           </div>
           <div className="min-w-0 flex-1 overflow-auto custom-scrollbar">
             <table className="w-full text-left text-sm">
@@ -549,7 +565,7 @@ export default function BandStreamDirectory() {
               </thead>
               <tbody>
                 {filteredBands.map((row) => (
-                  <tr key={`band:${row.id || row.code}`} className="border-b border-[rgb(var(--border))] hover:bg-[rgb(var(--surface-2))]/60">
+                  <tr key={`band:${row.id || row.code}`} className="rt-table-row-interactive">
                     <td className="px-4 py-3 font-mono text-xs font-semibold text-[rgb(var(--text))]">{row.code}</td>
                     <td className="px-4 py-3 text-[rgb(var(--text))]">{row.label}</td>
                     <td className="px-4 py-3">
@@ -588,7 +604,7 @@ export default function BandStreamDirectory() {
         <section className="rt-panel min-w-0 flex flex-col max-h-[min(70vh,640px)] overflow-hidden">
           <div className="shrink-0 border-b border-[rgb(var(--border))] px-5 py-4">
             <h3 className="rt-section-title">Departments</h3>
-            <p className="rt-section-subtitle">Streams / departments for KPI and employee assignment.</p>
+            <p className="rt-section-subtitle">Department details — scroll inside this panel.</p>
           </div>
           <div className="min-w-0 flex-1 overflow-auto custom-scrollbar">
             <table className="w-full text-left text-sm">
@@ -606,7 +622,7 @@ export default function BandStreamDirectory() {
               </thead>
               <tbody>
                 {filteredStreams.map((row) => (
-                  <tr key={`stream:${row.id || row.code}`} className="border-b border-[rgb(var(--border))] hover:bg-[rgb(var(--surface-2))]/60">
+                  <tr key={`stream:${row.id || row.code}`} className="rt-table-row-interactive">
                     <td className="px-4 py-3 font-mono text-xs font-semibold">{row.code}</td>
                     <td className="px-4 py-3">{row.label}</td>
                     <td className="px-4 py-3">

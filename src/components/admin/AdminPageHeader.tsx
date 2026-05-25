@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 type AdminPageHeaderProps = {
   title: string;
   subtitle?: string;
+  sectionLabel?: string;
   children?: ReactNode;
   className?: string;
 };
@@ -10,13 +11,14 @@ type AdminPageHeaderProps = {
 export default function AdminPageHeader({
   title,
   subtitle,
+  sectionLabel = "Admin",
   children,
   className = "",
 }: AdminPageHeaderProps) {
   return (
     <header
       className={[
-        "mb-10 flex w-full min-w-0 flex-col gap-5",
+        "mb-8 sm:mb-10 flex w-full min-w-0 flex-col gap-5",
         "sm:flex-row sm:items-end sm:justify-between",
         className,
       ]
@@ -24,7 +26,7 @@ export default function AdminPageHeader({
         .join(" ")}
     >
       <div className="min-w-0 space-y-2">
-        <p className="rt-kicker">Admin workspace</p>
+        {sectionLabel ? <p className="rt-kicker">{sectionLabel}</p> : null}
         <h2 className="rt-page-title">{title}</h2>
         {subtitle ? <p className="rt-page-subtitle">{subtitle}</p> : null}
       </div>

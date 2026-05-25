@@ -78,12 +78,19 @@ export function exportCertificationsCsv(certs) {
 }
 
 export function exportBandsCsv(bands) {
-  const header = ["name", "designation"];
-  const rows = (bands || []).map((b) => [
-    b.code || b.label || b.name || "",
-    b.label || b.designation || "",
-  ]);
+  const header = ["code"];
+  const rows = (bands || []).map((b) => [b.code || b.label || b.name || ""]);
   downloadCsv("bands.csv", header, rows);
+}
+
+export function exportDesignationsCsv(rows) {
+  const header = ["stream", "band", "designation"];
+  const data = (rows || []).map((d) => [
+    d.department || d.stream || "",
+    d.band?.name || d.bandCode || d.band || "",
+    d.name || d.designation || "",
+  ]);
+  downloadCsv("designation-lookups.csv", header, data);
 }
 
 export function exportDepartmentsCsv(streams) {

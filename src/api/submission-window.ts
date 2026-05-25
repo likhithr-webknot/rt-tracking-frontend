@@ -96,6 +96,34 @@ async function postUpsertSubmissionCycle(body, { signal } = {} as ApiOptions) {
       lastErr = err;
       continue;
     }
+    const msg = String(err?.message ?? "").toLowerCase();
+    const duplicate =
+      msg.includes("duplicate key") ||
+      msg.includes("already exists") ||
+      msg.includes("submission_cycles_cycle_key");
+    if (duplicate) {
+      try {
+        const { updateSubmissionCycle, fetchSubmissionCycleByKey } = await import(
+          "./monthly-submissions"
+        );
+        const existing = await fetchSubmissionCycleByKey({
+          cycleKey: body.cycleKey,
+          scope: body.scope,
+          signal,
+        }).catch(() => null);
+        const row =
+          existing?.data ??
+          existing?.submissionCycle ??
+          existing;
+        const id = row?.id ?? row?.submissionCycleId ?? null;
+        if (id) {
+          return updateSubmissionCycle({ ...body, id }, { signal });
+        }
+        return updateSubmissionCycle(body, { signal });
+      } catch (fallbackErr) {
+        throw err;
+      }
+    }
     throw err;
   }
   throw lastErr || new Error("Submission window upsert endpoint not found.");
@@ -396,14 +424,37 @@ export async function fetchEmployeeSubmissionWindowStatus(employeeId, { signal }
   const id = String(employeeId ?? "").trim();
   if (!id) throw new Error("employeeId is required.");
 
-  try {
-    const response = await fetchCurrentMonthlySubmission("EMPLOYEE", { signal, employeeId: id });
-    return { ...response, employeeId: id };
-  } catch (err) {
-    if (err?.status === 404) {
-      const response = await fetchCurrentMonthlySubmission("EMPLOYEE", { signal });
-      return { ...response, employeeId: id };
-    }
-    throw err;
+  const key = monthCycleKey();
+  const searchQs = new URLSearchParams();
+  searchQs.set("cycleKey", key);
+  searchQs.set("scope", "EMPLOYEE");
+  searchQs.set("employeeId", id);
+
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl(`/api/v1/get-submission-cycle?${searchQs.toString()}`), {
+    signal,
+    credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+
+  if (res.ok) {
+    const data = await res.json().catch(() => ({}));
+    return { ...toWindowResponse(data, { cycleKey: key, scope: "EMPLOYEE" }), employeeId: id };
   }
+
+  if (res.status === 404) {
+    return {
+      employeeId: id,
+      cycleKey: key,
+      scope: "EMPLOYEE",
+      isOpen: false,
+      manualClosed: true,
+      start: null,
+      end: null,
+      startAt: null,
+      endAt: null,
+    };
+  }
+
+  throw await toHttpError(res);
 }

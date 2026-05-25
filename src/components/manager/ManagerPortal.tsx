@@ -72,7 +72,6 @@ import PortalSettingsModal from "../shared/PortalSettingsModal";
 import PortalPageHeader from "../shared/PortalPageHeader";
 import TimeLogTracker from "../shared/TimeLogTracker";
 import SubmissionWindowClosed from "../employee/SubmissionWindowClosed";
-import ManagerExtensionsView from "./ManagerExtensionsView";
 import ManagerCalibrationPanel from "./ManagerCalibrationPanel";
 import ManagerAiReviewAssist from "./ManagerAiReviewAssist";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
@@ -90,35 +89,11 @@ import {
   normalizeManagerNotificationPage,
   subscribeManagerNotificationsStream,
 } from "../../api/notifications";
+import { MANAGER_NAV_GROUPS, MANAGER_TAB_COPY } from "../../config/portalNavigation";
 
 const MANAGER_REVIEW_DRAFT_KEY = "rt_tracking_manager_review_draft_v1";
 const MANAGER_SIDEBAR_PREF_KEY = "rt_tracking_manager_sidebar_open_v1";
 
-const MANAGER_NAV_ITEMS = [
-  { id: "team", icon: <Users size={18} />, label: "Team" },
-  { id: "self-review", icon: <ClipboardCheck size={18} />, label: "Self Review" },
-  { id: "notes", icon: <StickyNote size={18} />, label: "Notes" },
-  { id: "drive", icon: <Cloud size={18} />, label: "My Drive" },
-];
-
-const MANAGER_TAB_COPY = {
-  team: {
-    title: "Team",
-    subtitle: "Review reportee submissions and track cycle progress.",
-  },
-  "self-review": {
-    title: "Self Review",
-    subtitle: "Complete your monthly manager self review for this cycle.",
-  },
-  notes: {
-    title: "Notes",
-    subtitle: "Private to your account — reportees cannot see your notes.",
-  },
-  drive: {
-    title: "My Drive",
-    subtitle: "Your personal files — not visible to reportees or other managers.",
-  },
-};
 const TEAM_PAGE_SIZE = 12;
 const MANAGER_NOTIFICATION_PAGE_SIZE = 25;
 const MANAGER_NOTIFICATION_POLL_MS = 30_000;
@@ -2522,8 +2497,8 @@ export default function ManagerPortal({ onLogout, auth }) {
           setIsOpen={setIsSidebarOpen}
           activeTab={activeTab}
           setActiveTab={handleSidebarTabChange}
-          portalTag="Manager Workspace"
-          navItems={MANAGER_NAV_ITEMS}
+          portalTag="Lead your team's reviews"
+          navGroups={MANAGER_NAV_GROUPS}
           showThemeToggle
           onSettingsClick={() => setSettingsOpen(true)}
         />

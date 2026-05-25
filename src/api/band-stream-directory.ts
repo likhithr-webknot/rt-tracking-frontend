@@ -92,11 +92,61 @@ function collapseDuplicateDelimitedParts(text, delimiter = " - ") {
   return parts.every((p) => p === first) ? first : raw;
 }
 
+/** "A - B - A - B - A - B" → ["A", "B"] when the list is a repeating pattern. */
+function collapseRepeatingSequence(parts) {
+  if (!Array.isArray(parts) || parts.length < 2) return parts;
+  for (let period = 1; period <= Math.floor(parts.length / 2); period += 1) {
+    const head = parts.slice(0, period);
+    let matches = true;
+    for (let i = period; i < parts.length; i += 1) {
+      if (parts[i] !== head[i % period]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return head;
+  }
+  return parts;
+}
+
 export function collapseRepeatedSegments(text) {
   let t = String(text ?? "").trim();
   if (!t) return t;
-  t = collapseDuplicateDelimitedParts(t, " - ");
-  t = collapseDuplicateDelimitedParts(t, " — ");
+  for (const delimiter of [" - ", " — ", " | "]) {
+    const parts = t.split(delimiter).map((p) => p.trim()).filter(Boolean);
+    if (parts.length < 2) continue;
+    const identical = collapseDuplicateDelimitedParts(t, delimiter);
+    const sequenced = collapseRepeatingSequence(parts).join(delimiter.trim());
+    if (sequenced.length < t.length) t = sequenced;
+    else if (identical.length < t.length) t = identical;
+  }
+  return t;
+}
+
+/** Band code for tables (B4, B5L) even when API stored a long combined label. */
+export function formatEmployeeBandCode(raw) {
+  const cleaned = collapseRepeatedSegments(String(raw ?? "").trim());
+  if (!cleaned) return "";
+  const firstSeg = cleaned.split(/\s*[-—]\s*/)[0]?.trim() || cleaned;
+  if (/^B\d+[A-Z]?$/i.test(firstSeg)) return firstSeg.toUpperCase();
+  const m = cleaned.match(/\b(B\d+[A-Z]?)\b/i);
+  return m ? m[1].toUpperCase() : firstSeg;
+}
+
+/** Designation label with repeating "B1 - Developer - …" segments collapsed. */
+export function formatEmployeeDesignation(raw, bandRaw = "") {
+  let t = collapseRepeatedSegments(String(raw ?? "").trim());
+  if (!t) return "";
+  const bandCode = formatEmployeeBandCode(bandRaw);
+  if (bandCode) {
+    const re = new RegExp(`^${bandCode}\\s*[-—]\\s*`, "i");
+    t = t.replace(re, "").trim();
+    t = collapseRepeatedSegments(t);
+  }
+  const parts = t.split(/\s*[-—]\s*/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length >= 2 && /^B\d+[A-Z]?$/i.test(parts[0])) {
+    return parts.slice(1).join(" · ") || parts[0];
+  }
   return t;
 }
 

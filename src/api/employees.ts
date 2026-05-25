@@ -1,4 +1,5 @@
 import type { ApiOptions } from "../types/api-options";
+import { formatEmployeeBandCode, formatEmployeeDesignation } from "./band-stream-directory";
 import type { PromotionBandType } from "../utils/careerPromotion";
 import { getAuthHeader } from "./auth";
 import { todayWebtrakDate, toWebtrakDate } from "../utils/webtrakDate";
@@ -79,9 +80,17 @@ export function normalizeEmployees(data) {
       userId: userIdRaw && userIdRaw !== primaryId ? userIdRaw : dbId && dbId !== primaryId ? dbId : "",
       name: rawName || nameFromEmail(e.email ?? e.employeeEmail ?? e.mail) || "Unknown",
       email: String(e.email ?? e.employeeEmail ?? e.mail ?? ""),
-      role: String(e.empRole ?? e.role ?? e.userRole ?? "Employee"),
-      designation: String(e.designation ?? e.title ?? e.jobTitle ?? e.empRole ?? ""),
-      band: String(e.band ?? e.level ?? "B4"),
+      role: String(e.empRole ?? e.portalRole ?? e.role ?? e.userRole ?? "Employee"),
+      empRole: String(e.empRole ?? e.portalRole ?? e.role ?? e.userRole ?? "Employee"),
+      userType: String(e.userType ?? e.type ?? "").trim(),
+      workMode: String(e.workMode ?? "").trim(),
+      phoneNumber: String(e.phoneNumber ?? e.phone ?? "").trim(),
+      designation:
+        formatEmployeeDesignation(
+          e.designation ?? e.title ?? e.jobTitle ?? e.empRole ?? "",
+          e.band ?? e.level ?? "",
+        ) || String(e.designation ?? e.title ?? e.jobTitle ?? e.empRole ?? "").trim(),
+      band: formatEmployeeBandCode(e.band ?? e.level ?? "") || String(e.band ?? e.level ?? "B4").trim() || "B4",
       stream: String(e.department ?? e.stream ?? e.context ?? ""),
       project: String(e.project ?? e.projectName ?? e.account ?? e.client ?? ""),
       managerId: String(e.managerId ?? e.reportingManagerId ?? e.managerEmpId ?? ""),
@@ -236,9 +245,9 @@ export function toWebtrakUserCreatePayload(payload) {
   const p = payload && typeof payload === "object" ? payload : {};
   const name = String(p.employeeName ?? p.name ?? "").trim();
   const email = String(p.email ?? "").trim().toLowerCase();
-  const role = String(p.empRole ?? p.role ?? "Employee").trim() || "Employee";
+  const portalRole = String(p.empRole ?? p.portalRole ?? p.role ?? "Employee").trim() || "Employee";
   const department = String(p.stream ?? p.department ?? "").trim() || null;
-  const designation = String(p.designation ?? role).trim() || role;
+  const designation = String(p.designation ?? "").trim() || portalRole;
   const userType = (String(p.userType ?? "FULLTIME").trim().toUpperCase() || "FULLTIME");
   const workMode = (String(p.workMode ?? "HYBRID").trim().toUpperCase() || "HYBRID");
   const startDate =
@@ -253,7 +262,8 @@ export function toWebtrakUserCreatePayload(payload) {
   const body: Record<string, unknown> = {
     email,
     name,
-    role,
+    role: designation,
+    portalRole,
     department,
     bandId,
     userType,
@@ -322,15 +332,19 @@ export function toWebtrakUserProfileUpdatePayload(payload) {
   const p = payload && typeof payload === "object" ? payload : {};
   const name = String(p.name ?? p.employeeName ?? "").trim();
   const email = String(p.email ?? "").trim().toLowerCase();
-  const role = String(p.role ?? p.empRole ?? "").trim();
+  const portalRole = String(p.portalRole ?? p.empRole ?? p.role ?? "").trim();
+  const designation = String(p.designation ?? p.jobTitle ?? "").trim();
   const department = String(p.department ?? p.stream ?? "").trim();
+  const phoneNumber = String(p.phoneNumber ?? p.phone ?? "").trim();
 
   const body: Record<string, unknown> = {};
   if (name) body.name = name;
   if (email) body.email = email;
-  if (role) body.role = role;
+  if (portalRole) body.portalRole = portalRole;
+  if (designation) body.designation = designation;
   // Omit empty department — backend rejects blank values and validates against the directory.
   if (department) body.department = department;
+  if (phoneNumber) body.phoneNumber = phoneNumber;
 
   const bandIdRaw = p.bandId ?? p.band_id;
   if (bandIdRaw != null && /^\d+$/.test(String(bandIdRaw))) {
@@ -340,6 +354,16 @@ export function toWebtrakUserProfileUpdatePayload(payload) {
   const status = String(p.userStatus ?? p.status ?? "").trim().toUpperCase();
   if (status === "INACTIVE" || status === "ACTIVE" || status === "ONBOARDING") {
     body.userStatus = status;
+  }
+
+  const userType = String(p.userType ?? "").trim().toUpperCase();
+  if (userType === "FULLTIME" || userType === "INTERN" || userType === "FREELANCER") {
+    body.userType = userType;
+  }
+
+  const workMode = String(p.workMode ?? "").trim().toUpperCase();
+  if (workMode === "REMOTE" || workMode === "HYBRID" || workMode === "OFFICE") {
+    body.workMode = workMode;
   }
 
   return body;
@@ -510,20 +534,33 @@ export async function updateEmployee(employeeId, payload, { signal } = {} as Api
     `/api/v1/employee-profile/${safeId}`,
   ];
 
-  return requestWithFallbacks(
-    endpoints.map((path) => ({ method: "PUT", path })),
-    {
-      signal,
-      headers: withCsrfHeaders({
-        "Content-Type": "application/json",
-        ...(auth ? { Authorization: auth } : {}),
-      }),
-      body,
-      fallbackStatuses: [404, 405],
-      notFoundMessage: "Employee edit endpoint not found.",
-      parseFallback: null,
+  const headerBase = withCsrfHeaders({
+    "Content-Type": "application/json",
+    ...(auth ? { Authorization: auth } : {}),
+  });
+
+  for (const path of endpoints) {
+    const doPut = async () =>
+      fetch(buildApiUrl(path), {
+        method: "PUT",
+        signal,
+        credentials: "include",
+        headers: headerBase,
+        body,
+      });
+
+    let res = await doPut();
+    if (res.status === 403) {
+      await ensureCsrfCookie({ signal, headers: headerBase, forceRefresh: true }).catch(() => {});
+      res = await doPut();
     }
-  );
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) continue;
+    throw err;
+  }
+
+  throw new Error("Employee edit endpoint not found.");
 }
 
 /** Mark an employee inactive (Webtrak has no hard DELETE on employees). */

@@ -465,7 +465,7 @@ export default function OperationsWorkspace() {
                   <ActionButton busy={isBusy("legacy EXPORT timelogs")} icon={Download} onClick={() => run("legacy EXPORT timelogs", () => legacyOps.exportTimelogs(pathSuffix), { downloadName: "timelogs-export.bin" })}>Export Timelogs</ActionButton>
                 </div>
               </ActionCard>
-              <ActionCard title="Legacy JSON bodies" description="Singular /timelog routes, allocation-extension-request, and admin POST helpers used by older backends." icon={Database}>
+              <ActionCard title="Legacy JSON bodies" description="Singular /timelog routes and admin POST helpers used by older backends." icon={Database}>
                 <JsonField label="JSON payload" value={payload} onChange={setPayload} />
                 <div className="mt-3 flex flex-wrap gap-2">
                   <ActionButton busy={isBusy("legacy GET notify timelogs")} icon={Search} onClick={() => run("legacy GET notify timelogs", () => legacyOps.fetchNotifyTimelogs())}>Notify Timelogs GET</ActionButton>
@@ -474,12 +474,8 @@ export default function OperationsWorkspace() {
                   <ActionButton busy={isBusy("legacy POST leaveTransaction")} icon={Send} onClick={() => run("legacy POST leaveTransaction", () => legacyOps.createLeaveTransaction(parsedPayload()))}>Leave Transaction</ActionButton>
                   <ActionButton busy={isBusy("legacy POST timelog")} icon={Send} onClick={() => run("legacy POST timelog", () => legacyOps.createTimelog(parsedPayload()))}>Timelog POST</ActionButton>
                   <ActionButton busy={isBusy("legacy PUT timelog entry")} icon={Send} onClick={() => run("legacy PUT timelog entry", () => legacyOps.updateTimelogEntry(parsedPayload()))}>Timelog Entry PUT</ActionButton>
-                  <ActionButton busy={isBusy("legacy POST alloc ext")} icon={Send} onClick={() => run("legacy POST alloc ext", () => legacyOps.createAllocationExtensionRequest(parsedPayload()))}>Alloc Ext POST</ActionButton>
-                  <ActionButton busy={isBusy("legacy GET alloc ext")} icon={Search} onClick={() => run("legacy GET alloc ext", () => legacyOps.fetchAllocationExtensionRequest())}>Alloc Ext GET</ActionButton>
-                  <ActionButton busy={isBusy("legacy PUT alloc ext status")} icon={Send} onClick={() => run("legacy PUT alloc ext status", () => legacyOps.updateAllocationExtensionRequestStatus(parsedPayload()))}>Alloc Ext Status</ActionButton>
                   <ActionButton busy={isBusy("legacy PUT timelog status")} icon={Send} onClick={() => run("legacy PUT timelog status", () => legacyOps.updateTimelogStatus(parsedPayload()))}>Timelog Status</ActionButton>
                   <ActionButton busy={isBusy("legacy PUT timelog status batch")} icon={Send} onClick={() => run("legacy PUT timelog status batch", () => legacyOps.updateTimelogStatusBatch(parsedPayload()))}>Timelog Status Batch</ActionButton>
-                  <ActionButton busy={isBusy("legacy GET mgr alloc ext")} icon={Search} onClick={() => run("legacy GET mgr alloc ext", () => legacyOps.fetchManagerAllocationExtensionStatus())}>Mgr Alloc Ext</ActionButton>
                   <ActionButton busy={isBusy("legacy GET mgr ending soon")} icon={Search} onClick={() => run("legacy GET mgr ending soon", () => legacyOps.fetchManagerAllocationEndingSoon())}>Mgr Ending Soon</ActionButton>
                   <ActionButton busy={isBusy("legacy POST allocation")} icon={Send} onClick={() => run("legacy POST allocation", () => legacyOps.createAllocation(parsedPayload()))}>Allocation POST</ActionButton>
                   <ActionButton busy={isBusy("legacy PUT userRequest status")} icon={Send} onClick={() => run("legacy PUT userRequest status", () => legacyOps.updateUserRequestStatus(parsedPayload()))}>UserRequest Status</ActionButton>

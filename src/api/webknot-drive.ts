@@ -1,8 +1,9 @@
 // @ts-nocheck
 import { getAuth, getAuthHeader } from "./auth";
 import { resolveAccountStorageKey } from "../utils/accountStorageKey";
-import { buildApiUrl, ensureCsrfCookie, parseResponse, toHttpError, withCsrfHeaders } from "./http";
+import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
 import { fetchEmployees, normalizeEmployees } from "./employees";
+import { normalizeProjects } from "./projects";
 
 const FILES_URL = "/api/v1/webknot-drive/files";
 const UPLOAD_URL = "/api/v1/webknot-drive/upload";
@@ -10,6 +11,7 @@ const SHARE_URL = "/api/v1/webknot-drive/share";
 const REVOKE_SHARE_URL = "/api/v1/webknot-drive/share/revoke";
 const SEARCH_USERS_URL = "/api/v1/webknot-drive/users/search";
 const STORAGE_STATS_URL = "/api/v1/webknot-drive/storage-stats";
+const DRIVE_PROJECTS_URL = "/api/v1/webknot-drive/projects";
 const PREVIEW_PATH = "/api/v1/webknot-drive/files";
 
 export function getDrivePreviewUrl(fileId) {
@@ -128,6 +130,14 @@ export async function listDriveFiles({ signal } = {}) {
     const items = unwrapList(data).map(normalizeDriveFile).filter(Boolean);
     return { items, source: "server" };
   } catch (err) {
+    if (err?.status === 403) {
+      throw new Error(
+        "Drive access denied (403). Sign in again, or ask HR/Admin to confirm your account has access.",
+      );
+    }
+    if (err?.status === 401) {
+      throw new Error("Not signed in (401). Sign in again to use Webknot Drive.");
+    }
     if (err?.status !== 404 && err?.status !== 405) throw err;
   }
   const local = filterFilesForCurrentUser(readLocalIndex());
@@ -206,11 +216,17 @@ export async function uploadDriveFile(file, { signal } = {}) {
   return entry;
 }
 
-export async function shareDriveFile({ fileId, shareWith = [] }, { signal } = {}) {
+export async function shareDriveFile(
+  { fileId, shareWith = [], shareScope, projectCode },
+  { signal } = {},
+) {
   await ensureCsrfCookie({ signal });
   const auth = getAuthHeader();
+  const scope = String(shareScope ?? "").trim() || undefined;
   const body = JSON.stringify({
     fileId,
+    shareScope: scope,
+    projectCode: String(projectCode ?? "").trim() || undefined,
     shareWith: shareWith.map((u) => ({
       email: u.email,
       empId: u.empId,
@@ -287,6 +303,37 @@ export async function revokeDriveShare({ fileId, email }, { signal } = {}) {
   });
   writeLocalIndex(next);
   return { ok: true, source: "local" };
+}
+
+/**
+ * Projects for Drive “share with project team” — any signed-in user.
+ * Does not use GET /api/v1/projects/all (HR/Admin catalog only).
+ */
+export async function fetchDriveShareProjects({ signal, search } = {}) {
+  const auth = getAuthHeader();
+  const q = String(search ?? "").trim();
+  const qs = new URLSearchParams();
+  if (q) qs.set("search", q);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+
+  const raw = await requestWithFallbacks(
+    [`${DRIVE_PROJECTS_URL}${suffix}`, `/api/v1/drive/projects${suffix}`],
+    {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+      fallbackStatuses: [404, 405],
+      notFoundMessage:
+        "Drive project list is not available. Restart the backend or confirm GET /api/v1/webknot-drive/projects is deployed.",
+    },
+  );
+
+  const root = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+  const list =
+    (Array.isArray(root?.projects) && root.projects) ||
+    (Array.isArray(root?.items) && root.items) ||
+    unwrapList(root);
+  return normalizeProjects(list);
 }
 
 export async function searchDriveUsers(query, { signal, limit = 12 } = {}) {

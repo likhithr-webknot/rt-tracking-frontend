@@ -1,14 +1,9 @@
 // @ts-nocheck
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion as Motion } from "framer-motion";
-import {
-  LayoutDashboard, Users,
-  ClipboardCheck, Sparkles, Target, Award, Layers3,
-  Bell, BellDot, FileBarChart2,
-  Briefcase, ArrowUpCircle, StickyNote, Cloud, Clock
-} from "lucide-react";
+import { Bell, BellDot } from "lucide-react";
+import { ADMIN_NAV_GROUPS } from "../../config/portalNavigation";
 import WebknotDrive from "./WebknotDrive";
-import AllocationExtensionSlaDashboard from "./AllocationExtensionSlaDashboard";
 import AppShell from "../shared/AppShell";
 import PortalSidebar from "../shared/PortalSidebar";
 import AdminDashboard from "./AdminDashboard";
@@ -19,10 +14,10 @@ import EmployeeDirectory from "./EmployeeDirectory";
 import SettingsPanel from "./SettingsPanel";
 import CompanyValuesWorkspace from "./CompanyValuesWorkspace";
 import BandStreamDirectory from "./BandStreamDirectory";
+import DesignationsWorkspace from "./DesignationsWorkspace";
 import ProjectsDirectory from "./ProjectsDirectory";
 import PortalNotesWorkspace from "../shared/PortalNotesWorkspace";
 import ReportsDashboard from "./ReportsDashboard";
-import PromotionsAudit from "./PromotionsAudit";
 import Toast from "../shared/Toast";
 import PortalUserMenu from "../shared/PortalUserMenu";
 import UserProfilePage from "../shared/UserProfilePage";
@@ -41,22 +36,6 @@ import {
 } from "../../api/notifications";
 const ADMIN_SIDEBAR_PREF_KEY = "rt_tracking_admin_sidebar_open_v1";
 const ADMIN_NOTIFICATION_POLL_MS = 30_000;
-
-const ADMIN_NAV_ITEMS = [
-  { id: "dashboard", icon: <LayoutDashboard size={18} />, label: "Dashboard" },
-  { id: "submissions", icon: <ClipboardCheck size={18} />, label: "Submissions" },
-  { id: "directory", icon: <Users size={18} />, label: "Employees" },
-  { id: "promotions", icon: <ArrowUpCircle size={18} />, label: "Promotions" },
-  { id: "projects", icon: <Briefcase size={18} />, label: "Projects" },
-  { id: "extensions", icon: <Clock size={18} />, label: "Extensions" },
-  { id: "reports", icon: <FileBarChart2 size={18} />, label: "Reports" },
-  { id: "kpi", icon: <Target size={18} />, label: "KPI Goals" },
-  { id: "band-streams", icon: <Layers3 size={18} />, label: "Bands & Departments" },
-  { id: "certifications", icon: <Award size={18} />, label: "Certifications" },
-  { id: "values", icon: <Sparkles size={18} />, label: "Webknot Values" },
-  { id: "notes", icon: <StickyNote size={18} />, label: "Notes" },
-  { id: "drive", icon: <Cloud size={18} />, label: "Webknot Drive" },
-];
 
 function toLocalInputValue(date) {
   const pad = (n) => String(n).padStart(2, '0')
@@ -118,12 +97,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
     "dashboard",
     "submissions",
     "directory",
-    "promotions",
     "projects",
-    "extensions",
     "reports",
     "kpi",
     "band-streams",
+    "designations",
     "certifications",
     "values",
     "notes",
@@ -137,8 +115,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
     if (raw === "cycles") return "settings";
     if (raw === "account") return "account";
     if (VALID_TABS.has(raw)) return raw;
-    if (raw === "allocations") return "projects";
-    if (raw === "extensions") return "extensions";
+    if (raw === "promotions") return "directory";
+    if (raw === "extensions" || raw === "allocations") return "projects";
     if (["timelogs", "operations"].includes(raw)) return "dashboard";
     return "dashboard";
   }, [VALID_TABS]);
@@ -257,8 +235,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
           setIsOpen={setIsSidebarOpen}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          portalTag="Admin Console"
-          navItems={ADMIN_NAV_ITEMS}
+          portalTag="For HR & leadership"
+          navGroups={ADMIN_NAV_GROUPS}
           showThemeToggle
           onSettingsClick={() => setActiveTab("settings")}
           settingsActive={activeTab === "settings"}
@@ -287,7 +265,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                   className="absolute right-0 mt-2 w-80 overflow-hidden rounded-[var(--radius-lg)] border border-[rgb(var(--border))] bg-[rgb(var(--surface))] shadow-lg"
                 >
                   <header className="flex items-center justify-between border-b border-[rgb(var(--border))] px-4 py-3">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-[rgb(var(--muted))]">
+                    <h3 className="text-sm font-semibold text-[rgb(var(--text))]">
                       Notifications
                     </h3>
                     <button
@@ -332,7 +310,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                       </div>
                     ))}
                     {notifications.length === 0 ? (
-                      <div className="p-6 text-center text-xs text-[rgb(var(--muted))]">No notifications</div>
+                      <div className="p-6 text-center text-sm text-[rgb(var(--muted))]">You&apos;re all caught up.</div>
                     ) : null}
                   </div>
                 </Motion.div>
@@ -372,14 +350,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
             />
           )}
 
-          {activeTab === "promotions" && (
-             <PromotionsAudit
-               employees={employees}
-               loading={employeesLoading}
-               reloadEmployees={reloadEmployees}
-             />
-          )}
-
           {activeTab === "kpi" && <AdminGoalsRegistry />}
 
           {activeTab === "values" && <CompanyValuesWorkspace />}
@@ -390,9 +360,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
               employeesLoading={employeesLoading}
             />
           )}
-          {activeTab === "extensions" && <AllocationExtensionSlaDashboard />}
           {activeTab === "reports" && <ReportsDashboard />}
           {activeTab === "band-streams" && <BandStreamDirectory />}
+          {activeTab === "designations" && <DesignationsWorkspace />}
           {activeTab === "certifications" && <AdminCertificationsBridge />}
           {activeTab === "notes" && (
             <PortalNotesWorkspace
@@ -403,7 +373,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
             />
           )}
           {activeTab === "drive" && <WebknotDrive auth={auth} portalLabel="your admin account" />}
-          {activeTab === "settings" && <SettingsPanel />}
+          {activeTab === "settings" && (
+            <SettingsPanel employees={employees} employeesLoading={employeesLoading} />
+          )}
 
           {activeTab === "account" && (
             <UserProfilePage auth={auth} roleLabel="Admin" onBack={() => setActiveTab("dashboard")} />

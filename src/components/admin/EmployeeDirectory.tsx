@@ -12,6 +12,7 @@ import {
   Square,
 } from "lucide-react";
 import Toast from "../shared/Toast";
+import SearchField from "../shared/SearchField";
 import CursorPagination from "../shared/CursorPagination";
 import ConfirmDialog from "../shared/ConfirmDialog";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
@@ -23,7 +24,6 @@ import {
   addEmployee,
   deleteEmployee,
   promoteEmployee as promoteEmployeeApi,
-  fetchPromotionEligibility,
   resolveBandCodeFromDisplay,
   resolveEmployeeEmpId,
   updateEmployee,
@@ -36,20 +36,66 @@ import {
   fetchBandDesignation,
   normalizeDirectoryPage,
   collapseRepeatedSegments,
+  formatEmployeeBandCode,
+  formatEmployeeDesignation,
 } from "../../api/band-stream-directory";
 import { designationLabelFromRow, fetchDesignations } from "../../api/designations";
 import { isWebknotWorkEmail, WEBKNOT_WORK_EMAIL_SUFFIX } from "../../utils/webknotEmail";
+import { resolveEmployeeApiId } from "../../utils/employeeId";
 import { getAuthHeader } from "../../api/auth";
 import { buildApiUrl, friendlyProxyUnreachableMessage, parseResponse } from "../../api/http";
 import {
   getPromotionPreview,
   normalizePromotionErrorMessage,
-  PROMOTION_MIN_PERFORMANCE_SCORE,
   TECH_MAX_BAND,
   NON_TECH_MAX_BAND,
 } from "../../utils/careerPromotion";
 
 /** Small label when account status is not active (so admins see inactive users in the list). */
+function RoleBadge({ role }) {
+  const r = String(role ?? "Employee").trim() || "Employee";
+  const styles =
+    r === "Admin"
+      ? "bg-amber-500/10 text-amber-800 dark:text-amber-200 border-amber-500/25"
+      : r === "Manager"
+        ? "bg-blue-500/10 text-blue-800 dark:text-blue-200 border-blue-500/25"
+        : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]";
+  return (
+    <span
+      className={`inline-flex max-w-full items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold border truncate ${styles}`}
+    >
+      {r}
+    </span>
+  );
+}
+
+function DirectoryCell({ children, mono = false, title = null }) {
+  return (
+    <div
+      className={[
+        "max-w-[11rem] truncate text-sm",
+        mono ? "font-mono tabular-nums" : "",
+        "text-[rgb(var(--text))]",
+      ].join(" ")}
+      title={title ?? (typeof children === "string" ? children : undefined)}
+    >
+      {children}
+    </div>
+  );
+}
+
+function employeeBandCode(emp) {
+  return formatEmployeeBandCode(emp?.band) || String(emp?.band ?? "").trim() || "—";
+}
+
+function employeeDesignation(emp) {
+  return (
+    formatEmployeeDesignation(emp?.designation, emp?.band) ||
+    String(emp?.designation ?? emp?.role ?? "").trim() ||
+    "—"
+  );
+}
+
 function DirectoryStatusBadge({ status }) {
   const st = String(status ?? "").trim().toLowerCase();
   if (!st || st === "active" || st === "enabled" || st === "activated") return null;
@@ -192,27 +238,17 @@ export default function EmployeeDirectory({
   const [promotingId, setPromotingId] = useState(null);
   const [windowUpdatingId, setWindowUpdatingId] = useState(null);
   const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState(null);
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState(() => new Set());
+  const [pendingBulkDelete, setPendingBulkDelete] = useState(null);
+  const [pendingSaveEdit, setPendingSaveEdit] = useState(false);
   const [pendingPromoteEmployee, setPendingPromoteEmployee] = useState(null);
   const [promoteBandType, setPromoteBandType] = useState("BOTH");
-  const [promoteEligibility, setPromoteEligibility] = useState(null);
-  const [promoteEligibilityLoading, setPromoteEligibilityLoading] = useState(false);
-  const [promoteForceOverride, setPromoteForceOverride] = useState(false);
-
   const promoteDialogPreview = useMemo(
-    () =>
-      getPromotionPreview(
-        pendingPromoteEmployee?.band,
-        promoteBandType,
-        promoteEligibility?.averageApprovedScore ?? null,
-      ),
-    [pendingPromoteEmployee?.band, promoteBandType, promoteEligibility],
+    () => getPromotionPreview(pendingPromoteEmployee?.band, promoteBandType, null),
+    [pendingPromoteEmployee?.band, promoteBandType],
   );
 
-  const promoteConfirmDisabled =
-    promoteDialogPreview.isMaxBand ||
-    (!promoteDialogPreview.promotionScoreEligible &&
-      !promoteForceOverride &&
-      Boolean(promoteDialogPreview.nextBand));
+  const promoteConfirmDisabled = promoteDialogPreview.isMaxBand;
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [addDraft, setAddDraft] = useState({
@@ -283,10 +319,15 @@ export default function EmployeeDirectory({
 
   const [draft, setDraft] = useState({
     name: "",
+    email: "",
     role: "Employee",
     designation: "",
     band: "B4",
     stream: "",
+    userType: "FULLTIME",
+    workMode: "HYBRID",
+    userStatus: "ACTIVE",
+    phoneNumber: "",
   });
   const [editDesignation, setEditDesignation] = useState(null);
   const [editDesignationOptions, setEditDesignationOptions] = useState([]);
@@ -684,7 +725,8 @@ export default function EmployeeDirectory({
     }
     setPromotingId(employeeId);
     try {
-      await promoteEmployeeApi(employeeId, bandType, { forceOverride });
+      const apiEmpId = await resolveEmployeeEmpId(emp);
+      await promoteEmployeeApi(apiEmpId, bandType, { forceOverride });
       await refreshDirectoryAfterMutation();
       showToast({ title: "Promotion applied", message: `${emp.name} moved to the next band on this track.` });
     } catch (err) {
@@ -701,22 +743,11 @@ export default function EmployeeDirectory({
   async function requestPromoteEmployee(emp) {
     if (!emp?.id) return;
     setPromoteBandType("BOTH");
-    setPromoteForceOverride(false);
-    setPromoteEligibility(null);
     setPendingPromoteEmployee({
       id: String(emp.id),
       name: String(emp.name || emp.id),
       band: emp.band ?? "",
     });
-    setPromoteEligibilityLoading(true);
-    try {
-      const data = await fetchPromotionEligibility(emp.id);
-      setPromoteEligibility(data);
-    } catch {
-      setPromoteEligibility(null);
-    } finally {
-      setPromoteEligibilityLoading(false);
-    }
   }
 
   async function confirmPromoteEmployee() {
@@ -726,16 +757,15 @@ export default function EmployeeDirectory({
       return;
     }
     try {
-      await commitPromotion(pendingPromoteEmployee.id, promoteBandType, promoteForceOverride);
+      await commitPromotion(pendingPromoteEmployee.id, promoteBandType, true);
     } finally {
       setPendingPromoteEmployee(null);
-      setPromoteEligibility(null);
-      setPromoteForceOverride(false);
     }
   }
 
   async function setEmployeeSubmissionWindow(emp, mode) {
-    if (!emp?.id || typeof onSetEmployeeSubmissionWindow !== "function") {
+    const apiId = resolveEmployeeApiId(emp);
+    if (!apiId || typeof onSetEmployeeSubmissionWindow !== "function") {
       showToast({ title: "Action unavailable", message: "Employee-level window control is not configured." });
       return;
     }
@@ -745,7 +775,7 @@ export default function EmployeeDirectory({
 
     setWindowUpdatingId(emp.id);
     try {
-      await onSetEmployeeSubmissionWindow(emp.id, action);
+      await onSetEmployeeSubmissionWindow(apiId, action);
       showToast({
         title: action === "open" ? "Window opened" : "Window closed",
         message:
@@ -784,25 +814,31 @@ export default function EmployeeDirectory({
     });
   }
 
-  async function removeEmployee(employeeRow, employeeName) {
+  async function removeEmployee(employeeRow, employeeName, options = {}) {
+    const { silent = false, skipRefresh = false } = options;
     try {
-      setMutating(true);
+      if (!silent) setMutating(true);
       const apiEmpId = await resolveEmployeeEmpId(employeeRow);
       await deleteEmployee(apiEmpId);
-      const reloaded = await refreshDirectoryAfterMutation();
-      if (!reloaded) {
-        setEmployees((prev) =>
-          prev.filter((e) => String(e.id) !== String(employeeRow?.id) && String(e.empId) !== apiEmpId),
-        );
+      if (!skipRefresh) {
+        const reloaded = await refreshDirectoryAfterMutation();
+        if (!reloaded) {
+          setEmployees((prev) =>
+            prev.filter((e) => String(e.id) !== String(employeeRow?.id) && String(e.empId) !== apiEmpId),
+          );
+        }
+        showToast({
+          title: "Employee deactivated",
+          message: `${employeeName || apiEmpId} is now inactive and hidden from active directory views.`,
+        });
       }
-      showToast({
-        title: "Employee deactivated",
-        message: `${employeeName || apiEmpId} is now inactive and hidden from active directory views.`,
-      });
     } catch (err) {
-      showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+      if (!silent) {
+        showToast({ title: "Delete failed", message: err?.message || "Please try again." });
+      }
+      throw err;
     } finally {
-      setMutating(false);
+      if (!silent) setMutating(false);
     }
   }
 
@@ -830,10 +866,15 @@ export default function EmployeeDirectory({
     setEditingEmployeeId(emp.id);
     setDraft({
       name: emp.name ?? "",
-      role: emp.role ?? "Employee",
+      email: emp.email ?? "",
+      role: emp.empRole ?? emp.role ?? "Employee",
       designation: emp.designation ?? "",
       band: bandCode,
       stream: streamValue,
+      userType: String(emp.userType ?? "FULLTIME").toUpperCase() || "FULLTIME",
+      workMode: String(emp.workMode ?? "HYBRID").toUpperCase() || "HYBRID",
+      userStatus: String(emp.status ?? emp.userStatus ?? "ACTIVE").toUpperCase() || "ACTIVE",
+      phoneNumber: emp.phoneNumber ?? "",
     });
   }
 
@@ -843,28 +884,81 @@ export default function EmployeeDirectory({
     setEditDesignation(null);
   }
 
-  async function saveEdit(e) {
-    e.preventDefault();
-    if (!editingEmployeeId) return;
+  function toggleEmployeeSelected(empId, checked) {
+    const id = String(empId ?? "").trim();
+    if (!id) return;
+    setSelectedEmployeeIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
 
-    const current =
+  function toggleSelectAllVisible(checked) {
+    if (!checked) {
+      setSelectedEmployeeIds(new Set());
+      return;
+    }
+    const ids = visibleEmployees
+      .map((e) => String(e?.id ?? "").trim())
+      .filter((id) => id && !/^EMP_\d+$/i.test(id));
+    setSelectedEmployeeIds(new Set(ids));
+  }
+
+  function requestBulkDelete() {
+    const rows = visibleEmployees.filter((e) => selectedEmployeeIds.has(String(e?.id ?? "").trim()));
+    if (!rows.length) return;
+    setPendingBulkDelete(rows);
+  }
+
+  async function confirmBulkDelete() {
+    if (!Array.isArray(pendingBulkDelete) || !pendingBulkDelete.length) return;
+    setMutating(true);
+    let ok = 0;
+    let fail = 0;
+    for (const row of pendingBulkDelete) {
+      try {
+        await removeEmployee(row, row.name, { silent: true, skipRefresh: true });
+        ok += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    setPendingBulkDelete(null);
+    setSelectedEmployeeIds(new Set());
+    await refreshDirectoryAfterMutation();
+    setMutating(false);
+    showToast({
+      title: fail ? "Bulk deactivate finished" : "Employees deactivated",
+      message: `${ok} deactivated${fail ? `, ${fail} failed` : ""}.`,
+      tone: fail && !ok ? "error" : fail ? "warning" : "success",
+    });
+  }
+
+  function getEditingEmployeeRow() {
+    if (!editingEmployeeId) return null;
+    return (
       (Array.isArray(employees)
         ? employees.find((emp) => String(emp?.id) === String(editingEmployeeId))
         : null) ||
       (Array.isArray(allEmployees)
         ? allEmployees.find((emp) => String(emp?.id) === String(editingEmployeeId))
         : null) ||
-      null;
+      null
+    );
+  }
+
+  function validateEditDraft() {
+    const current = getEditingEmployeeRow();
     if (!current) {
       showToast({ title: "Update failed", message: "Employee not found." });
-      return;
+      return null;
     }
-
     const roleKey = String(draft.role || "").trim().toLowerCase();
     const isAdminRole = roleKey === "admin";
     const bandCode = String(draft.band || "").trim();
     const department = String(draft.stream ?? current.stream ?? "").trim();
-
     const bandRow = isAdminRole
       ? null
       : bandSelectOptions.find((opt) => opt.value === bandCode) || null;
@@ -872,32 +966,51 @@ export default function EmployeeDirectory({
       bandRow?.id != null && /^\d+$/.test(String(bandRow.id))
         ? Number.parseInt(String(bandRow.id), 10)
         : null;
-
     if (!isAdminRole && bandId == null) {
       showToast({
         title: "Band not resolved",
         message:
           "Could not map the selected band to a server id. Open Band & Stream directory, ensure bands are loaded, then try again.",
       });
-      return;
+      return null;
     }
     if (!isAdminRole && !department) {
       showToast({ title: "Department required", message: "Choose a department from the list." });
-      return;
+      return null;
     }
+    if (!String(draft.name ?? "").trim()) {
+      showToast({ title: "Missing field", message: "Employee name is required." });
+      return null;
+    }
+    return { current, isAdminRole, bandId, department };
+  }
+
+  function requestSaveEdit(e) {
+    e.preventDefault();
+    if (!editingEmployeeId) return;
+    if (!validateEditDraft()) return;
+    setPendingSaveEdit(true);
+  }
+
+  async function saveEdit() {
+    if (!editingEmployeeId) return;
+    const validated = validateEditDraft();
+    if (!validated) return;
+    const { current, isAdminRole, bandId, department } = validated;
 
     const payload = {
       name: draft.name.trim(),
-      email: String(current.email ?? "").trim(),
-      role: draft.role,
+      email: String(draft.email ?? current.email ?? "").trim(),
+      portalRole: draft.role,
+      empRole: draft.role,
+      designation: String(draft.designation ?? "").trim(),
       department: isAdminRole ? department || null : department || null,
       bandId: isAdminRole ? null : bandId,
+      userType: draft.userType,
+      workMode: draft.workMode,
+      userStatus: draft.userStatus,
+      phoneNumber: String(draft.phoneNumber ?? "").trim(),
     };
-
-    if (!payload.name) {
-      showToast({ title: "Missing field", message: "Employee name is required." });
-      return;
-    }
 
     try {
       setMutating(true);
@@ -911,7 +1024,9 @@ export default function EmployeeDirectory({
               ? {
                   ...emp,
                   name: payload.name || emp.name,
-                  role: payload.role || emp.role,
+                  role: payload.portalRole || emp.role,
+                  empRole: payload.portalRole || emp.empRole,
+                  email: payload.email || emp.email,
                   designation: draft.designation || emp.designation,
                   band: draft.band || emp.band,
                   stream: payload.department || emp.stream,
@@ -921,6 +1036,7 @@ export default function EmployeeDirectory({
         );
       }
       showToast({ title: "Employee updated", message: payload.name || String(editingEmployeeId) });
+      setPendingSaveEdit(false);
       closeEdit();
     } catch (err) {
       showToast({ title: "Update failed", message: err?.message || "Please try again." });
@@ -1106,7 +1222,7 @@ export default function EmployeeDirectory({
     <AdminPageShell className="space-y-6" maxWidth="max-w-[1600px]">
       <AdminPageHeader
         title="Employees"
-        subtitle="Search and manage employee profiles. Import replaces the roster from CSV (users not in the file are deactivated)."
+        subtitle="Search people, edit profiles, promote bands, and open or close one person's review window. Import replaces the roster from CSV."
       >
         <div className="flex flex-wrap items-center gap-2">
           <EntityCsvToolbar
@@ -1122,31 +1238,32 @@ export default function EmployeeDirectory({
         </div>
       </AdminPageHeader>
 
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
-        <div className="rt-panel-subtle rounded-xl px-4 py-3">
-          <div className="rt-kicker">Total</div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{totalEmployeesDisplay}</div>
-        </div>
-        <div className="rt-panel-subtle rounded-xl px-4 py-3">
-          <div className="rt-kicker">Managers</div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{managerCount}</div>
-        </div>
-        <div className="rt-panel-subtle rounded-xl px-4 py-3">
-          <div className="rt-kicker">Filtered</div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--primary))]">{visibleEmployees.length}</div>
-        </div>
-        <div className="rt-panel-subtle rounded-xl px-4 py-3">
-          <div className="rt-kicker">Bands</div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{bandCount}</div>
-        </div>
-        <div className="rt-panel-subtle rounded-xl px-4 py-3">
-          <div className="rt-kicker">Admins</div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{adminCount}</div>
-        </div>
-        <div className="rt-panel-subtle rounded-xl px-4 py-3">
-          <div className="rt-kicker">Employees</div>
-          <div className="mt-1 text-xl sm:text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{employeeCount}</div>
-        </div>
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        {[
+          { label: "Total", value: totalEmployeesDisplay },
+          { label: "Managers", value: managerCount },
+          { label: "Showing", value: visibleEmployees.length, accent: true },
+          { label: "Bands", value: bandCount },
+          { label: "Admins", value: adminCount },
+          { label: "Employees", value: employeeCount },
+        ].map((stat) => (
+          <div
+            key={stat.label}
+            className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2.5 sm:px-4 sm:py-3"
+          >
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+              {stat.label}
+            </div>
+            <div
+              className={[
+                "mt-0.5 text-lg sm:text-xl font-bold tabular-nums leading-none",
+                stat.accent ? "text-[rgb(var(--primary))]" : "text-[rgb(var(--text))]",
+              ].join(" ")}
+            >
+              {stat.value}
+            </div>
+          </div>
+        ))}
       </section>
 
       {employeesError ? (
@@ -1160,155 +1277,229 @@ export default function EmployeeDirectory({
         </div>
       ) : null}
 
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1 min-w-0">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={16} />
-          <input
-            type="text"
-            placeholder="Search by name, email, id, role, designation, band..."
-            className="w-full rt-input py-3 pl-11 pr-4 text-sm"
+      <div className="rt-toolbar-panel space-y-3">
+        <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+          <SearchField
+            className="flex-1"
+            label="Find someone on the team"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onClear={() => setQuery("")}
+            placeholder="Name, email, or employee ID"
           />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 lg:flex lg:shrink-0">
+            <select
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value)}
+              className="rt-input h-10 min-w-[8.5rem] text-sm"
+              aria-label="Filter by role"
+            >
+              <option value="all">All roles</option>
+              {roleOptions.map((opt) => (
+                <option key={`role:${opt.value}`} value={opt.value}>
+                  {opt.value} ({opt.count})
+                </option>
+              ))}
+            </select>
+            <select
+              value={designationFilter}
+              onChange={(e) => setDesignationFilter(e.target.value)}
+              className="rt-input h-10 min-w-[9.5rem] text-sm"
+              aria-label="Filter by designation"
+            >
+              <option value="all">All designations</option>
+              {designationOptions.map((opt) => (
+                <option key={`designation:${opt.value}`} value={opt.value}>
+                  {collapseRepeatedSegments(opt.value)} ({opt.count})
+                </option>
+              ))}
+            </select>
+            <select
+              value={bandFilter}
+              onChange={(e) => setBandFilter(e.target.value)}
+              className="rt-input h-10 min-w-[8rem] text-sm"
+              aria-label="Filter by band"
+            >
+              <option value="all">All bands</option>
+              {bandOptions.map((opt) => (
+                <option key={`band:${opt.value}`} value={opt.value}>
+                  {formatEmployeeBandCode(opt.value) || opt.value} ({opt.count})
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-
-        <div className="grid grid-cols-3 gap-2 sm:flex sm:gap-2">
-          <select
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
-            className="w-full sm:w-auto rt-input py-3 px-3 text-xs sm:text-sm"
-            title="Filter by role"
-          >
-            <option value="all">All roles</option>
-            {roleOptions.map((opt) => (
-              <option key={`role:${opt.value}`} value={opt.value}>
-                {opt.value} ({opt.count})
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={designationFilter}
-            onChange={(e) => setDesignationFilter(e.target.value)}
-            className="w-full sm:w-auto rt-input py-3 px-3 text-xs sm:text-sm"
-            title="Filter by designation"
-          >
-            <option value="all">All designations</option>
-            {designationOptions.map((opt) => (
-              <option key={`designation:${opt.value}`} value={opt.value}>
-                {opt.value} ({opt.count})
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={bandFilter}
-            onChange={(e) => setBandFilter(e.target.value)}
-            className="w-full sm:w-auto rt-input py-3 px-3 text-xs sm:text-sm"
-            title="Filter by band"
-          >
-            <option value="all">All bands</option>
-            {bandOptions.map((opt) => (
-              <option key={`band:${opt.value}`} value={opt.value}>
-                {opt.value} ({opt.count})
-              </option>
-            ))}
-          </select>
-        </div>
+        {(query || roleFilter !== "all" || designationFilter !== "all" || bandFilter !== "all") && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-[rgb(var(--muted))]">
+            <span>
+              {visibleEmployees.length} of {searchUniverse.length} in view
+            </span>
+            <button
+              type="button"
+              className="rt-btn-secondary !py-1.5 !px-3 text-xs"
+              onClick={() => {
+                setQuery("");
+                setRoleFilter("all");
+                setDesignationFilter("all");
+                setBandFilter("all");
+              }}
+            >
+              Clear all
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* ── Desktop Table View (hidden below lg) ── */}
-      <div className="rt-panel overflow-hidden hidden lg:block">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
+      {selectedEmployeeIds.size > 0 ? (
+        <div className="rt-panel px-4 py-3 flex flex-wrap items-center justify-between gap-3 border border-amber-500/30 bg-amber-500/5">
+          <span className="text-sm font-medium">
+            {selectedEmployeeIds.size} employee{selectedEmployeeIds.size === 1 ? "" : "s"} selected
+          </span>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="rt-btn-ghost text-xs" onClick={() => setSelectedEmployeeIds(new Set())}>
+              Clear selection
+            </button>
+            <button type="button" className="rt-btn-primary !bg-red-600 hover:!bg-red-500 text-xs" onClick={requestBulkDelete}>
+              Deactivate selected
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── Desktop roster (scroll inside panel) ── */}
+      <div className="rt-panel hidden lg:flex flex-col max-h-[min(72vh,720px)] overflow-hidden">
+        <div className="shrink-0 px-4 py-3 border-b border-[rgb(var(--border))]">
+          <h2 className="text-sm font-semibold text-[rgb(var(--text))]">Employee roster</h2>
+          <p className="rt-section-subtitle mt-0.5">
+            {visibleEmployees.length} in view · scroll inside this panel
+          </p>
+        </div>
+        <div className="min-w-0 flex-1 overflow-auto custom-scrollbar">
+          <div className="overflow-x-auto min-h-0">
+          <table className="w-full text-left table-fixed min-w-[1100px]">
+            <thead className="sticky top-0 z-10 bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
               <tr>
-                <th className="px-4 py-3 font-semibold">Emp ID</th>
-                <th className="px-4 py-3 font-semibold">Name</th>
-                <th className="px-4 py-3 font-semibold">Email</th>
-                <th className="px-4 py-3 font-semibold">Role</th>
-                <th className="px-4 py-3 font-semibold">Designation</th>
-                <th className="px-4 py-3 font-semibold">Band</th>
-                <th className="px-4 py-3 font-semibold">Department</th>
-                <th className="px-4 py-3 font-semibold text-center">Last Promo</th>
-                <th className="px-4 py-3 text-right font-semibold">Actions</th>
+                <th className="w-10 px-3 py-3">
+                  <input
+                    type="checkbox"
+                    className="rounded border-[rgb(var(--border))]"
+                    checked={
+                      visibleEmployees.length > 0 &&
+                      visibleEmployees.every((e) => selectedEmployeeIds.has(String(e?.id ?? "").trim()))
+                    }
+                    onChange={(e) => toggleSelectAllVisible(e.target.checked)}
+                    aria-label="Select all visible employees"
+                  />
+                </th>
+                <th className="w-[5.5rem] px-4 py-3 font-semibold">Emp ID</th>
+                <th className="w-[10rem] px-4 py-3 font-semibold">Name</th>
+                <th className="w-[12rem] px-4 py-3 font-semibold">Email</th>
+                <th className="w-[6.5rem] px-4 py-3 font-semibold">Role</th>
+                <th className="w-[9rem] px-4 py-3 font-semibold">Designation</th>
+                <th className="w-[5.5rem] px-4 py-3 font-semibold">Band</th>
+                <th className="w-[8rem] px-4 py-3 font-semibold">Department</th>
+                <th className="w-[5.5rem] px-4 py-3 font-semibold text-center">Last promo</th>
+                <th className="w-[7.5rem] px-4 py-3 text-right font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
               {visibleEmployees.map((emp) => {
                 const promoteGate = getPromotionPreview(emp.band, "BOTH");
+                const bandCode = employeeBandCode(emp);
+                const bandLabel = bandLabelMap.get(emp.band) || bandLabelMap.get(bandCode);
+                const streamLabel = streamLabelMap.get(emp.stream);
                 return (
-                <tr key={emp.id} className="hover:bg-[rgb(var(--surface-2))]/60 transition-colors group">
-                  <td className="px-4 py-3 text-sm font-mono text-[rgb(var(--text))]">{emp.id || "—"}</td>
-                  <td className="px-4 py-3">
-                    <div className="font-semibold text-[rgb(var(--text))] flex flex-wrap items-center gap-x-1">
+                <tr key={emp.id} className="h-14 hover:bg-[rgb(var(--surface-2))]/50 transition-colors">
+                  <td className="px-3 py-2 align-middle">
+                    <input
+                      type="checkbox"
+                      className="rounded border-[rgb(var(--border))]"
+                      checked={selectedEmployeeIds.has(String(emp.id ?? "").trim())}
+                      onChange={(e) => toggleEmployeeSelected(emp.id, e.target.checked)}
+                      aria-label={`Select ${emp.name}`}
+                    />
+                  </td>
+                  <td className="px-4 py-2 align-middle">
+                    <DirectoryCell mono title={emp.id}>{emp.id || "—"}</DirectoryCell>
+                  </td>
+                  <td className="px-4 py-2 align-middle">
+                    <div className="max-w-[10rem] truncate font-semibold text-sm text-[rgb(var(--text))]" title={emp.name}>
                       {emp.name}
                       <DirectoryStatusBadge status={emp.status} />
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-sm text-[rgb(var(--text))]">{emp.email || "—"}</td>
-                  <td className="px-4 py-3">
-                    <span className={[
-                      "inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold border",
-                      emp.role === "Admin" ? "bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/20" :
-                      emp.role === "Manager" ? "bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20" :
-                      "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
-                    ].join(" ")}>
-                      {emp.role}
-                    </span>
+                  <td className="px-4 py-2 align-middle">
+                    <DirectoryCell title={emp.email}>{emp.email || "—"}</DirectoryCell>
                   </td>
-                  <td className="px-4 py-3 text-sm text-[rgb(var(--text))]">{emp.designation ?? emp.role}</td>
-                  <td className="px-4 py-3">
-                    <div className="font-mono text-sm font-semibold text-[rgb(var(--text))]">{emp.band}</div>
-                    {bandLabelMap.get(emp.band) && bandLabelMap.get(emp.band) !== emp.band ? (
-                      <div className="text-[11px] text-[rgb(var(--muted))]">{bandLabelMap.get(emp.band)}</div>
+                  <td className="px-4 py-2 align-middle">
+                    <RoleBadge role={emp.role} />
+                  </td>
+                  <td className="px-4 py-2 align-middle">
+                    <DirectoryCell title={employeeDesignation(emp)}>{employeeDesignation(emp)}</DirectoryCell>
+                  </td>
+                  <td className="px-4 py-2 align-middle">
+                    <div className="font-mono text-sm font-semibold tabular-nums">{bandCode}</div>
+                    {bandLabel && bandLabel !== bandCode ? (
+                      <div className="text-[10px] text-[rgb(var(--muted))] truncate max-w-[5rem]" title={bandLabel}>
+                        {collapseRepeatedSegments(bandLabel)}
+                      </div>
                     ) : null}
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="font-mono text-sm font-semibold text-[rgb(var(--text))]">{emp.stream || "—"}</div>
-                    {emp.stream && streamLabelMap.get(emp.stream) && streamLabelMap.get(emp.stream) !== emp.stream ? (
-                      <div className="text-[11px] text-[rgb(var(--muted))]">{streamLabelMap.get(emp.stream)}</div>
+                  <td className="px-4 py-2 align-middle">
+                    <DirectoryCell title={streamLabel || emp.stream}>
+                      {emp.stream || "—"}
+                    </DirectoryCell>
+                    {streamLabel && streamLabel !== emp.stream ? (
+                      <div className="text-[10px] text-[rgb(var(--muted))] truncate max-w-[8rem]" title={streamLabel}>
+                        {streamLabel}
+                      </div>
                     ) : null}
                   </td>
-                  <td className="px-4 py-3 text-center">
+                  <td className="px-4 py-2 align-middle text-center">
                      {emp.lastPromotionDate ? (
-                        <div className="text-[11px] font-black text-teal-400 bg-teal-500/5 px-2 py-1 rounded-lg border border-teal-500/20 tabular-nums">
-                           {new Date(emp.lastPromotionDate).toLocaleDateString(undefined, { month: 'short', day: '2-digit' })}
-                        </div>
+                        <span className="inline-block text-[10px] font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 px-2 py-0.5 rounded-md border border-teal-500/20 tabular-nums">
+                           {new Date(emp.lastPromotionDate).toLocaleDateString(undefined, { month: "short", day: "2-digit" })}
+                        </span>
                      ) : (
-                        <span className="text-[10px] text-slate-500 opacity-40">—</span>
+                        <span className="text-[rgb(var(--muted))]">—</span>
                      )}
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-2">
+                  <td className="px-4 py-2 align-middle text-right">
+                    <div className="inline-flex items-center gap-0.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-0.5">
                       <button
+                        type="button"
                         onClick={() => openEdit(emp)}
-                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
-                        title="Edit"
+                        className="p-1.5 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-colors"
+                        title="Edit employee"
+                        aria-label={`Edit ${emp.name}`}
                       >
-                        <Edit3 size={16} />
+                        <Edit3 size={15} />
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => requestPromoteEmployee(emp)}
                         disabled={promotingId === emp.id || promoteGate.isMaxBand}
-                        className="p-2 rounded-md text-blue-600 dark:text-blue-300 hover:bg-blue-500/10 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="p-1.5 rounded-md text-blue-600 dark:text-blue-300 hover:bg-blue-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         title={
                           promoteGate.isMaxBand
                             ? promoteGate.reasonIfBlocked || "Already at highest band on default track"
                             : "Promote to next band"
                         }
+                        aria-label={`Promote ${emp.name}`}
                       >
-                        <ArrowUpCircle size={16} />
+                        <ArrowUpCircle size={15} />
                       </button>
 
                       <button
+                        type="button"
                         onClick={() => requestRemoveEmployee(emp)}
                         disabled={isSelf(emp)}
-                        className="p-2 rounded-md text-red-500 hover:bg-red-500/10 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                        title="Remove"
+                        className="p-1.5 rounded-md text-[rgb(var(--danger))] hover:bg-[rgb(var(--danger))]/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Remove employee"
+                        aria-label={`Remove ${emp.name}`}
                       >
-                        <Trash2 size={16} />
+                        <Trash2 size={15} />
                       </button>
                     </div>
                   </td>
@@ -1318,7 +1509,7 @@ export default function EmployeeDirectory({
 
               {!employeesLoading && filtered.length === 0 ? (
                 <tr>
-                  <td className="py-16 text-center" colSpan={8}>
+                  <td className="py-16 text-center" colSpan={9}>
                     <div className="flex flex-col items-center gap-3">
                       <Search size={32} className="text-[rgb(var(--muted))]/40" />
                       <p className="text-[rgb(var(--muted))] text-sm">No employees match your filters.</p>
@@ -1328,11 +1519,17 @@ export default function EmployeeDirectory({
               ) : null}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 
-      {/* ── Mobile Card View (visible below lg) ── */}
-      <div className="lg:hidden space-y-3">
+      {/* ── Mobile roster (scroll inside panel) ── */}
+      <div className="rt-panel lg:hidden flex flex-col max-h-[min(72vh,640px)] overflow-hidden">
+        <div className="shrink-0 px-4 py-3 border-b border-[rgb(var(--border))]">
+          <h2 className="text-sm font-semibold">Employee roster</h2>
+          <p className="rt-section-subtitle mt-0.5">{visibleEmployees.length} in view</p>
+        </div>
+        <div className="flex-1 overflow-auto custom-scrollbar p-4 space-y-3">
         {visibleEmployees.map((emp) => {
           const promoteGate = getPromotionPreview(emp.band, "BOTH");
           return (
@@ -1345,28 +1542,23 @@ export default function EmployeeDirectory({
                 </div>
                 <div className="text-[11px] text-[rgb(var(--muted))] truncate">{emp.email || "—"}</div>
               </div>
-              <span className={[
-                "shrink-0 inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold border",
-                emp.role === "Admin" ? "bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/20" :
-                emp.role === "Manager" ? "bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20" :
-                "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
-              ].join(" ")}>
-                {emp.role}
-              </span>
+              <RoleBadge role={emp.role} />
             </div>
 
             <div className="grid grid-cols-3 gap-2 text-[11px]">
-              <div>
+              <div className="min-w-0">
                 <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Designation</div>
-                <div className="text-[rgb(var(--text))] font-medium truncate">{emp.designation ?? emp.role}</div>
+                <div className="text-[rgb(var(--text))] truncate" title={employeeDesignation(emp)}>
+                  {employeeDesignation(emp)}
+                </div>
               </div>
               <div>
                 <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Band</div>
-                <div className="text-[rgb(var(--text))] font-mono font-semibold">{emp.band}</div>
+                <div className="text-[rgb(var(--text))] font-mono font-semibold tabular-nums">{employeeBandCode(emp)}</div>
               </div>
-              <div>
-                <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Stream</div>
-                <div className="text-[rgb(var(--text))] font-mono font-semibold">{emp.stream || "—"}</div>
+              <div className="min-w-0">
+                <div className="text-[rgb(var(--muted))] uppercase tracking-wider font-medium mb-0.5">Department</div>
+                <div className="text-[rgb(var(--text))] truncate">{emp.stream || "—"}</div>
               </div>
             </div>
 
@@ -1422,11 +1614,12 @@ export default function EmployeeDirectory({
         })}
 
         {!employeesLoading && filtered.length === 0 ? (
-          <div className="rt-panel rounded-xl p-10 flex flex-col items-center gap-3">
+          <div className="rounded-xl border border-dashed border-[rgb(var(--border))] p-10 flex flex-col items-center gap-3">
             <Search size={28} className="text-[rgb(var(--muted))]/40" />
             <p className="text-[rgb(var(--muted))] text-sm">No employees match your filters.</p>
           </div>
         ) : null}
+        </div>
       </div>
 
       {pager ? (
@@ -1461,18 +1654,53 @@ export default function EmployeeDirectory({
 
       <ConfirmDialog
         open={Boolean(pendingDeleteEmployee)}
-        title="Deactivate Employee"
+        title="Deactivate employee?"
         message={
           pendingDeleteEmployee
-            ? `Deactivate ${pendingDeleteEmployee.name}? They will be marked inactive in WebTrak and removed from active directory lists. This does not purge historical records.`
+            ? `You are about to deactivate ${pendingDeleteEmployee.name}.\n\nThey will be marked inactive and hidden from active lists. Historical submissions and records are kept.\n\nThis cannot be undone from the directory UI without re-activating the profile.`
             : "Deactivate this employee?"
         }
-        confirmText="Deactivate"
-        cancelText="Cancel"
+        confirmText="Yes, deactivate"
+        cancelText="Keep active"
         confirmVariant="danger"
         busy={mutating}
         onCancel={() => setPendingDeleteEmployee(null)}
         onConfirm={confirmDeleteEmployee}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingBulkDelete?.length)}
+        title={`Deactivate ${pendingBulkDelete?.length || 0} employees?`}
+        message={
+          pendingBulkDelete?.length
+            ? `You selected ${pendingBulkDelete.length} people to deactivate.\n\nEach will be marked inactive in WebTrak. This does not delete audit history.\n\nContinue?`
+            : ""
+        }
+        confirmText={`Deactivate ${pendingBulkDelete?.length || 0}`}
+        cancelText="Cancel"
+        confirmVariant="danger"
+        busy={mutating}
+        onCancel={() => setPendingBulkDelete(null)}
+        onConfirm={confirmBulkDelete}
+      />
+
+      <ConfirmDialog
+        open={pendingSaveEdit}
+        title="Save employee changes?"
+        message={
+          editingEmployee
+            ? `Save updates for ${draft.name || editingEmployee.name}?\n\nPortal role, band, department, designation, and contact fields will be updated on the server. Employee ID will not change.`
+            : "Save changes to this employee profile?"
+        }
+        confirmText="Save changes"
+        cancelText="Keep editing"
+        confirmVariant="primary"
+        busy={mutating}
+        onCancel={() => setPendingSaveEdit(false)}
+        onConfirm={() => {
+          setPendingSaveEdit(false);
+          saveEdit();
+        }}
       />
 
       <ConfirmDialog
@@ -1493,46 +1721,26 @@ export default function EmployeeDirectory({
         cancelText="Cancel"
         confirmVariant="primary"
         busy={Boolean(promotingId)}
-        onCancel={() => {
-          setPendingPromoteEmployee(null);
-          setPromoteEligibility(null);
-          setPromoteForceOverride(false);
-        }}
+        onCancel={() => setPendingPromoteEmployee(null)}
         onConfirm={confirmPromoteEmployee}
-        confirmDisabled={promoteConfirmDisabled || promoteEligibilityLoading}
+        confirmDisabled={promoteConfirmDisabled}
       >
         <div className="space-y-3">
-          {promoteEligibilityLoading ? (
-            <p className="text-xs text-[rgb(var(--muted))]">Checking promotion eligibility…</p>
-          ) : promoteEligibility?.averageApprovedScore != null ? (
-            <p className="text-xs text-[rgb(var(--text-secondary))]">
-              Average approved score:{" "}
-              <span className="font-bold text-[rgb(var(--text))]">
-                {Number(promoteEligibility.averageApprovedScore).toFixed(1)} / 5
-              </span>
-              {" "}
-              (minimum {PROMOTION_MIN_PERFORMANCE_SCORE} required)
-            </p>
-          ) : null}
+          <p className="text-sm text-[rgb(var(--muted))] leading-relaxed">
+            This is a manual HR promotion — review scores are not required on this step.
+          </p>
           <div>
-            <label className="block text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))] mb-1.5">
-              Career track (Webtrak BandType)
-            </label>
+            <label className="rt-label">Career track</label>
             <select
               value={promoteBandType}
               onChange={(e) => setPromoteBandType(e.target.value)}
               className="rt-input w-full text-sm"
               disabled={Boolean(promotingId)}
             >
-              <option value="BOTH">Automatic (tech if eligible, else non-tech)</option>
+              <option value="BOTH">Auto — pick tech or non-tech ladder</option>
               <option value="TECH">Tech — up to {TECH_MAX_BAND}</option>
               <option value="NON_TECH">Non-tech — up to {NON_TECH_MAX_BAND}</option>
             </select>
-            <p className="mt-2 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
-              Tech and non-tech ladders differ. Use the track that matches the role. Ceilings: tech max{" "}
-              <span className="font-mono">{TECH_MAX_BAND}</span>, non-tech max{" "}
-              <span className="font-mono">{NON_TECH_MAX_BAND}</span>.
-            </p>
           </div>
           {promoteDialogPreview.reasonIfBlocked ? (
             <div
@@ -1545,20 +1753,6 @@ export default function EmployeeDirectory({
             >
               {promoteDialogPreview.reasonIfBlocked}
             </div>
-          ) : null}
-          {!promoteDialogPreview.promotionScoreEligible && promoteDialogPreview.nextBand ? (
-            <label className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 text-xs cursor-pointer">
-              <input
-                type="checkbox"
-                checked={promoteForceOverride}
-                onChange={(e) => setPromoteForceOverride(e.target.checked)}
-                className="mt-0.5"
-                disabled={Boolean(promotingId)}
-              />
-              <span className="text-amber-900 dark:text-amber-100">
-                HR override — promote without meeting the score threshold (document exception).
-              </span>
-            </label>
           ) : null}
         </div>
       </ConfirmDialog>
@@ -1804,8 +1998,8 @@ export default function EmployeeDirectory({
             </div>
           }
         >
-          <form onSubmit={saveEdit} className="space-y-5">
-            <AddFormSection title="Identity" subtitle="Name and sign-in email (email is read-only).">
+          <form onSubmit={requestSaveEdit} className="space-y-5">
+            <AddFormSection title="Identity" subtitle="Name and work email. Employee ID cannot be changed.">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <AddFormField label="Employee ID">
                   <input
@@ -1816,9 +2010,11 @@ export default function EmployeeDirectory({
                 </AddFormField>
                 <AddFormField label="Work email">
                   <input
-                    value={String(editingEmployee.email || "")}
-                    readOnly
-                    className="rt-input w-full text-sm opacity-70 cursor-not-allowed"
+                    type="email"
+                    value={draft.email}
+                    onChange={(e) => setDraft((d) => ({ ...d, email: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                    required
                   />
                 </AddFormField>
               </div>
@@ -1855,6 +2051,49 @@ export default function EmployeeDirectory({
                   Admin profiles do not require band or department updates.
                 </div>
               ) : null}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <AddFormField label="Employment type">
+                  <select
+                    value={draft.userType}
+                    onChange={(e) => setDraft((d) => ({ ...d, userType: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                  >
+                    <option value="FULLTIME">Full-time</option>
+                    <option value="INTERN">Intern</option>
+                    <option value="FREELANCER">Freelancer</option>
+                  </select>
+                </AddFormField>
+                <AddFormField label="Work mode">
+                  <select
+                    value={draft.workMode}
+                    onChange={(e) => setDraft((d) => ({ ...d, workMode: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                  >
+                    <option value="HYBRID">Hybrid</option>
+                    <option value="REMOTE">Remote</option>
+                    <option value="OFFICE">Office</option>
+                  </select>
+                </AddFormField>
+                <AddFormField label="Account status">
+                  <select
+                    value={draft.userStatus}
+                    onChange={(e) => setDraft((d) => ({ ...d, userStatus: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                  >
+                    <option value="ACTIVE">Active</option>
+                    <option value="INACTIVE">Inactive</option>
+                    <option value="ONBOARDING">Onboarding</option>
+                  </select>
+                </AddFormField>
+                <AddFormField label="Phone">
+                  <input
+                    value={draft.phoneNumber}
+                    onChange={(e) => setDraft((d) => ({ ...d, phoneNumber: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                    placeholder="+91 …"
+                  />
+                </AddFormField>
+              </div>
             </AddFormSection>
 
             {!editRoleIsAdmin ? (

@@ -791,7 +791,7 @@ export default function AdminDashboard({
     {
       title: "Promotions",
       value: promotionsCount,
-      helper: "Career advancements this cycle",
+      helper: "Manual promotions recorded this cycle",
       icon: ArrowUpCircle,
       tone: "blue",
     },

@@ -651,11 +651,17 @@ export async function completePasswordLogin(email, password, { signal } = {} as 
 
   const emailNorm = String(data?.email ?? email ?? "").trim().toLowerCase();
 
+  const loginPayload = data && typeof data === "object" ? data : {};
   setAuth({
-    ...(data && typeof data === "object" ? data : {}),
+    ...loginPayload,
     email: emailNorm,
     accessToken: token || null,
     tokenType: String(data?.tokenType ?? "Bearer"),
+    role:
+      explicitRoleFromObject(loginPayload) ||
+      extractRole(loginPayload) ||
+      undefined,
+    roles: loginPayload.roles,
   });
 
   const session = getAuth();
