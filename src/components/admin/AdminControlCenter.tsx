@@ -2,7 +2,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion as Motion } from "framer-motion";
 import { Bell, BellDot } from "lucide-react";
-import { ADMIN_NAV_GROUPS } from "../../config/portalNavigation";
+import { ADMIN_NAV_GROUPS, ADMIN_TAB_COPY } from "../../config/portalNavigation";
+import { isHrPortalUser } from "../../utils/hrRatingsFilter";
 import WebknotDrive from "./WebknotDrive";
 import AppShell from "../shared/AppShell";
 import PortalSidebar from "../shared/PortalSidebar";
@@ -223,6 +224,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
   }, [notificationsOpen, reloadNotifications]);
 
   const unreadNotificationsCount = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
+  const isHrUser = useMemo(() => isHrPortalUser(auth), [auth]);
+  const roleLabel = isHrUser ? "HR" : "Admin";
 
   return (
     <>
@@ -319,13 +322,32 @@ export default function AdminControlCenter({ onLogout, auth }) {
           </div>
           <PortalUserMenu
             auth={auth}
-            roleLabel="Admin"
+            roleLabel={roleLabel}
             onProfile={() => setActiveTab("account")}
             onLogout={onLogout}
           />
         </>
       }
     >
+          <div className="w-full min-w-0">
+            {isHrUser ? (
+              <div className="mb-6 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-4 py-3 text-sm text-[rgb(var(--muted))]">
+                HR workspace: manage org settings here. Complete your own monthly review in the{" "}
+                <a href="/employee" className="text-[rgb(var(--primary))] hover:underline">
+                  employee portal
+                </a>
+                .
+              </div>
+            ) : null}
+
+            <AnimatePresence mode="wait">
+              <Motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              >
           {activeTab === "dashboard" && (
             <AdminDashboard
               employees={employees}
@@ -368,8 +390,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
             <PortalNotesWorkspace
               portal="admin"
               auth={auth}
-              title="Admin notes"
-              subtitle="Private to your account — not visible to other admins, managers, or employees."
+              title={ADMIN_TAB_COPY.notes.title}
+              subtitle={ADMIN_TAB_COPY.notes.subtitle}
             />
           )}
           {activeTab === "drive" && <WebknotDrive auth={auth} portalLabel="your admin account" />}
@@ -378,8 +400,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
           )}
 
           {activeTab === "account" && (
-            <UserProfilePage auth={auth} roleLabel="Admin" onBack={() => setActiveTab("dashboard")} />
+            <UserProfilePage auth={auth} roleLabel={roleLabel} onBack={() => setActiveTab("dashboard")} />
           )}
+              </Motion.div>
+            </AnimatePresence>
+          </div>
     </AppShell>
 
 

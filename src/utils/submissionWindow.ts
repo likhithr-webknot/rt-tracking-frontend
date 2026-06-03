@@ -62,13 +62,27 @@ export function normalizeSubmissionWindow(raw, fallback = {}) {
 export function resolveSubmissionAccess(globalWindow, roleWindow, at = new Date()) {
   const globalOpen = computeSubmissionWindowOpen(globalWindow, at);
   const roleOpen = computeSubmissionWindowOpen(roleWindow, at);
+  const effectiveRoleOpen = globalOpen || roleOpen;
   return {
     globalWindow: globalWindow || null,
     roleWindow: roleWindow || null,
     globalOpen,
     roleOpen,
-    canEnterValues: globalOpen || roleOpen,
-    displayWindow: roleWindow || globalWindow || null,
+    effectiveRoleOpen,
+    canEnterValues: effectiveRoleOpen,
+    displayWindow: globalOpen ? globalWindow : roleWindow || globalWindow || null,
+    allPortalsOpen: globalOpen,
+  };
+}
+
+/** Admin settings display: when global is open, employee/manager portals are open for everyone. */
+export function resolveSettingsWindowDisplay(globalOpen, roleOpen) {
+  const effective = Boolean(globalOpen || roleOpen);
+  return {
+    globalOpen: Boolean(globalOpen),
+    roleOpen: Boolean(roleOpen),
+    effectiveOpen: effective,
+    openForEveryone: Boolean(globalOpen),
   };
 }
 

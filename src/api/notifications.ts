@@ -6,10 +6,14 @@ import { buildApiUrl, ensureCsrfCookie, safeJsonParse, toHttpError, withCsrfHead
 export const ADMIN_NOTIFICATION_TYPES = Object.freeze({
   MANAGER_EMPLOYEE_PAIR_SUBMITTED: "MANAGER_EMPLOYEE_PAIR_SUBMITTED",
   FORGOT_PASSWORD_REQUESTED: "FORGOT_PASSWORD_REQUESTED",
+  PROJECT_STAKEHOLDER_ALERT: "PROJECT_STAKEHOLDER_ALERT",
+  EMPLOYEE_PROJECT_SUBMITTED: "EMPLOYEE_PROJECT_SUBMITTED",
 });
 
 export const MANAGER_NOTIFICATION_TYPES = Object.freeze({
   EMPLOYEE_SUBMITTED_FOR_REVIEW: "EMPLOYEE_SUBMITTED_FOR_REVIEW",
+  PROJECT_STAKEHOLDER_ALERT: "PROJECT_STAKEHOLDER_ALERT",
+  EMPLOYEE_PROJECT_SUBMITTED: "EMPLOYEE_PROJECT_SUBMITTED",
 });
 
 const ADMIN_ALLOWED_NOTIFICATION_TYPES = new Set(Object.values(ADMIN_NOTIFICATION_TYPES));
@@ -19,6 +23,9 @@ const MANAGER_ALLOWED_NOTIFICATION_TYPES = new Set([
   "EMPLOYEE_MONTHLY_SUBMITTED",
   "EMPLOYEE_SUBMITTED_TO_MANAGER",
   "EMPLOYEE_SUBMISSION_FINALIZED",
+  "PROJECT_SUBMIT_ALERT",
+  "PM_PROJECT_ALERT",
+  "AM_PROJECT_ALERT",
 ]);
 
 function isPlainObject(value) {
@@ -373,30 +380,11 @@ export function normalizeAdminNotification(raw) {
 }
 
 export function normalizeManagerNotification(raw) {
-  const isProjectSelection = (obj = {}) => {
-    const typeText = toTrimmedString(obj.type ?? obj.eventType ?? obj.notificationType ?? obj.kind).toUpperCase();
-    if (typeText.includes("PROJECT") && (typeText.includes("SELECT") || typeText.includes("ASSIGN"))) return true;
-
-    const payload = isPlainObject(obj.payload) ? obj.payload : {};
-    const payloadType = toTrimmedString(
-      payload.type ?? payload.eventType ?? payload.notificationType ?? payload.kind ?? payload.eventName
-    ).toUpperCase();
-    if (payloadType.includes("PROJECT") && (payloadType.includes("SELECT") || payloadType.includes("ASSIGN"))) return true;
-
-    const message = toTrimmedString(obj.message || payload.message || obj.text || payload.text).toLowerCase();
-    if (message.includes("selected") && message.includes("project")) return true;
-    return false;
-  };
-
-  if (isProjectSelection(raw)) return null;
-
   const first = normalizeNotification(raw, MANAGER_ALLOWED_NOTIFICATION_TYPES, buildManagerTitle, buildManagerMessage);
   if (first) return first;
 
   const obj = isPlainObject(raw) ? raw : {};
   const type = toTrimmedString(obj.type ?? obj.eventType ?? obj.notificationType ?? obj.kind) || "MANAGER_GENERIC";
-  if (isProjectSelection(obj)) return null;
-
   const fallback = normalizeNotification(
     { ...obj, type },
     new Set([type, ...MANAGER_ALLOWED_NOTIFICATION_TYPES]),

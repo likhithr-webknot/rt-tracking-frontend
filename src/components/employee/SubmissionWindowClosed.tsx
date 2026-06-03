@@ -90,12 +90,12 @@ export default function SubmissionWindowClosed({
                 </h1>
                 <p className="mt-3 text-[rgb(var(--muted))]">
                   Submissions are closed for <span className="text-[rgb(var(--text))] font-bold">{monthLabel}</span>.
-                  {globalOpen === true && roleOpen === false ? (
-                    <span className="block mt-2 text-amber-700 dark:text-amber-200">
-                      The global cycle is open, but the {portalLabel.toLowerCase()} window is closed for your role.
+                  {globalOpen === true ? (
+                    <span className="block mt-2 text-emerald-700 dark:text-emerald-300">
+                      The global submission window is open for everyone. If you still see this screen, refresh or contact HR.
                     </span>
                   ) : null}
-                  {globalOpen === false && roleOpen === false ? (
+                  {globalOpen !== true && roleOpen === false ? (
                     <span className="block mt-2">
                       When the <strong>global</strong> window or your <strong>{portalLabel.toLowerCase()}</strong> window is open, you can enter ratings and submit.
                     </span>

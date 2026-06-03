@@ -46,6 +46,8 @@ import {
   Tooltip,
 } from "recharts";
 import Toast from "../shared/Toast";
+import PortalPageHeader from "../shared/PortalPageHeader";
+import { ADMIN_TAB_COPY } from "../../config/portalNavigation";
 
 import { formatYearMonth } from "../../api/monthly-submissions";
 import { friendlyProxyUnreachableMessage } from "../../api/http";
@@ -935,60 +937,56 @@ export default function AdminDashboard({
   return (
     <div className="mx-auto w-full min-w-0 max-w-7xl space-y-6 px-0 sm:space-y-8 sm:px-0">
 
-      {/* ── header ── */}
-      <header className="rt-panel p-6 sm:p-8 overflow-hidden relative">
-        <div className="absolute -top-20 -right-24 h-56 w-56 rounded-full bg-cyan-500/10 blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-16 -left-20 h-52 w-52 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none" />
-        <div className="relative flex flex-col lg:flex-row lg:items-end lg:justify-between gap-5">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <div className="h-10 w-10 rounded-xl bg-cyan-500/15 text-cyan-600 dark:text-cyan-300 flex items-center justify-center">
-                <Zap size={19} strokeWidth={1.9} />
-              </div>
-              <span className="rt-kicker">Overview</span>
-            </div>
-            <h2 className="rt-title">Dashboard</h2>
-            <p className="text-sm text-[rgb(var(--muted))] mt-2 font-medium">
-              Cycle health, submissions, and organization metrics at a glance.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3 flex-wrap">
-            <select
-              value={selectedCycleKey}
-              onChange={(e) => setSelectedCycleKey(e.target.value)}
-              className="rt-input px-3 py-2.5 text-sm w-44"
-            >
-              {cycleOptions.map((opt) => (
-                <option key={opt.key} value={opt.key}>{opt.label}</option>
-              ))}
-            </select>
-            <button onClick={handleGenerateReport} className="rt-btn-ghost py-2.5">
-              <Download size={15} /> Export Brief
-            </button>
-          </div>
+      <PortalPageHeader
+        title={ADMIN_TAB_COPY.dashboard.title}
+        subtitle={ADMIN_TAB_COPY.dashboard.subtitle}
+        sectionLabel={ADMIN_TAB_COPY.dashboard.sectionLabel}
+      >
+        <div className="flex items-center gap-3 flex-wrap">
+          <select
+            value={selectedCycleKey}
+            onChange={(e) => setSelectedCycleKey(e.target.value)}
+            className="rt-input px-3 py-2.5 text-sm w-44 rounded-xl"
+          >
+            {cycleOptions.map((opt) => (
+              <option key={opt.key} value={opt.key}>{opt.label}</option>
+            ))}
+          </select>
+          <button onClick={handleGenerateReport} className="rt-btn-ghost py-2.5">
+            <Download size={15} /> Export Brief
+          </button>
         </div>
+      </PortalPageHeader>
 
-        <div className="relative mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3.5">
-            <div className="text-[10px] uppercase tracking-wider text-cyan-700 dark:text-cyan-300 font-semibold">Cycle</div>
-            <div className="mt-1 text-sm font-semibold text-[rgb(var(--text))]">{monthlyOverviewLoading ? "Loading cycle..." : (monthlyOverview?.month || selectedCycleKey || "Current")}</div>
+      <div className="rt-portal-hero mb-2">
+        <div className="relative z-10 rt-portal-stat-grid">
+          <div className="rt-portal-stat-card">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Cycle</div>
+            <div className="mt-2 text-lg font-bold text-[rgb(var(--text))]">{monthlyOverviewLoading ? "Loading…" : (monthlyOverview?.month || selectedCycleKey || "Current")}</div>
             <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{monthlyOverview?.reviewMonthLabel || "Review window monitored in real-time"}</div>
           </div>
-          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3.5">
-            <div className="text-[10px] uppercase tracking-wider text-emerald-700 dark:text-emerald-300 font-semibold">System Availability</div>
-            <div className="mt-1 text-sm font-semibold text-[rgb(var(--text))]">
-              {portalLiveOpen ? "Submission Window Open" : "Submission Window Closed"}
+          <div className="rt-portal-stat-card">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Submission window</div>
+            <div className="mt-2 text-lg font-bold text-[rgb(var(--text))]">
+              {portalLiveOpen ? "Open" : "Closed"}
             </div>
-            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{portalWindow?.start ? `Window starts at ${portalWindow.start}` : "No active schedule configured"}</div>
+            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{portalWindow?.start ? `Starts ${portalWindow.start}` : "No schedule configured"}</div>
           </div>
-          <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 p-3.5">
-            <div className="text-[10px] uppercase tracking-wider text-blue-700 dark:text-blue-300 font-semibold">Performance Drift</div>
-            <div className="mt-1 text-sm font-semibold text-[rgb(var(--text))]">{stats.abilityDelta != null ? `${stats.abilityDelta > 0 ? "+" : ""}${stats.abilityDelta.toFixed(1)} vs previous` : "No baseline yet"}</div>
-            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">Latest ability score: {stats.latestAbility ? stats.latestAbility.toFixed(1) : "0.0"}</div>
+          <div className="rt-portal-stat-card">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Performance drift</div>
+            <div className="mt-2 text-lg font-bold text-[rgb(var(--text))]">{stats.abilityDelta != null ? `${stats.abilityDelta > 0 ? "+" : ""}${stats.abilityDelta.toFixed(1)} vs previous` : "No baseline yet"}</div>
+            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">Latest ability: {stats.latestAbility ? stats.latestAbility.toFixed(1) : "0.0"}</div>
+          </div>
+          <div className="rt-portal-stat-card">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Headcount</div>
+            <div className="mt-2 flex items-center gap-2 text-lg font-bold text-[rgb(var(--text))]">
+              <Users size={18} className="text-[rgb(var(--primary))]" />
+              {safeEmployees.length}
+            </div>
+            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">Active employee records</div>
           </div>
         </div>
-      </header>
+      </div>
 
       {monthlyOverviewError ? (
         <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-200">

@@ -38,14 +38,18 @@ export function normalizeProject(raw) {
     row.summary ??
     ""
   ).trim();
+  const pm = String(row.pm ?? row.projectManager ?? row.managerName ?? row.manager?.name ?? "").trim();
+  const am = String(row.am ?? row.accountManager ?? row.accountManagerName ?? "").trim();
   return {
     id: String(row.id ?? row.projectId ?? row._id ?? code ?? "").trim(),
     code,
     name: String(row.name ?? row.projectName ?? row.title ?? "").trim(),
     description,
+    pm,
+    am,
     managerId: String(row.managerId ?? row.manager?.id ?? row.manager?.employeeId ?? "").trim(),
     managerEmployeeId: String(row.managerEmployeeId ?? row.managerEmployeeID ?? row.managerEmployeeId ?? "").trim(),
-    managerName: String(row.managerName ?? row.manager?.name ?? row.manager?.employeeName ?? "").trim(),
+    managerName: pm || String(row.managerName ?? row.manager?.name ?? row.manager?.employeeName ?? am ?? "").trim(),
     managerEmail: String(row.managerEmail ?? row.manager?.email ?? "").trim(),
     active: row.active !== false && row.status !== "INACTIVE",
     createdAt: row.createdAt || null,

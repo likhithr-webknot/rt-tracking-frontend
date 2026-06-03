@@ -1,6 +1,13 @@
 // @ts-nocheck
 import { getAuthHeader } from "./auth";
-import { buildApiUrl, requestWithFallbacks, toHttpError } from "./http";
+import {
+  buildApiUrl,
+  ensureCsrfCookie,
+  parseResponse,
+  requestWithFallbacks,
+  toHttpError,
+  withCsrfHeaders,
+} from "./http";
 
 export function normalizeDesignationsList(data) {
   if (Array.isArray(data)) return data;
@@ -99,6 +106,105 @@ export async function seedDesignations({ signal } = {}) {
       notFoundMessage: "Designation seed endpoint not found.",
     },
   );
+}
+
+function designationLookupBody(payload = {}) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const designation = String(p.designation ?? p.name ?? p.title ?? "").trim();
+  const department = String(p.department ?? p.stream ?? "").trim();
+  const bandIdRaw = p.bandId != null ? String(p.bandId).trim() : "";
+  const bandId = /^\d+$/.test(bandIdRaw) ? bandIdRaw : "";
+  const band = String(p.band ?? p.bandCode ?? "").trim();
+  const body = {
+    designation,
+    name: designation,
+    department,
+    stream: department,
+  };
+  if (bandId) body.bandId = bandId;
+  if (band) {
+    body.band = band;
+    body.bandCode = band;
+  }
+  return body;
+}
+
+async function mutateDesignationLookup(method, { id, body, signal } = {}) {
+  const auth = getAuthHeader();
+  await ensureCsrfCookie({ signal });
+  const headers = withCsrfHeaders({
+    "Content-Type": "application/json",
+    ...(auth ? { Authorization: auth } : {}),
+  });
+  const safeId = id != null ? encodeURIComponent(String(id).trim()) : "";
+  const jsonBody = body != null ? JSON.stringify(body) : undefined;
+
+  const idPaths = safeId
+    ? [
+        `/api/v1/designation-lookups/${safeId}`,
+        `/api/v1/designations/${safeId}`,
+        `/api/v1/designation-lookup/${safeId}`,
+        `/designations/${safeId}`,
+      ]
+    : [];
+  const collectionPaths = [
+    "/api/v1/designation-lookups",
+    "/api/v1/designations",
+    "/api/v1/designation-lookup",
+    "/designations",
+  ];
+
+  const endpoints = [];
+  for (const path of idPaths) {
+    endpoints.push({ method, path, body: jsonBody });
+  }
+  if (method === "POST") {
+    for (const path of collectionPaths) {
+      endpoints.push({ method: "POST", path, body: jsonBody });
+    }
+  }
+
+  let lastErr = null;
+  for (const endpoint of endpoints) {
+    const res = await fetch(buildApiUrl(endpoint.path), {
+      method: endpoint.method,
+      signal,
+      credentials: "include",
+      headers,
+      ...(endpoint.body ? { body: endpoint.body } : {}),
+    });
+    if (res.ok) return parseResponse(res, {});
+    const err = await toHttpError(res);
+    if (res.status === 404 || res.status === 405) {
+      lastErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastErr || new Error(`Designation ${method} endpoint not found.`);
+}
+
+export async function createDesignationLookup(payload, { signal } = {}) {
+  const body = designationLookupBody(payload);
+  if (!body.designation) throw new Error("Designation title is required.");
+  if (!body.department) throw new Error("Department is required.");
+  if (!body.bandId && !body.band) throw new Error("Band is required.");
+  return mutateDesignationLookup("POST", { body, signal });
+}
+
+export async function updateDesignationLookup(id, payload, { signal } = {}) {
+  const safeId = String(id ?? "").trim();
+  if (!safeId) throw new Error("Designation id is required.");
+  const body = designationLookupBody(payload);
+  if (!body.designation) throw new Error("Designation title is required.");
+  if (!body.department) throw new Error("Department is required.");
+  return mutateDesignationLookup("PUT", { id: safeId, body, signal });
+}
+
+export async function deleteDesignationLookup(id, { signal } = {}) {
+  const safeId = String(id ?? "").trim();
+  if (!safeId) throw new Error("Designation id is required.");
+  return mutateDesignationLookup("DELETE", { id: safeId, signal });
 }
 
 export async function importDesignations(file, options = {}) {

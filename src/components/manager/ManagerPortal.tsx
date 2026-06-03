@@ -70,7 +70,7 @@ import PortalSidebar from "../shared/PortalSidebar";
 import UserProfilePage from "../shared/UserProfilePage";
 import PortalSettingsModal from "../shared/PortalSettingsModal";
 import PortalPageHeader from "../shared/PortalPageHeader";
-import TimeLogTracker from "../shared/TimeLogTracker";
+import PortalWorkflowFrame from "../shared/PortalWorkflowFrame";
 import SubmissionWindowClosed from "../employee/SubmissionWindowClosed";
 import ManagerCalibrationPanel from "./ManagerCalibrationPanel";
 import ManagerAiReviewAssist from "./ManagerAiReviewAssist";
@@ -79,6 +79,7 @@ import ResubmissionPlaybook from "../shared/ResubmissionPlaybook";
 import { captureRejectSnapshot } from "../../utils/resubmissionPlaybook";
 import { fetchSubmissionAccessForRole } from "../../api/submission-window";
 import { computeSubmissionWindowOpen } from "../../utils/submissionWindow";
+import { isHrPortalUser, shouldHideHrPeerRating } from "../../utils/hrRatingsFilter";
 import { buildCycleMonthOptions } from "../../utils/reviewCycles";
 import { playNotificationSound } from "../../utils/notificationSound";
 import { safeJsonParse } from "../../utils/json";
@@ -651,15 +652,20 @@ export default function ManagerPortal({ onLogout, auth }) {
   const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review", "account", "notes", "drive"]), []);
 
   const getMgrTabFromPath = useCallback(() => {
-    const raw = window.location.pathname.replace(/^\//, "").split("/")[0];
-    return MGR_VALID_TABS.has(raw) ? raw : "team";
+    const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
+    if (parts[0] === "manager") {
+      const tab = parts[1] || "team";
+      return MGR_VALID_TABS.has(tab) ? tab : "team";
+    }
+    const legacy = parts[0] || "team";
+    return MGR_VALID_TABS.has(legacy) ? legacy : "team";
   }, [MGR_VALID_TABS]);
 
   const [activeTab, setActiveTabRaw] = useState(() => getMgrTabFromPath());
 
   const setActiveTab = useCallback((tab) => {
     setActiveTabRaw(tab);
-    const path = tab === "team" ? "/" : `/${tab}`;
+    const path = tab === "team" ? "/manager" : `/manager/${tab}`;
     if (window.location.pathname !== path) {
       window.history.pushState(null, "", path);
     }
@@ -1755,7 +1761,10 @@ export default function ManagerPortal({ onLogout, auth }) {
     [selfSubmissionMeta]
   );
   const canEnterManagerValues = Boolean(
-    portalWindow?.canEnterValues ?? computeSubmissionWindowOpen(portalWindow),
+    portalWindow?.canEnterValues ??
+      portalWindow?.globalOpen ??
+      portalWindow?.roleOpen ??
+      computeSubmissionWindowOpen(portalWindow),
   );
 
   useEffect(() => {
@@ -1786,10 +1795,23 @@ export default function ManagerPortal({ onLogout, auth }) {
   }, [managerId, month]);
 
   const selfLatestReviewComment = useMemo(() => {
-    const manager = String(selfSubmissionMeta?.managerReview?.comments || "").trim();
-    const admin = String(selfSubmissionMeta?.adminReview?.comments || "").trim();
-    return manager || admin || "";
-  }, [selfSubmissionMeta?.adminReview?.comments, selfSubmissionMeta?.managerReview?.comments]);
+    const managerReview = selfSubmissionMeta?.managerReview;
+    const adminReview = selfSubmissionMeta?.adminReview;
+    if (
+      managerReview &&
+      !shouldHideHrPeerRating(auth, { ...managerReview, reviewer: "Manager", reviewerRole: managerReview?.reviewedByRole })
+    ) {
+      const manager = String(managerReview?.comments || "").trim();
+      if (manager) return manager;
+    }
+    if (
+      adminReview &&
+      !shouldHideHrPeerRating(auth, { ...adminReview, reviewer: "Admin", reviewerRole: adminReview?.reviewedByRole })
+    ) {
+      return String(adminReview?.comments || "").trim();
+    }
+    return "";
+  }, [auth, selfSubmissionMeta?.adminReview, selfSubmissionMeta?.managerReview]);
   const selfStatusSummary = useMemo(() => {
     const reviewStatus = String(selfSubmissionMeta?.reviewStatus || "DRAFT").trim().toUpperCase();
     const managerAction = String(selfSubmissionMeta?.managerReview?.action || "").trim().toUpperCase();
@@ -2162,10 +2184,12 @@ export default function ManagerPortal({ onLogout, auth }) {
       String(auth?.email || auth?.claims?.sub || "").trim() ||
       "Unknown";
     const email = String(auth?.email || auth?.claims?.sub || "").trim() || null;
-    const role = "Manager";
+    const role = isHrPortalUser(auth) ? "HR" : "Manager";
     const subtitle = [managerStream, managerBand].filter(Boolean).join(" • ") || null;
     return { name, email, role, subtitle };
-  }, [auth?.claims?.sub, auth?.email, auth?.employeeName, auth?.name, managerBand, managerStream]);
+  }, [auth, managerBand, managerStream]);
+
+  const isHrUser = useMemo(() => isHrPortalUser(auth), [auth]);
 
   const handleSidebarTabChange = (nextTab) => {
     setActiveTab(nextTab);
@@ -2630,7 +2654,7 @@ export default function ManagerPortal({ onLogout, auth }) {
     >
         <div className="w-full min-w-0">
         {activeTab === "account" ? (
-          <UserProfilePage auth={auth} roleLabel="Manager" onBack={() => setActiveTab("team")} />
+          <UserProfilePage auth={auth} roleLabel={account.role} onBack={() => setActiveTab("team")} />
         ) : activeTab === "notes" ? (
           <PortalNotesWorkspace
             portal="manager"
@@ -2717,17 +2741,73 @@ export default function ManagerPortal({ onLogout, auth }) {
           </div>
         </PortalPageHeader>
 
+        {isHrUser ? (
+          <div className="mb-6 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-4 py-3 text-sm text-[rgb(var(--muted))]">
+            HR workspace: lead team reviews here. Complete your own monthly review in the{" "}
+            <a href="/employee" className="text-[rgb(var(--primary))] hover:underline">
+              employee portal
+            </a>
+            {" "}or open{" "}
+            <a href="/admin" className="text-[rgb(var(--primary))] hover:underline">
+              admin tools
+            </a>
+            .
+          </div>
+        ) : null}
+
         {activeTab === "team" ? (
-          <div className="mb-6 flex flex-wrap items-center gap-3">
-            <span className="inline-flex items-center gap-2 rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-2.5 py-1 text-xs font-medium text-[rgb(var(--text))]">
-              <Users size={14} className="text-[rgb(var(--muted))]" /> {reporteeCount} Reportees
-            </span>
-            <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-              <CheckCircle2 size={14} /> {submittedCount} Submitted
-            </span>
-            <span className="inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300">
-              <Clock size={14} /> {pendingManagerReviewCount} Pending
-            </span>
+          <div className="rt-portal-hero mb-6">
+            <div className="relative z-10">
+              <div className="rt-kicker mb-2">Team overview</div>
+              <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-[rgb(var(--text))]">
+                Your review queue
+              </h2>
+              <p className="mt-1 text-sm text-[rgb(var(--muted))] max-w-2xl">
+                Open each submission, add manager scores, and approve or send back before the window closes.
+              </p>
+              <div className="rt-portal-stat-grid mt-6">
+                <div className="rt-portal-stat-card">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Reportees</div>
+                  <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-[rgb(var(--text))]">
+                    <Users size={18} className="text-[rgb(var(--primary))]" />
+                    {reporteeCount}
+                  </div>
+                </div>
+                <div className="rt-portal-stat-card">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Submitted</div>
+                  <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-emerald-600 dark:text-emerald-300">
+                    <CheckCircle2 size={18} />
+                    {submittedCount}
+                  </div>
+                </div>
+                <div className="rt-portal-stat-card">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Pending review</div>
+                  <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-amber-600 dark:text-amber-300">
+                    <Clock size={18} />
+                    {pendingManagerReviewCount}
+                  </div>
+                </div>
+                <div className="rt-portal-stat-card">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Review coverage</div>
+                  <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-[rgb(var(--text))]">
+                    <TrendingUp size={18} className="text-[rgb(var(--muted))]" />
+                    {managerInsights.reviewedCoverage}%
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : activeTab === "self-review" ? (
+          <div className="rt-portal-hero mb-6">
+            <div className="relative z-10">
+              <div className="rt-kicker mb-2">Manager self-review</div>
+              <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-[rgb(var(--text))]">
+                Your monthly submission
+              </h2>
+              <p className="mt-1 text-sm text-[rgb(var(--muted))] max-w-2xl">
+                Complete your own KPIs, values, and self-review for this cycle — same flow as your team members.
+              </p>
+            </div>
           </div>
         ) : null}
 
@@ -2829,8 +2909,9 @@ export default function ManagerPortal({ onLogout, auth }) {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-          className="max-w-7xl mx-auto mt-10 grid grid-cols-1 xl:grid-cols-3 gap-8"
         >
+        <PortalWorkflowFrame>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
           {(teamLoading && teamSubs.length === 0) || (teamInsightsLoading && teamInsightSourceRows.length === 0) ? (
             <div className="xl:col-span-3 rt-panel-subtle rounded-lg p-6 text-sm text-[rgb(var(--muted))] animate-pulse">
               Loading team submissions and manager insights…
@@ -3110,34 +3191,34 @@ export default function ManagerPortal({ onLogout, auth }) {
             <p className="rt-section-subtitle mt-1">
               Click a card to view employee details.
             </p>
-            <div className="mt-5 space-y-3">
+            <div className="rt-portal-stat-grid mt-5">
               {[
-                { key: "reportees", label: "Reportees", count: reporteeCount, color: "blue", icon: <Users size={16} /> },
-                { key: "submitted", label: "Submitted", count: submittedCount, color: "emerald", icon: <CheckCircle2 size={16} /> },
-                { key: "pending", label: "Pending Manager Review", count: pendingManagerReviewCount, color: "amber", icon: <Clock size={16} /> },
+                { key: "reportees", label: "Reportees", count: reporteeCount, icon: <Users size={18} className="text-blue-500" /> },
+                { key: "submitted", label: "Submitted", count: submittedCount, icon: <CheckCircle2 size={18} className="text-emerald-500" /> },
+                { key: "pending", label: "Pending review", count: pendingManagerReviewCount, icon: <Clock size={18} className="text-amber-500" /> },
               ].map((card) => (
                 <button
                   key={card.key}
                   type="button"
                   onClick={() => { setQueueView(card.key); setQueueSearch(""); }}
-                  className="w-full text-left rt-panel-subtle rounded-xl px-5 py-4 hover:bg-[rgb(var(--surface-2)/.5)] transition-all group"
+                  className="rt-portal-stat-card text-left transition-all hover:border-[rgb(var(--accent))]/35 hover:shadow-md group"
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className={`h-8 w-8 rounded-lg flex items-center justify-center bg-${card.color}-500/10 text-${card.color}-600 dark:text-${card.color}-400`}>
-                        {card.icon}
-                      </div>
-                      <div>
-                        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">{card.label}</div>
-                        <div className="text-xl font-semibold text-[rgb(var(--text))]">{card.count}</div>
-                      </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">{card.label}</div>
+                      <div className="mt-2 text-2xl font-bold text-[rgb(var(--text))]">{card.count}</div>
                     </div>
-                    <ChevronRight size={16} className="text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))] transition-colors" />
+                    <div className="flex items-center gap-2">
+                      {card.icon}
+                      <ChevronRight size={14} className="text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))] transition-colors" />
+                    </div>
                   </div>
                 </button>
               ))}
             </div>
           </section>
+          </div>
+        </PortalWorkflowFrame>
         </motion.section>
       ) : null}
 
@@ -3165,13 +3246,10 @@ export default function ManagerPortal({ onLogout, auth }) {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-          className="max-w-7xl mx-auto mt-10"
         >
+          <PortalWorkflowFrame>
           <section className="rt-panel p-8 max-w-4xl">
-            <h2 className="rt-section-title">Manager Self Review</h2>
-            <p className="rt-section-subtitle mt-1">Write your monthly self review, rate KPIs and Webknot values, then submit.</p>
-
-            <div className="mt-5 rounded-2xl border border-[rgb(var(--border))] bg-gradient-to-r from-[rgb(var(--surface))] via-[rgb(var(--surface-2)/.6)] to-white/60 dark:from-[rgb(var(--surface-2))] dark:via-[rgb(var(--surface-2))] dark:to-transparent shadow-sm p-5 sm:p-6 relative overflow-hidden">
+            <div className="rounded-2xl border border-[rgb(var(--border))] bg-gradient-to-r from-[rgb(var(--surface))] via-[rgb(var(--surface-2)/.6)] to-white/60 dark:from-[rgb(var(--surface-2))] dark:via-[rgb(var(--surface-2))] dark:to-transparent shadow-sm p-5 sm:p-6 relative overflow-hidden">
               <div className="absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-blue-500 via-blue-500 to-cyan-500" aria-hidden="true" />
               <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_15%_20%,rgba(59,130,246,0.08),transparent_28%),radial-gradient(circle_at_80%_0%,rgba(99,102,241,0.08),transparent_28%)]" aria-hidden="true" />
               <div className="relative flex flex-col gap-3">
@@ -3378,6 +3456,7 @@ export default function ManagerPortal({ onLogout, auth }) {
               </div>
             </div>
           </section>
+          </PortalWorkflowFrame>
         </motion.section>
         )
       ) : null}

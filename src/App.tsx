@@ -26,7 +26,22 @@ import {
   stripOAuthParamsFromUrl,
 } from "./api/auth";
 import { isWebknotWorkEmail } from "./utils/webknotEmail";
+import { isHrPortalUser } from "./utils/hrRatingsFilter";
 import CompanyLogo from "./components/shared/CompanyLogo";
+
+const EMPLOYEE_LEGACY_TABS = new Set([
+  "profile",
+  "projects",
+  "account",
+  "kpis",
+  "values",
+  "certifications",
+  "recognitions",
+  "review",
+  "notes",
+  "drive",
+]);
+const MANAGER_LEGACY_TABS = new Set(["team", "self-review", "account", "notes", "drive"]);
 
 function normalizePortalRole(value) {
   const raw = String(value ?? "").trim().toLowerCase();
@@ -76,6 +91,22 @@ function resolveRoleFromCandidates(candidates) {
   if (keys.some((k) => k.includes("manager"))) return "Manager";
   if (keys.some((k) => k.includes("employee") || k.includes("user"))) return "Employee";
   return null;
+}
+
+function canAccessManagerPortal(auth, activePortalRole, isHrUser, hasReportees) {
+  if (activePortalRole === "Manager" || activePortalRole === "Admin") return true;
+  if (isHrUser) return true;
+  if (hasReportees === true) return true;
+  const obj = auth && typeof auth === "object" ? auth : {};
+  const claims = obj?.claims && typeof obj.claims === "object" ? obj.claims : {};
+  const explicit = normalizePortalRole(
+    obj?.role ??
+    obj?.empRole ??
+    obj?.userRole ??
+    obj?.roleName ??
+    claims?.role
+  );
+  return explicit === "Manager";
 }
 
 function resolvePortalRole(auth) {
@@ -161,12 +192,21 @@ export default function App() {
     return resolvePortalRole(auth);
   }, [auth]);
 
+  const isHrUser = useMemo(() => isHrPortalUser(auth), [auth]);
+
   useEffect(() => {
     if (!auth) {
       setHasReportees(null);
       return;
     }
     if (roleLabel === "Admin" || roleLabel === "Manager" || roleLabel === "Employee") {
+      setHasReportees(false);
+      return;
+    }
+
+    const obj = auth && typeof auth === "object" ? auth : {};
+    const claims = obj?.claims && typeof obj.claims === "object" ? obj.claims : {};
+    if (normalizePortalRole(obj?.role ?? obj?.empRole ?? obj?.userRole ?? claims?.role) === "Manager") {
       setHasReportees(false);
       return;
     }
@@ -204,8 +244,13 @@ export default function App() {
     if (roleLabel === "Manager") return "Manager";
     if (roleLabel === "Employee") return "Employee";
     if (hasReportees === true) return "Manager";
+    const obj = auth && typeof auth === "object" ? auth : {};
+    const claims = obj?.claims && typeof obj.claims === "object" ? obj.claims : {};
+    if (normalizePortalRole(obj?.role ?? obj?.empRole ?? obj?.userRole ?? claims?.role) === "Manager") {
+      return "Manager";
+    }
     return "Employee";
-  }, [hasReportees, roleLabel]);
+  }, [auth, hasReportees, roleLabel]);
 
   const roleProbeLoading = Boolean(auth) && !roleLabel && hasReportees === null;
 
@@ -351,26 +396,43 @@ export default function App() {
 
   const renderPortal = () => {
     if (path === "/") {
+        if (isHrUser) return <Navigate to="/employee" replace />;
         if (activePortalRole === "Admin") return <Navigate to="/admin" replace />;
         if (activePortalRole === "Manager") return <Navigate to="/manager" replace />;
         return <Navigate to="/employee" replace />;
     }
 
     if (path.startsWith("/admin")) {
-        if (activePortalRole !== "Admin") return <Navigate to="/" replace />;
+        if (activePortalRole !== "Admin" && !isHrUser) return <Navigate to="/" replace />;
         return <AdminControlCenter onLogout={logout} auth={auth} />;
     }
 
     if (path.startsWith("/manager")) {
-        if (activePortalRole !== "Manager" && activePortalRole !== "Admin") return <Navigate to="/" replace />;
+        if (!canAccessManagerPortal(auth, activePortalRole, isHrUser, hasReportees)) {
+          return <Navigate to="/" replace />;
+        }
         return <ManagerPortal onLogout={logout} auth={auth} />;
     }
 
     if (path.startsWith("/employee")) {
-        if (activePortalRole !== "Employee" && activePortalRole !== "Admin") {
+        if (activePortalRole !== "Employee" && activePortalRole !== "Admin" && !isHrUser) {
           return <Navigate to="/" replace />;
         }
         return <EmployeePortal onLogout={logout} auth={auth} />;
+    }
+
+    const legacySegment = path.replace(/^\//, "").split("/")[0];
+    if (EMPLOYEE_LEGACY_TABS.has(legacySegment)) {
+      if (activePortalRole === "Employee" || activePortalRole === "Admin") {
+        const dest = legacySegment === "profile" ? "/employee" : `/employee/${legacySegment}`;
+        return <Navigate to={dest} replace />;
+      }
+    }
+    if (MANAGER_LEGACY_TABS.has(legacySegment)) {
+      if (canAccessManagerPortal(auth, activePortalRole, isHrUser, hasReportees)) {
+        const dest = legacySegment === "team" ? "/manager" : `/manager/${legacySegment}`;
+        return <Navigate to={dest} replace />;
+      }
     }
 
     return <Navigate to="/" replace />;

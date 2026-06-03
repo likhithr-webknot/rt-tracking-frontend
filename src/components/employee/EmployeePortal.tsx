@@ -36,14 +36,15 @@ import PortalSidebar from "../shared/PortalSidebar";
 import UserProfilePage from "../shared/UserProfilePage";
 import PortalSettingsModal from "../shared/PortalSettingsModal";
 import PortalPageHeader from "../shared/PortalPageHeader";
-import LeaveRequestsPage from "./LeaveRequestsPage";
 import SubmissionWindowClosed from "./SubmissionWindowClosed";
-import TimeLogTracker from "../shared/TimeLogTracker";
 import { fetchSubmissionAccessForRole } from "../../api/submission-window";
 import { computeSubmissionWindowOpen } from "../../utils/submissionWindow";
 
 import { fetchMe, getAuth, notifyAuthChanged, setAuth } from "../../api/auth";
 import { formatPortalRoleLabel, resolvePortalRoleLabel } from "../../utils/portalRole";
+import { filterHrPeerReviewRows, isHrPortalUser } from "../../utils/hrRatingsFilter";
+import ProjectSelectionPanel, { MAX_PROJECT_SELECTIONS } from "./ProjectSelectionPanel";
+import { notifyProjectStakeholdersOnSubmit } from "../../api/project-submit-notifications";
 import { fetchAllCertifications, normalizeCertifications } from "../../api/certifications";
 import { normalizeKpiDefinitions } from "../../api/kpi-definitions";
 import {
@@ -67,20 +68,20 @@ import {
   fetchProjects,
   normalizeProjects,
   fetchMyProjects,
-  updateMyProjects,
-  fetchMyProjectRatings,
-  normalizeProjectRatings,
   fetchAvailableProjects,
   fetchSelectedProjects,
   updateSelectedProjects,
-  fetchSelectedProjectRatings,
+  updateMyProjects,
 } from "../../api/projects";
 import { listActiveProjectsForEmployees } from "../../utils/projectsCatalog";
 import { getAppSettings } from "../../utils/appSettings.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
 import ResubmissionPlaybook from "../shared/ResubmissionPlaybook";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
-import { EMPLOYEE_NAV_GROUPS, EMPLOYEE_TAB_COPY } from "../../config/portalNavigation";
+import { EMPLOYEE_NAV_GROUPS, EMPLOYEE_REVIEW_STEP_IDS, EMPLOYEE_TAB_COPY } from "../../config/portalNavigation";
+import PortalStepper from "../shared/PortalStepper";
+import PortalWorkflowActions from "../shared/PortalWorkflowActions";
+import PortalWorkflowFrame from "../shared/PortalWorkflowFrame";
 
 const DEFAULT_PAGE_LIMIT = 10;
 const EMPLOYEE_SIDEBAR_PREF_KEY = "rt_tracking_employee_sidebar_open_v1";
@@ -467,68 +468,62 @@ function InfoRow({ label, value, action }) {
   );
 }
 
-function SubmissionStepper({ activeTab, steps, onNavigate }) {
-  const list = Array.isArray(steps) ? steps : [];
-  const activeIdx = list.findIndex((s) => s.id === activeTab);
+function ProjectsTab({
+  allProjects = [],
+  selectedProjectIds = new Set(),
+  onToggleProject,
+  projectsLoading = false,
+  projectsError = "",
+  projectSearch = "",
+  onProjectSearchChange,
+  locked = false,
+  onProceed,
+  onBack,
+  canProceed = false,
+}) {
   return (
-    <div className="max-w-4xl mx-auto w-full min-w-0 mb-8">
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-2 px-1">
-        {list.map((step, idx) => {
-          const status = step?.status || "pending";
-          const active = activeTab === step.id;
-          const done = status === "done";
-          const isPast = idx < activeIdx;
-          return (
-            <React.Fragment key={step.id}>
-              {idx > 0 ? (
-                <div className={`hidden sm:block h-[2px] w-6 flex-shrink-0 rounded-full transition-colors duration-300 ${done || isPast ? "bg-emerald-500/60" : "bg-[rgb(var(--border))]"}`} />
-              ) : null}
-              <motion.button
-                type="button"
-                onClick={() => onNavigate?.(step.id)}
-                layout
-                whileHover={{ scale: 1.03 }}
-                whileTap={{ scale: 0.97 }}
-                className={[
-                  "flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all whitespace-nowrap border",
-                  active
-                    ? "bg-[rgb(var(--primary))] text-white border-[rgb(var(--primary))] shadow-md shadow-[rgb(var(--primary)/.2)]"
-                    : done
-                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                      : "bg-[rgb(var(--surface))] text-[rgb(var(--muted))] border-[rgb(var(--border))] hover:bg-[rgb(var(--surface-2))]",
-                ].join(" ")}
-                title={String(step?.label || "")}
-              >
-                <span className={`h-5 w-5 rounded-full text-[10px] font-bold flex items-center justify-center ${active ? "bg-white/20" : done ? "bg-emerald-500/20" : "bg-[rgb(var(--surface-2))]"}`}>
-                  {done ? (
-                    <motion.span
-                      initial={{ scale: 0, rotate: -90 }}
-                      animate={{ scale: 1, rotate: 0 }}
-                      transition={{ type: "spring", stiffness: 400, damping: 18 }}
-                    >
-                      <CheckCircle2 size={12} />
-                    </motion.span>
-                  ) : (
-                    <span>{idx + 1}</span>
-                  )}
-                </span>
-                <span className="hidden sm:inline">{step?.label}</span>
-              </motion.button>
-            </React.Fragment>
-          );
-        })}
-      </div>
-    </div>
+    <PortalWorkflowFrame>
+      <ProjectSelectionPanel
+        title="Select your active projects"
+        subtitle="Choose up to 3 projects you contributed to this cycle. When you submit, we notify the PM — or the AM if no PM is listed."
+        projects={allProjects}
+        selectedProjectIds={selectedProjectIds}
+        onToggleProject={onToggleProject}
+        loading={projectsLoading}
+        disabled={locked}
+        search={projectSearch}
+        onSearchChange={onProjectSearchChange}
+        error={projectsError}
+      />
+      {!locked ? (
+        <PortalWorkflowActions
+          onBack={onBack}
+          onContinue={onProceed}
+          continueLabel="Continue to KPIs"
+          continueDisabled={!canProceed}
+          hint={
+            canProceed
+              ? "Great — your project selection is saved as you go."
+              : "Pick at least one active project to continue."
+          }
+        />
+      ) : null}
+    </PortalWorkflowFrame>
   );
 }
 
-const MAX_PROJECT_SELECTIONS = 3;
-
-function ProfileTab({ employee, auth, authEmail, onUpdateEmployee, projectsUnlocked = false, submissionMonth = null }) {
+function ProfileTab({
+  employee,
+  auth,
+  authEmail,
+  onUpdateEmployee,
+  locked = false,
+  onProceed,
+  canProceed = true,
+}) {
   const display = employee || null;
   const email = authEmail || display?.email || "—";
 
-  /* ── designation selection state ── */
   const [designations, setDesignations] = useState([]);
   const [designationsLoading, setDesignationsLoading] = useState(false);
   const [isUpdatingDesignation, setIsUpdatingDesignation] = useState(false);
@@ -559,7 +554,7 @@ function ProfileTab({ employee, auth, authEmail, onUpdateEmployee, projectsUnloc
     setDesignationsLoading(true);
     setDesignationError("");
     try {
-      const updated = await updatePortalEmployee({ designation: newDesignation });
+      await updatePortalEmployee({ designation: newDesignation });
       if (onUpdateEmployee) {
         onUpdateEmployee({ ...display, designation: newDesignation });
       }
@@ -571,143 +566,10 @@ function ProfileTab({ employee, auth, authEmail, onUpdateEmployee, projectsUnloc
     }
   };
 
-  /* ── project selection state ── */
-  const [allProjects, setAllProjects] = useState([]);
-  const [selectedProjectIds, setSelectedProjectIds] = useState(new Set());
-  const [originalProjectIds, setOriginalProjectIds] = useState(new Set());
-  const [projectRatings, setProjectRatings] = useState([]);
-  const [projectsLoading, setProjectsLoading] = useState(true);
-  const [projectsSaving, setProjectsSaving] = useState(false);
-  const [projectsError, setProjectsError] = useState("");
-  const [projectsSuccess, setProjectsSuccess] = useState("");
-  const [projectSearch, setProjectSearch] = useState("");
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        /* prefer employee-portal profile aliases, fall back to legacy endpoints */
-        const [allRaw, myRaw, ratingsRaw] = await Promise.all([
-          fetchAvailableProjects().catch(() => fetchProjects().catch(() => ({}))),
-          fetchSelectedProjects().catch(() => fetchMyProjects().catch(() => ({}))),
-          fetchSelectedProjectRatings().catch(() => fetchMyProjectRatings().catch(() => ({}))),
-        ]);
-        if (!alive) return;
-        const apiList = normalizeProjects(allRaw);
-        const all = listActiveProjectsForEmployees(apiList);
-        setAllProjects(all);
-
-        const myData = myRaw && typeof myRaw === "object" ? myRaw : {};
-        const myArr =
-          (Array.isArray(myRaw) && myRaw) ||
-          (Array.isArray(myData?.data) && myData.data) ||
-          (Array.isArray(myData?.projectIds) && myData.projectIds) ||
-          (Array.isArray(myData?.projects) && myData.projects) ||
-          [];
-        const myIds = new Set(myArr.map((x) => String(typeof x === "object" ? (x?.id ?? x?.projectId ?? "") : x).trim()).filter(Boolean));
-        setSelectedProjectIds(myIds);
-        setOriginalProjectIds(myIds);
-
-        setProjectRatings(normalizeProjectRatings(ratingsRaw));
-      } catch {
-        /* silent */
-      } finally {
-        if (alive) setProjectsLoading(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  function toggleProject(projectId) {
-    if (!projectsUnlocked) return;
-    setSelectedProjectIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(projectId)) next.delete(projectId);
-      else {
-        if (next.size >= MAX_PROJECT_SELECTIONS) {
-          setProjectsError(`You can select at most ${MAX_PROJECT_SELECTIONS} projects.`);
-          return prev;
-        }
-        next.add(projectId);
-      }
-      setProjectsError("");
-      return next;
-    });
-    setProjectsSuccess("");
-  }
-
-  const projectsDirty = useMemo(() => {
-    if (selectedProjectIds.size !== originalProjectIds.size) return true;
-    for (const id of selectedProjectIds) {
-      if (!originalProjectIds.has(id)) return true;
-    }
-    return false;
-  }, [selectedProjectIds, originalProjectIds]);
-
-  async function saveProjects() {
-    if (!projectsUnlocked) {
-      setProjectsError("Submit your monthly self-rating before selecting projects.");
-      return;
-    }
-    if (selectedProjectIds.size === 0) {
-      setProjectsError("Select at least one project before saving.");
-      setProjectsSuccess("");
-      return;
-    }
-    if (selectedProjectIds.size > MAX_PROJECT_SELECTIONS) {
-      setProjectsError(`Select at most ${MAX_PROJECT_SELECTIONS} projects.`);
-      return;
-    }
-    setProjectsSaving(true);
-    setProjectsError("");
-    setProjectsSuccess("");
-    try {
-      await updateSelectedProjects([...selectedProjectIds], { month: submissionMonth }).catch(() =>
-        updateMyProjects([...selectedProjectIds], { month: submissionMonth }),
-      );
-      setOriginalProjectIds(new Set(selectedProjectIds));
-      setProjectsSuccess("Projects updated! Project managers have been notified.");
-      /* refresh ratings */
-      try {
-        const ratingsRaw = await fetchSelectedProjectRatings().catch(() => fetchMyProjectRatings());
-        setProjectRatings(normalizeProjectRatings(ratingsRaw));
-      } catch { /* ignore */ }
-    } catch (err) {
-      setProjectsError(err?.message || "Failed to save projects.");
-    } finally {
-      setProjectsSaving(false);
-    }
-  }
-
-  const ratingsMap = useMemo(() => {
-    const m = new Map();
-    for (const r of projectRatings) m.set(r.projectId, r);
-    return m;
-  }, [projectRatings]);
-
-  const filteredAllProjects = useMemo(() => {
-    const q = projectSearch.trim().toLowerCase();
-    if (!q) return allProjects;
-    return allProjects.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q) ||
-        (p.managerName || "").toLowerCase().includes(q),
-    );
-  }, [allProjects, projectSearch]);
-
   return (
-    <div className="space-y-8 max-w-4xl mx-auto w-full min-w-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="rt-page-header">
-        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Profile</h2>
-        <p className="text-sm text-[rgb(var(--muted))] mt-1">
-          If anything looks wrong, please contact support.
-        </p>
-      </header>
-
-      <section className="rt-panel rounded-2xl overflow-hidden">
-        {/* Profile hero */}
-        <div className="relative px-6 sm:px-8 pt-8 pb-6 bg-[rgb(var(--primary)/.05)]">
+    <PortalWorkflowFrame>
+      <section className="rt-panel overflow-hidden">
+        <div className="relative px-6 sm:px-8 pt-8 pb-6 bg-gradient-to-br from-[rgb(var(--accent))]/10 via-[rgb(var(--surface))] to-[rgb(var(--surface-2))]">
           <div className="flex items-start justify-between gap-6 flex-wrap">
             <div className="flex items-center gap-4">
               <UserAvatar
@@ -768,7 +630,7 @@ function ProfileTab({ employee, auth, authEmail, onUpdateEmployee, projectsUnloc
           />
 
           <AnimatePresence>
-            {isUpdatingDesignation && (
+            {isUpdatingDesignation ? (
               <motion.div
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: "auto", opacity: 1 }}
@@ -805,7 +667,7 @@ function ProfileTab({ employee, auth, authEmail, onUpdateEmployee, projectsUnloc
                               "px-3 py-1.5 rounded-lg text-xs font-medium transition-all border",
                               isCurrent
                                 ? "bg-[rgb(var(--primary)/.05)] border-[rgb(var(--primary)/.3)] text-[rgb(var(--primary))] opacity-60 cursor-default"
-                                : "bg-[rgb(var(--surface))] border-[rgb(var(--border))] text-[rgb(var(--text))] hover:border-[rgb(var(--primary)/.4)] hover:shadow-sm"
+                                : "bg-[rgb(var(--surface))] border-[rgb(var(--border))] text-[rgb(var(--text))] hover:border-[rgb(var(--primary)/.4)] hover:shadow-sm",
                             ].join(" ")}
                           >
                             {dValue}
@@ -816,7 +678,7 @@ function ProfileTab({ employee, auth, authEmail, onUpdateEmployee, projectsUnloc
                   )}
                 </div>
               </motion.div>
-            )}
+            ) : null}
           </AnimatePresence>
 
           <InfoRow label="Stream" value={display?.stream || "—"} />
@@ -824,76 +686,15 @@ function ProfileTab({ employee, auth, authEmail, onUpdateEmployee, projectsUnloc
         </div>
       </section>
 
-      <section className="rt-panel rounded-2xl p-6 sm:p-8 space-y-4">
-        <div>
-          <h3 className="text-lg font-semibold text-[rgb(var(--text))]">Project preferences</h3>
-          <p className="text-sm text-[rgb(var(--muted))] mt-1">
-            {projectsUnlocked
-              ? `Choose up to ${MAX_PROJECT_SELECTIONS} projects for this cycle (priority order).`
-              : "Available after you submit your monthly self-rating."}
-          </p>
-        </div>
-        {!projectsUnlocked ? (
-          <div className="text-sm text-amber-700 dark:text-amber-300 rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3">
-            Submit your self-rating on the Review tab to unlock project selection.
-          </div>
-        ) : null}
-        {projectsError ? <div className="text-sm text-red-600">{projectsError}</div> : null}
-        {projectsSuccess ? <div className="text-sm text-emerald-600">{projectsSuccess}</div> : null}
-        {projectsUnlocked ? (
-          <>
-            <input
-              type="search"
-              value={projectSearch}
-              onChange={(e) => setProjectSearch(e.target.value)}
-              placeholder="Search projects…"
-              className="rt-input w-full text-sm"
-            />
-            {projectsLoading ? (
-              <div className="text-sm text-[rgb(var(--muted))] flex items-center gap-2">
-                <RefreshCw size={14} className="animate-spin" /> Loading projects…
-              </div>
-            ) : (
-              <div className="grid gap-2 max-h-64 overflow-y-auto">
-                {filteredAllProjects.map((p) => {
-                  const selected = selectedProjectIds.has(p.id);
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      disabled={!projectsUnlocked}
-                      onClick={() => toggleProject(p.id)}
-                      className={[
-                        "text-left rounded-lg border px-3 py-2 transition-all",
-                        selected
-                          ? "border-[rgb(var(--primary)/.5)] bg-[rgb(var(--primary)/.08)]"
-                          : "border-[rgb(var(--border))] hover:border-[rgb(var(--primary)/.3)]",
-                      ].join(" ")}
-                    >
-                      <div className="font-medium text-sm">{p.name || p.code}</div>
-                      {p.managerName ? (
-                        <div className="text-[10px] text-[rgb(var(--muted))]">PM: {p.managerName}</div>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={saveProjects}
-                disabled={projectsSaving || !projectsDirty}
-                className="rt-btn-primary text-sm disabled:opacity-60"
-              >
-                {projectsSaving ? "Saving…" : "Save project preferences"}
-              </button>
-            </div>
-          </>
-        ) : null}
-      </section>
-
-    </div>
+      {!locked ? (
+        <PortalWorkflowActions
+          onContinue={onProceed}
+          continueLabel="Continue to projects"
+          continueDisabled={!canProceed}
+          hint="Confirm your profile details, then choose your active projects."
+        />
+      ) : null}
+    </PortalWorkflowFrame>
   );
 }
 
@@ -997,6 +798,7 @@ function KpisTab({
   ratings,
   setRatings,
   onProceed,
+  onBack,
   loading,
   error,
   fullyLoaded,
@@ -1029,14 +831,7 @@ function KpisTab({
   }, [allKpis, ratings]);
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto w-full min-w-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="rt-page-header">
-        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">KPIs</h2>
-        <p className="text-sm text-[rgb(var(--muted))] mt-1">
-          Rate yourself from 1.0 to 5.0 (1 decimal allowed). Weightage is out of 100%.
-        </p>
-      </header>
-
+    <PortalWorkflowFrame>
       {loading ? (
         <div className="rt-panel-subtle rounded-xl p-4 text-sm text-[rgb(var(--muted))] animate-pulse">
           Loading KPIs…
@@ -1150,36 +945,22 @@ function KpisTab({
         />
       </section>
 
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="text-sm text-[rgb(var(--muted))]">
-          Rated: <span className="font-mono text-[rgb(var(--text))]">{ratedCount}</span>
-          /<span className="font-mono text-[rgb(var(--text))]">{all.length}</span>
-          {locked ? " (locked)" : null}
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <button
-            type="button"
-            onClick={onProceed}
-            disabled={proceedDisabled}
-            className={[
-              "rt-btn-primary transition-all",
-              proceedDisabled
-                ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
-                : "",
-            ].join(" ")}
-            title={
-              locked
-                ? "Proceed"
-                : !allRated
-                ? "Rate all KPIs to proceed"
-                : (!selfReviewOk ? "Write your self review to proceed" : "Proceed")
-            }
-          >
-            Proceed
-          </button>
-        </div>
-      </div>
-    </div>
+      {!locked ? (
+        <PortalWorkflowActions
+          onBack={onBack}
+          onContinue={onProceed}
+          continueLabel="Continue to values"
+          continueDisabled={proceedDisabled}
+          hint={
+            proceedDisabled
+              ? !allRated
+                ? "Rate every KPI from 1.0 to 5.0 to continue."
+                : "Write your self-review notes before continuing."
+              : `${ratedCount}/${all.length} KPIs rated — ready for the next step.`
+          }
+        />
+      ) : null}
+    </PortalWorkflowFrame>
   );
 }
 
@@ -1190,6 +971,7 @@ function ValuesTab({
   selectedValues,
   setSelectedValues,
   onProceed,
+  onBack,
   locked,
   canProceed,
 }) {
@@ -1238,14 +1020,7 @@ function ValuesTab({
   }, [list, valueRatings]);
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto w-full min-w-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="rt-page-header">
-        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Webknot Values</h2>
-        <p className="text-sm text-[rgb(var(--muted))] mt-1">
-          Select the values you feel you demonstrated this cycle.
-        </p>
-      </header>
-
+    <PortalWorkflowFrame>
       {loading ? (
         <div className="rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))]">
           Loading values…
@@ -1349,28 +1124,16 @@ function ValuesTab({
         </div>
       </section>
 
-      <div className="flex items-center justify-end gap-3 flex-wrap">
-        {!locked && !canProceed ? (
-          <div className="text-xs text-[rgb(var(--muted))] mr-2">
-            Rate at least one value to continue.
-          </div>
-        ) : null}
-        <button
-          type="button"
-          onClick={onProceed}
-          disabled={locked ? false : !canProceed}
-          className={[
-            "rt-btn-primary transition-all",
-            locked || canProceed
-              ? ""
-              : "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed",
-          ].join(" ")}
-          title={locked || canProceed ? "Proceed" : "Rate at least one value to proceed"}
-        >
-          Proceed
-        </button>
-      </div>
-    </div>
+      {!locked ? (
+        <PortalWorkflowActions
+          onBack={onBack}
+          onContinue={onProceed}
+          continueLabel="Continue to certifications"
+          continueDisabled={!canProceed}
+          hint={canProceed ? "Values saved — move on when ready." : "Rate at least one value to continue."}
+        />
+      ) : null}
+    </PortalWorkflowFrame>
   );
 }
 
@@ -1379,6 +1142,7 @@ function CertificationsTab({
   selectedCertifications,
   setSelectedCertifications,
   onProceed,
+  onBack,
   loading,
   error,
   locked,
@@ -1408,14 +1172,7 @@ function CertificationsTab({
   }
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto w-full min-w-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="rt-page-header">
-        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Certifications</h2>
-        <p className="text-sm text-[rgb(var(--muted))] mt-1">
-          Certifications listed by Admin appear here. If something looks wrong, please contact support.
-        </p>
-      </header>
-
+    <PortalWorkflowFrame>
       {loading ? (
         <div className="rt-panel-subtle rounded-lg p-4 text-sm text-[rgb(var(--muted))]">
           Loading certifications…
@@ -1481,33 +1238,22 @@ function CertificationsTab({
           </table>
         </div>
 
-        <div className="p-6 border-t border-[rgb(var(--border))] flex items-center justify-between gap-4 flex-wrap">
+        <div className="p-6 border-t border-[rgb(var(--border))]">
           <div className="text-sm text-[rgb(var(--muted))]">
-            Selected: <span className="font-mono text-blue-200">{selectedKeySet.size}</span>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            {!locked && !canProceed ? (
-              <div className="text-xs text-[rgb(var(--muted))]">
-                Add proof for selected certifications.
-              </div>
-            ) : null}
-            <button
-              type="button"
-              onClick={onProceed}
-              disabled={locked ? false : !canProceed}
-              className={[
-                "rt-btn-primary transition-all",
-                locked || canProceed
-                  ? ""
-                  : "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed",
-              ].join(" ")}
-              title={locked || canProceed ? "Proceed" : "Add proof for selected certifications"}
-            >
-              Proceed
-            </button>
+            Selected: <span className="font-mono text-[rgb(var(--text))]">{selectedKeySet.size}</span>
           </div>
         </div>
       </section>
+
+      {!locked ? (
+        <PortalWorkflowActions
+          onBack={onBack}
+          onContinue={onProceed}
+          continueLabel="Continue to recognition"
+          continueDisabled={!canProceed}
+          hint={canProceed ? "Certifications look good — continue when ready." : "Add proof for each selected certification."}
+        />
+      ) : null}
 
       {proofModal.open ? (
         <ModalOverlay
@@ -1601,20 +1347,13 @@ function CertificationsTab({
             </form>
         </ModalOverlay>
       ) : null}
-    </div>
+    </PortalWorkflowFrame>
   );
 }
 
-function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, locked, canProceed }) {
+function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, onBack, locked, canProceed }) {
   return (
-    <div className="space-y-8 max-w-4xl mx-auto w-full min-w-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="rt-page-header">
-        <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Recognitions</h2>
-        <p className="text-sm text-[rgb(var(--muted))] mt-1">
-          Report the number of awards received at All Hands.
-        </p>
-      </header>
-
+    <PortalWorkflowFrame>
       <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm">
         <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
           Awards Received
@@ -1641,34 +1380,24 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, l
             Enter 0 if none.
           </div>
         </div>
-
-        <div className="mt-8 flex items-center justify-end gap-3 flex-wrap">
-          {!locked && !canProceed ? (
-            <div className="text-xs text-[rgb(var(--muted))] mr-2">
-              Enter a valid recognition count to continue.
-            </div>
-          ) : null}
-          <button
-            type="button"
-            onClick={onProceed}
-            disabled={locked ? false : !canProceed}
-            className={[
-              "rt-btn-primary transition-all",
-              locked || canProceed
-                ? ""
-                : "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed",
-            ].join(" ")}
-          >
-            Proceed
-          </button>
-        </div>
       </section>
-    </div>
+
+      {!locked ? (
+        <PortalWorkflowActions
+          onBack={onBack}
+          onContinue={onProceed}
+          continueLabel="Continue to review"
+          continueDisabled={!canProceed}
+          hint="Enter 0 if you did not receive any awards this cycle."
+        />
+      ) : null}
+    </PortalWorkflowFrame>
   );
 }
 
 function ReviewTab({
   employee,
+  auth,
   authEmail,
   role,
   submissionMeta,
@@ -1683,6 +1412,10 @@ function ReviewTab({
   canFinalSubmit,
   locked,
   valuesIndex,
+  allProjects = [],
+  selectedProjectIds = new Set(),
+  onEditProjects,
+  onBack,
 }) {
   const [toast, setToast] = useState(null); // { title, message? }
   const [toastTimerId, setToastTimerId] = useState(null);
@@ -1693,6 +1426,12 @@ function ReviewTab({
     const id = window.setTimeout(() => setToast(null), 2200);
     setToastTimerId(id);
   }
+
+  const selectedProjects = useMemo(() => {
+    const ids = selectedProjectIds instanceof Set ? selectedProjectIds : new Set(selectedProjectIds || []);
+    const list = Array.isArray(allProjects) ? allProjects : [];
+    return list.filter((p) => ids.has(String(p?.id || "")));
+  }, [allProjects, selectedProjectIds]);
 
   const valueRatings = useMemo(() => {
     const idx = valuesIndex && typeof valuesIndex === "object" ? valuesIndex : {};
@@ -1745,20 +1484,11 @@ function ReviewTab({
     }
 
     const needsResubmission = Boolean(isResubmissionRequested(submissionMeta));
-    return { rows, needsResubmission };
-  }, [submissionMeta]);
+    return { rows: filterHrPeerReviewRows(auth, rows), needsResubmission };
+  }, [auth, submissionMeta]);
 
   return (
-    <div className="space-y-8 max-w-4xl mx-auto w-full min-w-0 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="rt-page-header">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight text-[rgb(var(--text))]">Review</h2>
-          <p className="text-sm text-[rgb(var(--muted))] mt-1">
-            Review everything before final submit.
-          </p>
-        </div>
-      </header>
-
+    <PortalWorkflowFrame>
       {reviewFeedback.needsResubmission && reviewFeedback.rows.length ? (
         <section className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-5 sm:p-6 space-y-3">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-100">
@@ -1842,6 +1572,44 @@ function ReviewTab({
       </section>
 
       <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+            Active Projects
+          </div>
+          {!locked && onEditProjects ? (
+            <button
+              type="button"
+              onClick={onEditProjects}
+              className="text-xs font-semibold text-[rgb(var(--primary))] hover:underline"
+            >
+              Edit selection
+            </button>
+          ) : null}
+        </div>
+        {selectedProjects.length ? (
+          <div className="space-y-2">
+            {selectedProjects.map((p) => (
+              <div key={String(p?.id || "")} className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-sm font-medium text-[rgb(var(--text))]">
+                    {String(p?.name || p?.title || p?.id || "Project")}
+                  </div>
+                  {p?.client ? (
+                    <div className="text-xs text-[rgb(var(--muted))] mt-0.5">{String(p.client)}</div>
+                  ) : null}
+                </div>
+                {p?.code ? (
+                  <div className="text-xs font-mono text-[rgb(var(--muted))]">{String(p.code)}</div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-sm text-[rgb(var(--muted))]">No projects selected.</div>
+        )}
+      </section>
+
+      <section className="rt-panel rounded-2xl p-6 sm:p-8 shadow-sm space-y-3">
         <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
           KPI Ratings
         </div>
@@ -1913,41 +1681,59 @@ function ReviewTab({
         </div>
       </section>
 
-      <div className="flex items-center justify-end gap-3 flex-wrap">
-        <button
-          type="button"
-          onClick={async () => {
-            if (locked) return;
-            try {
-              await onSaveDraft?.();
-              showToast({ title: "Draft saved", message: "Saved to server." });
-            } catch (err) {
-              showToast({ title: "Save failed", message: err?.message || "Please try again." });
-            }
-          }}
-          disabled={locked}
-          className="rt-btn-ghost transition-all"
-        >
-          Save draft
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            if (locked || !canFinalSubmit) return;
-            setConfirmSubmitOpen(true);
-          }}
-          disabled={locked || !canFinalSubmit}
-          className={[
-            "rt-btn-primary transition-all",
-            locked || !canFinalSubmit
-              ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
-              : "",
-          ].join(" ")}
-          title={locked ? "This month's review is locked" : (!canFinalSubmit ? "Complete required fields first" : "Final submit")}
-        >
-          <CheckCircle2 size={18} /> Final submit
-        </button>
-      </div>
+      {!locked ? (
+        <div className="rt-workflow-actions flex-col sm:flex-row gap-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={onBack}
+              className="rt-btn-ghost transition-all"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await onSaveDraft?.();
+                  showToast({ title: "Draft saved", message: "Saved to server." });
+                } catch (err) {
+                  showToast({ title: "Save failed", message: err?.message || "Please try again." });
+                }
+              }}
+              className="rt-btn-ghost transition-all"
+            >
+              Save draft
+            </button>
+          </div>
+          <div className="flex flex-col items-stretch sm:items-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (!canFinalSubmit) return;
+                setConfirmSubmitOpen(true);
+              }}
+              disabled={!canFinalSubmit}
+              className={[
+                "rt-btn-primary transition-all",
+                !canFinalSubmit
+                  ? "!bg-[rgb(var(--surface-2))] !text-[rgb(var(--muted))] !border-[rgb(var(--border))] cursor-not-allowed"
+                  : "",
+              ].join(" ")}
+              title={!canFinalSubmit ? "Complete required fields first" : "Final submit"}
+            >
+              <CheckCircle2 size={18} /> Final submit
+            </button>
+            {!canFinalSubmit ? (
+              <p className="text-xs text-[rgb(var(--muted))]">
+                Complete KPIs, values, certifications, and project selection before submitting.
+              </p>
+            ) : (
+              <p className="text-xs text-[rgb(var(--muted))]">Everything looks ready — submit to lock this month.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {/* ── Final submit confirmation ── */}
       {confirmSubmitOpen ? (
@@ -1975,6 +1761,7 @@ function ReviewTab({
                 <div className="text-sm text-amber-800 dark:text-amber-200 leading-relaxed">
                   Once submitted, your self-review form will be <strong>locked for this month</strong>. 
                   You will not be able to edit your ratings, self-review text, or any other responses unless an admin reopens it for you.
+                  Selected projects will notify the project manager, account manager, or HR/admin if no PM/AM is assigned.
                 </div>
               </div>
             </div>
@@ -2008,7 +1795,7 @@ function ReviewTab({
       ) : null}
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-    </div>
+    </PortalWorkflowFrame>
   );
 }
 
@@ -2304,20 +2091,25 @@ export default function EmployeePortal({ onLogout, auth }) {
   });
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
   const EMP_VALID_TABS = useMemo(
-    () => new Set(["profile", "account", "kpis", "values", "certifications", "recognitions", "review", "timelogs", "leave-requests", "notes", "drive"]),
+    () => new Set(["profile", "account", "projects", "kpis", "values", "certifications", "recognitions", "review", "notes", "drive"]),
     [],
   );
 
   const getEmpTabFromPath = useCallback(() => {
-    const raw = window.location.pathname.replace(/^\//, "").split("/")[0];
-    return EMP_VALID_TABS.has(raw) ? raw : "profile";
+    const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
+    if (parts[0] === "employee") {
+      const tab = parts[1] || "profile";
+      return EMP_VALID_TABS.has(tab) ? tab : "profile";
+    }
+    const legacy = parts[0] || "profile";
+    return EMP_VALID_TABS.has(legacy) ? legacy : "profile";
   }, [EMP_VALID_TABS]);
 
   const [activeTab, setActiveTabRaw] = useState(() => getEmpTabFromPath());
 
   const setActiveTab = useCallback((tab) => {
     setActiveTabRaw(tab);
-    const path = tab === "profile" ? "/" : `/${tab}`;
+    const path = tab === "profile" ? "/employee" : `/employee/${tab}`;
     if (window.location.pathname !== path) {
       window.history.pushState(null, "", path);
     }
@@ -2357,6 +2149,11 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [certificationsLoading, setCertificationsLoading] = useState(false);
   const [certificationsError, setCertificationsError] = useState("");
   const [submissionMonth, setSubmissionMonth] = useState(() => formatYearMonth(new Date()));
+  const [allProjects, setAllProjects] = useState([]);
+  const [selectedProjectIds, setSelectedProjectIds] = useState(new Set());
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
   const [hydratingSubmission, setHydratingSubmission] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
   const [draftSaveError, setDraftSaveError] = useState("");
@@ -2401,6 +2198,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       ),
     [auth?.claims?.role, auth?.empRole, auth?.role, auth?.userRole, employee?.role],
   );
+  const isHrUser = useMemo(() => isHrPortalUser(auth), [auth]);
   const subjectEmployeeId = useMemo(
     () => String(
       employee?.id ??
@@ -2594,8 +2392,8 @@ export default function EmployeePortal({ onLogout, auth }) {
       setCertificationsError("");
       setCertificationsLoading(true);
       try {
-        const data = await fetchCertifications({ activeOnly: true, signal: controller.signal });
-        const normalized = normalizeCertifications(data).filter((c) => Boolean(c?.listed));
+        const data = await fetchAllCertifications({ activeOnly: true, signal: controller.signal });
+        const normalized = normalizeCertifications(data?.items || []).filter((c) => Boolean(c?.listed));
         if (!mounted) return;
         setCertificationCatalog(normalized);
       } catch (err) {
@@ -2944,6 +2742,62 @@ export default function EmployeePortal({ onLogout, auth }) {
     [submissionMeta]
   );
 
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setProjectsLoading(true);
+      try {
+        const [allRaw, myRaw] = await Promise.all([
+          fetchAvailableProjects().catch(() => fetchProjects().catch(() => ({}))),
+          fetchSelectedProjects({ month: submissionMonth }).catch(() => fetchMyProjects().catch(() => ({}))),
+        ]);
+        if (!alive) return;
+        const apiList = normalizeProjects(allRaw);
+        setAllProjects(listActiveProjectsForEmployees(apiList));
+        const myData = myRaw && typeof myRaw === "object" ? myRaw : {};
+        const myArr =
+          (Array.isArray(myRaw) && myRaw) ||
+          (Array.isArray(myData?.data) && myData.data) ||
+          (Array.isArray(myData?.projectIds) && myData.projectIds) ||
+          (Array.isArray(myData?.projects) && myData.projects) ||
+          [];
+        const myIds = new Set(
+          myArr
+            .map((x) => String(typeof x === "object" ? (x?.id ?? x?.projectId ?? "") : x).trim())
+            .filter(Boolean),
+        );
+        setSelectedProjectIds(myIds);
+      } catch {
+        if (alive) {
+          setAllProjects([]);
+          setSelectedProjectIds(new Set());
+        }
+      } finally {
+        if (alive) setProjectsLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [submissionMonth]);
+
+  const toggleProject = useCallback((projectId) => {
+    if (locked) return;
+    setSelectedProjectIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else {
+        if (next.size >= MAX_PROJECT_SELECTIONS) {
+          setProjectsError(`You can select at most ${MAX_PROJECT_SELECTIONS} projects.`);
+          return prev;
+        }
+        next.add(projectId);
+      }
+      setProjectsError("");
+      return next;
+    });
+  }, [locked]);
+
   const submissionAccess = useMemo(
     () =>
       portalWindow?.canEnterValues != null
@@ -2955,7 +2809,11 @@ export default function EmployeePortal({ onLogout, auth }) {
     [portalWindow],
   );
 
-  const canEnterSubmissionValues = Boolean(submissionAccess?.canEnterValues);
+  const canEnterSubmissionValues = Boolean(
+    submissionAccess?.canEnterValues ??
+      submissionAccess?.globalOpen ??
+      submissionAccess?.roleOpen,
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -3096,6 +2954,17 @@ export default function EmployeePortal({ onLogout, auth }) {
         })
       : true;
     if (!certsOk) throw new Error("Add proof for all selected certifications.");
+    if (selectedProjectIds.size === 0) {
+      throw new Error("Select at least one active project on the Review tab before submitting.");
+    }
+    if (selectedProjectIds.size > MAX_PROJECT_SELECTIONS) {
+      throw new Error(`Select at most ${MAX_PROJECT_SELECTIONS} projects.`);
+    }
+
+    const projectIds = [...selectedProjectIds];
+    await updateSelectedProjects(projectIds, { month: submissionMonth }).catch(() =>
+      updateMyProjects(projectIds, { month: submissionMonth }),
+    );
 
     const payload = {
       ...buildMonthlySubmissionPayload({
@@ -3119,6 +2988,14 @@ export default function EmployeePortal({ onLogout, auth }) {
     try {
       const res = await submitMonthlySubmission(payload);
       const normalized = normalizeMonthlySubmission(res);
+      const notifyResult = await notifyProjectStakeholdersOnSubmit({
+        projects: allProjects,
+        projectIds,
+        month: submissionMonth,
+        employeeId: subjectEmployeeId,
+        employeeName: employee?.name || employee?.employeeName || "",
+        employeeEmail: authEmail,
+      }).catch(() => null);
       const now = new Date().toISOString();
       setSubmissionMeta({
         id: normalized?.id ?? submissionMeta?.id ?? null,
@@ -3153,6 +3030,13 @@ export default function EmployeePortal({ onLogout, auth }) {
           reopenedForResubmission: false,
         })
       );
+      if (notifyResult?.alerts?.length) {
+        showToast({
+          title: "Submitted",
+          message: `Locked for review. ${notifyResult.alerts.length} project stakeholder alert(s) queued.`,
+          tone: "success",
+        });
+      }
     } catch (err) {
       if (err?.status === 401) {
         onLogout?.();
@@ -3187,8 +3071,9 @@ export default function EmployeePortal({ onLogout, auth }) {
           return Boolean(name) && Boolean(proof);
         })
       : true;
-    return textOk && kpisOk && certsOk;
-  }, [kpiRatings, kpisFullyLoaded, locked, selectedCertifications, selfReviewText, visibleKpis]);
+    const projectsOk = selectedProjectIds.size >= 1 && selectedProjectIds.size <= MAX_PROJECT_SELECTIONS;
+    return textOk && kpisOk && certsOk && projectsOk;
+  }, [kpiRatings, kpisFullyLoaded, locked, selectedCertifications, selectedProjectIds, selfReviewText, visibleKpis]);
 
   const valuesRatedCount = useMemo(() => {
     const list = Array.isArray(valuesPage?.items) ? valuesPage.items : [];
@@ -3223,6 +3108,11 @@ export default function EmployeePortal({ onLogout, auth }) {
     return Number.isFinite(Number(recognitionsCount)) && Number(recognitionsCount) >= 0;
   }, [locked, recognitionsCount]);
 
+  const projectsCanProceed = useMemo(() => {
+    if (locked) return true;
+    return selectedProjectIds.size >= 1 && selectedProjectIds.size <= MAX_PROJECT_SELECTIONS;
+  }, [locked, selectedProjectIds]);
+
   const kpisReadyForNext = useMemo(() => {
     if (locked) return true;
     if (!kpisFullyLoaded) return false;
@@ -3245,7 +3135,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   }
 
   const reviewTabs = useMemo(
-    () => new Set(["kpis", "values", "certifications", "recognitions", "review"]),
+    () => new Set(["projects", "kpis", "values", "certifications", "recognitions", "review"]),
     [],
   );
 
@@ -3323,24 +3213,23 @@ export default function EmployeePortal({ onLogout, auth }) {
 
   const stepItems = useMemo(() => ([
     { id: "profile", label: "Profile", status: "done" },
+    { id: "projects", label: "Projects", status: projectsCanProceed ? "done" : "pending" },
     { id: "kpis", label: "KPIs", status: kpisReadyForNext ? "done" : "pending" },
     { id: "values", label: "Values", status: valuesCanProceed ? "done" : "pending" },
-    { id: "certifications", label: "Certifications", status: certificationsCanProceed ? "done" : "pending" },
-    { id: "recognitions", label: "Recognitions", status: recognitionsCanProceed ? "done" : "pending" },
+    { id: "certifications", label: "Certs", status: certificationsCanProceed ? "done" : "pending" },
+    { id: "recognitions", label: "Awards", status: recognitionsCanProceed ? "done" : "pending" },
     { id: "review", label: "Review", status: canFinalSubmit || locked ? "done" : "pending" },
   ]), [
     canFinalSubmit,
     certificationsCanProceed,
     kpisReadyForNext,
     locked,
+    projectsCanProceed,
     recognitionsCanProceed,
     valuesCanProceed,
   ]);
 
   const main = (() => {
-    if (activeTab === "leave-requests") {
-      return <LeaveRequestsPage employee={employee} authEmail={authEmail} />;
-    }
     if (activeTab === "account") {
       return (
         <UserProfilePage
@@ -3363,10 +3252,28 @@ export default function EmployeePortal({ onLogout, auth }) {
             auth={auth}
             authEmail={authEmail}
             onUpdateEmployee={(upd) => setEmployee(upd)}
-            projectsUnlocked={locked && !needsResubmission}
-            submissionMonth={submissionMonth}
+            locked={locked && !needsResubmission}
+            onProceed={() => goToTab("projects")}
+            canProceed={!loading}
           />
         </>
+      );
+    }
+    if (activeTab === "projects") {
+      return (
+        <ProjectsTab
+          allProjects={allProjects}
+          selectedProjectIds={selectedProjectIds}
+          onToggleProject={toggleProject}
+          projectsLoading={projectsLoading}
+          projectsError={projectsError}
+          projectSearch={projectSearch}
+          onProjectSearchChange={setProjectSearch}
+          locked={locked && !needsResubmission}
+          onProceed={() => goToTab("kpis")}
+          onBack={() => goToTab("profile")}
+          canProceed={projectsCanProceed}
+        />
       );
     }
     if (activeTab === "kpis") {
@@ -3384,6 +3291,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           setSelfReviewText={setSelfReviewText}
           locked={locked}
           onProceed={() => goToTab("values")}
+          onBack={() => goToTab("projects")}
         />
       );
     }
@@ -3398,6 +3306,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           locked={locked}
           canProceed={valuesCanProceed}
           onProceed={() => goToTab("certifications")}
+          onBack={() => goToTab("kpis")}
         />
       );
     }
@@ -3409,6 +3318,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           setSelectedCertifications={setSelectedCertifications}
           canProceed={certificationsCanProceed}
           onProceed={() => goToTab("recognitions")}
+          onBack={() => goToTab("values")}
           loading={certificationsLoading}
           error={certificationsError}
           locked={locked}
@@ -3423,11 +3333,9 @@ export default function EmployeePortal({ onLogout, auth }) {
           locked={locked}
           canProceed={recognitionsCanProceed}
           onProceed={() => goToTab("review")}
+          onBack={() => goToTab("certifications")}
         />
       );
-    }
-    if (activeTab === "timelogs") {
-      return <TimeLogTracker employee={employee} authEmail={authEmail} />;
     }
     if (activeTab === "notes") {
       return (
@@ -3446,6 +3354,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       return (
         <ReviewTab
           employee={employee}
+          auth={auth}
           authEmail={authEmail}
           role={role}
           submissionMeta={submissionMeta}
@@ -3460,6 +3369,10 @@ export default function EmployeePortal({ onLogout, auth }) {
           canFinalSubmit={canFinalSubmit}
           locked={locked}
           valuesIndex={valuesIndex}
+          allProjects={allProjects}
+          selectedProjectIds={selectedProjectIds}
+          onEditProjects={() => goToTab("projects")}
+          onBack={() => goToTab("recognitions")}
         />
       );
     }
@@ -3491,7 +3404,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     );
   }
 
-  if (activeTab !== "leave-requests" && locked && !needsResubmission) {
+  if (locked && !needsResubmission) {
     return (
       <AlreadyRespondedScreen
         month={submissionMeta?.month || submissionMonth}
@@ -3550,7 +3463,16 @@ export default function EmployeePortal({ onLogout, auth }) {
           subtitle={EMPLOYEE_TAB_COPY[activeTab]?.subtitle || ""}
         />
 
-        {activeTab !== "leave-requests" && !locked && needsResubmission ? (
+        {isHrUser ? (
+          <div className="max-w-4xl mx-auto w-full min-w-0 mb-6 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-4 py-3 text-sm text-[rgb(var(--muted))]">
+            HR workspace: complete your monthly review here like other employees. Ratings from other HR colleagues are hidden on your review screen.{" "}
+            <a href="/admin" className="text-[rgb(var(--primary))] hover:underline">
+              Open HR admin tools
+            </a>
+          </div>
+        ) : null}
+
+        {!locked && needsResubmission ? (
           <div className="max-w-4xl mx-auto w-full min-w-0 mb-6">
             <div className="relative overflow-hidden rounded-2xl border border-amber-500/45 bg-gradient-to-r from-amber-50 via-amber-50 to-white shadow-sm dark:from-amber-950/40 dark:via-amber-900/40 dark:to-transparent">
               <div className="absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-amber-500 to-orange-500" aria-hidden="true" />
@@ -3610,8 +3532,9 @@ export default function EmployeePortal({ onLogout, auth }) {
             ) : null}
           </div>
         ) : null}
-        {activeTab !== "leave-requests" && activeTab !== "notes" && activeTab !== "drive" ? (
-        <div className="max-w-4xl mx-auto w-full min-w-0 mb-6 flex items-end justify-between gap-4 flex-wrap">
+        {EMPLOYEE_REVIEW_STEP_IDS.includes(activeTab) ? (
+        <div className="rt-portal-hero mb-6">
+          <div className="relative z-10 flex items-end justify-between gap-4 flex-wrap">
           <div className="space-y-1.5">
             <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
               Month
@@ -3669,10 +3592,11 @@ export default function EmployeePortal({ onLogout, auth }) {
             </span>
           </div>
         </div>
+        </div>
         ) : null}
 
-        {activeTab !== "leave-requests" && activeTab !== "notes" && activeTab !== "drive" ? (
-          <SubmissionStepper activeTab={activeTab} steps={stepItems} onNavigate={goToTab} />
+        {EMPLOYEE_REVIEW_STEP_IDS.includes(activeTab) ? (
+          <PortalStepper activeTab={activeTab} steps={stepItems} onNavigate={goToTab} />
         ) : null}
 
         <AnimatePresence mode="wait">

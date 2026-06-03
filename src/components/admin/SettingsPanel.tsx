@@ -253,6 +253,27 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
   const globalIsOpen = useMemo(() => isWindowOpenLocal(globalWin), [globalWin]);
   const empIsOpen = useMemo(() => isWindowOpenLocal(empWin), [empWin]);
   const mgrIsOpen = useMemo(() => isWindowOpenLocal(mgrWin), [mgrWin]);
+  const empEffectiveOpen = empIsOpen || globalIsOpen;
+  const mgrEffectiveOpen = mgrIsOpen || globalIsOpen;
+  const employeeCardOpen = empEffectiveOpen;
+  const managerCardOpen = mgrEffectiveOpen;
+
+  const refreshAllSubmissionWindows = useCallback(async ({ signal } = {} as ApiOptions) => {
+    const [gRes, eRes, mRes] = await Promise.allSettled([
+      fetchSubmissionWindowCurrent({ signal }),
+      fetchRoleSubmissionWindow("employee", { signal }),
+      fetchRoleSubmissionWindow("manager", { signal }),
+    ]);
+    if (gRes.status === "fulfilled") {
+      setGlobalWin(parseSettingsWindowFields(gRes.value));
+    }
+    if (eRes.status === "fulfilled") {
+      setEmpWin(parseSettingsWindowFields(eRes.value));
+    }
+    if (mRes.status === "fulfilled") {
+      setMgrWin(parseSettingsWindowFields(mRes.value));
+    }
+  }, []);
 
   /* Fetch all 3 windows on mount */
   useEffect(() => {
@@ -261,26 +282,12 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
     (async () => {
       setWinLoading(true);
       try {
-        const [gRes, eRes, mRes] = await Promise.allSettled([
-          fetchSubmissionWindowCurrent({ signal: controller.signal }),
-          fetchRoleSubmissionWindow("employee", { signal: controller.signal }),
-          fetchRoleSubmissionWindow("manager", { signal: controller.signal }),
-        ]);
-        if (!alive) return;
-        if (gRes.status === "fulfilled") {
-          setGlobalWin(parseSettingsWindowFields(gRes.value));
-        }
-        if (eRes.status === "fulfilled") {
-          setEmpWin(parseSettingsWindowFields(eRes.value));
-        }
-        if (mRes.status === "fulfilled") {
-          setMgrWin(parseSettingsWindowFields(mRes.value));
-        }
+        await refreshAllSubmissionWindows({ signal: controller.signal });
       } catch { /* swallow */ }
       if (alive) setWinLoading(false);
     })();
     return () => { alive = false; controller.abort(); };
-  }, []);
+  }, [refreshAllSubmissionWindows]);
 
   function showToastMsg(t) { setToast(t); }
 
@@ -290,11 +297,12 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
     try {
       const res = globalIsOpen ? await closeSubmissionWindowNow() : await openSubmissionWindowNow();
       setGlobalWin(parseSettingsWindowFields(res));
+      await refreshAllSubmissionWindows();
       showToastMsg({ title: globalIsOpen ? "Global window closed" : "Global window opened", message: "Updated." });
     } catch (err) {
       showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
     } finally { setGlobalBusy(false); }
-  }, [globalIsOpen]);
+  }, [globalIsOpen, refreshAllSubmissionWindows]);
 
   const handleGlobalSchedule = useCallback(async () => {
     const start = parseInputDate(globalWin.start);
@@ -318,6 +326,7 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
       try {
         const res = isOpen ? await closeRoleSubmissionWindowNow(role) : await openRoleSubmissionWindowNow(role);
         setWin(parseSettingsWindowFields(res));
+        await refreshAllSubmissionWindows();
         showToastMsg({ title: isOpen ? `${label} window closed` : `${label} window opened`, message: "Updated." });
       } catch (err) {
         showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
@@ -340,8 +349,14 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
     return { toggle, schedule };
   }
 
-  const empHandlers = useMemo(() => makeRoleHandlers("employee", empWin, setEmpWin, empIsOpen, setEmpBusy), [empWin, empIsOpen]);
-  const mgrHandlers = useMemo(() => makeRoleHandlers("manager", mgrWin, setMgrWin, mgrIsOpen, setMgrBusy), [mgrWin, mgrIsOpen]);
+  const empHandlers = useMemo(
+    () => makeRoleHandlers("employee", empWin, setEmpWin, empIsOpen, setEmpBusy),
+    [empWin, empIsOpen, refreshAllSubmissionWindows],
+  );
+  const mgrHandlers = useMemo(
+    () => makeRoleHandlers("manager", mgrWin, setMgrWin, mgrIsOpen, setMgrBusy),
+    [mgrWin, mgrIsOpen, refreshAllSubmissionWindows],
+  );
 
   useEffect(() => {
     function onUpdated(event) {
@@ -878,16 +893,22 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
             {/* Status indicators */}
             <div className="flex items-center gap-4 flex-wrap pb-2">
               {[
-                { label: "Global", open: globalIsOpen },
-                { label: "Employee", open: empIsOpen },
-                { label: "Manager", open: mgrIsOpen },
-              ].map(({ label, open }) => (
+                { label: "Global", open: globalIsOpen, effective: globalIsOpen },
+                { label: "Employee", open: empIsOpen, effective: empEffectiveOpen },
+                { label: "Manager", open: mgrIsOpen, effective: mgrEffectiveOpen },
+              ].map(({ label, open, effective }) => (
                 <span key={label} className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
-                  <span className={`h-2 w-2 rounded-full ${open ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
-                  {label} {open ? "Open" : "Closed"}
+                  <span className={`h-2 w-2 rounded-full ${effective ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
+                  {label} {effective ? "Open" : "Closed"}
+                  {effective && !open && label !== "Global" ? (
+                    <span className="normal-case tracking-normal text-emerald-700 dark:text-emerald-300">(via global)</span>
+                  ) : null}
                 </span>
               ))}
             </div>
+            <p className="text-[11px] text-[rgb(var(--muted))] -mt-1 pb-2">
+              When the global window is open, employee and manager portals are open for everyone. Role-specific windows can still be managed independently.
+            </p>
 
             {/* Three window cards */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -908,7 +929,7 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
                 title="Employee"
                 win={empWin}
                 setWin={setEmpWin}
-                isOpen={empIsOpen}
+                isOpen={employeeCardOpen}
                 busy={empBusy}
                 onToggle={empHandlers.toggle}
                 onSchedule={empHandlers.schedule}
@@ -919,7 +940,7 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
                 title="Manager"
                 win={mgrWin}
                 setWin={setMgrWin}
-                isOpen={mgrIsOpen}
+                isOpen={managerCardOpen}
                 busy={mgrBusy}
                 onToggle={mgrHandlers.toggle}
                 onSchedule={mgrHandlers.schedule}

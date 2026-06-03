@@ -3,11 +3,10 @@ import {
   Award,
   BadgeCheck,
   Briefcase,
-  Calendar,
   ClipboardCheck,
-  Clock,
   Cloud,
   FileBarChart2,
+  FolderKanban,
   Layers3,
   LayoutDashboard,
   Sparkles,
@@ -27,6 +26,17 @@ export function flattenNavGroups(groups) {
   }
   return items;
 }
+
+/** Ordered monthly review steps shown in the employee stepper. */
+export const EMPLOYEE_REVIEW_STEP_IDS = [
+  "profile",
+  "projects",
+  "kpis",
+  "values",
+  "certifications",
+  "recognitions",
+  "review",
+];
 
 export const ADMIN_NAV_GROUPS = [
   {
@@ -127,60 +137,49 @@ export const ADMIN_NAV_ITEMS = flattenNavGroups(ADMIN_NAV_GROUPS);
 
 export const EMPLOYEE_NAV_GROUPS = [
   {
-    title: "My review",
+    title: "Monthly review",
     items: [
       {
         id: "profile",
         icon: <UserCircle2 size={20} />,
-        label: "My profile",
-        description: "Your details and manager",
+        label: "1. Profile",
+        description: "Confirm your details",
+      },
+      {
+        id: "projects",
+        icon: <FolderKanban size={20} />,
+        label: "2. Projects",
+        description: "Pick active projects this cycle",
       },
       {
         id: "kpis",
         icon: <Target size={20} />,
-        label: "Goals (KPIs)",
-        description: "Rate your work goals this month",
+        label: "3. Goals (KPIs)",
+        description: "Rate your goals",
       },
       {
         id: "values",
         icon: <Sparkles size={20} />,
-        label: "Company values",
+        label: "4. Values",
         description: "How you lived our values",
       },
       {
-        id: "review",
-        icon: <ClipboardCheck size={20} />,
-        label: "Monthly review",
-        description: "Write and submit your review",
-      },
-    ],
-  },
-  {
-    title: "Work & time",
-    items: [
-      {
         id: "certifications",
         icon: <Award size={20} />,
-        label: "Certifications",
-        description: "Certificates that apply to you",
+        label: "5. Certifications",
+        description: "Certificates with proof",
       },
       {
         id: "recognitions",
         icon: <Award size={20} />,
-        label: "Recognition",
-        description: "Shout-outs and highlights",
+        label: "6. Recognition",
+        description: "Shout-outs (optional)",
       },
       {
-        id: "timelogs",
-        icon: <Clock size={20} />,
-        label: "Time sheet",
-        description: "Log hours on projects",
-      },
-      {
-        id: "leave-requests",
-        icon: <Calendar size={20} />,
-        label: "Leave & WFH",
-        description: "Request time off or work from home",
+        id: "review",
+        icon: <ClipboardCheck size={20} />,
+        label: "7. Review & submit",
+        description: "Final check and submit",
       },
     ],
   },
@@ -207,18 +206,18 @@ export const EMPLOYEE_NAV_ITEMS = flattenNavGroups(EMPLOYEE_NAV_GROUPS);
 
 export const MANAGER_NAV_GROUPS = [
   {
-    title: "Your team",
+    title: "Reviews",
     items: [
       {
         id: "team",
         icon: <Users size={20} />,
         label: "Team reviews",
-        description: "Read and score your team's monthly reviews",
+        description: "Score and approve your team",
       },
       {
         id: "self-review",
         icon: <ClipboardCheck size={20} />,
-        label: "Your own review",
+        label: "Your review",
         description: "Submit your manager self-review",
       },
     ],
@@ -245,14 +244,19 @@ export const MANAGER_NAV_GROUPS = [
 export const MANAGER_NAV_ITEMS = flattenNavGroups(MANAGER_NAV_GROUPS);
 
 export const EMPLOYEE_TAB_COPY = {
-  profile: { title: "My profile", subtitle: "Your name, role, and who you report to." },
-  kpis: { title: "Goals (KPIs)", subtitle: "Score each goal for this month. Save as you go." },
-  values: { title: "Company values", subtitle: "Share examples of how you demonstrated our values." },
-  certifications: { title: "Certifications", subtitle: "Pick the certificates that apply to you this cycle." },
-  recognitions: { title: "Recognition", subtitle: "Note praise from peers or projects (optional)." },
-  review: { title: "Monthly review", subtitle: "Complete your self-review, then submit when the window is open." },
-  timelogs: { title: "Time sheet", subtitle: "Record hours against your assigned projects." },
-  "leave-requests": { title: "Leave & work from home", subtitle: "Submit leave, WFH, or comp-off requests." },
+  profile: { title: "My profile", subtitle: "Step 1 — confirm your name, role, band, and department before continuing." },
+  projects: {
+    title: "Active projects",
+    subtitle: "Step 2 — select up to 3 projects you worked on. PMs or AMs are notified when you submit.",
+  },
+  kpis: { title: "Goals (KPIs)", subtitle: "Step 3 — score each goal for this month and write your self-review notes." },
+  values: { title: "Company values", subtitle: "Step 4 — share examples of how you demonstrated our values." },
+  certifications: { title: "Certifications", subtitle: "Step 5 — pick certificates that apply to you and add proof links." },
+  recognitions: { title: "Recognition", subtitle: "Step 6 — note praise from peers or projects (optional)." },
+  review: {
+    title: "Review & submit",
+    subtitle: "Step 7 — read everything once more, then submit to lock this month.",
+  },
   notes: { title: "Private notes", subtitle: "Personal notebooks — not shared with HR or your manager." },
   drive: { title: "My files", subtitle: "Store files here. Only you can open them." },
 };
@@ -260,11 +264,11 @@ export const EMPLOYEE_TAB_COPY = {
 export const MANAGER_TAB_COPY = {
   team: {
     title: "Team reviews",
-    subtitle: "Open each person's submission, add scores, and submit when ready.",
+    subtitle: "Open each person's submission, add scores, and approve or send back for changes.",
   },
   "self-review": {
-    title: "Your own review",
-    subtitle: "Complete your monthly manager review for this cycle.",
+    title: "Your manager review",
+    subtitle: "Complete your monthly self-review for this cycle.",
   },
   notes: {
     title: "Private notes",
@@ -273,5 +277,78 @@ export const MANAGER_TAB_COPY = {
   drive: {
     title: "My files",
     subtitle: "Personal storage. Not visible to your team.",
+  },
+};
+
+export const ADMIN_TAB_COPY = {
+  dashboard: {
+    title: "Dashboard",
+    subtitle: "Cycle health, submissions, and organization metrics at a glance.",
+    sectionLabel: "Overview",
+  },
+  submissions: {
+    title: "Monthly reviews",
+    subtitle: "Approve submissions or send them back for changes.",
+    sectionLabel: "People & reviews",
+  },
+  directory: {
+    title: "Team list",
+    subtitle: "View and update employee profiles, bands, and reporting lines.",
+    sectionLabel: "People & reviews",
+  },
+  projects: {
+    title: "Projects",
+    subtitle: "Client and internal projects — assign PMs, AMs, and team members.",
+    sectionLabel: "Company setup",
+  },
+  reports: {
+    title: "Reports",
+    subtitle: "Download and explore review and allocation data.",
+    sectionLabel: "More tools",
+  },
+  kpi: {
+    title: "Goals & KPIs",
+    subtitle: "Define what employees and managers are measured on each cycle.",
+    sectionLabel: "Company setup",
+  },
+  values: {
+    title: "Company values",
+    subtitle: "Culture pillars and scoring criteria for monthly reviews.",
+    sectionLabel: "Company setup",
+  },
+  "band-streams": {
+    title: "Bands & departments",
+    subtitle: "Job levels and department names used across the org.",
+    sectionLabel: "Company setup",
+  },
+  designations: {
+    title: "Job titles",
+    subtitle: "Titles mapped to band and department combinations.",
+    sectionLabel: "Company setup",
+  },
+  certifications: {
+    title: "Certifications",
+    subtitle: "Credentials employees can select during their review.",
+    sectionLabel: "Company setup",
+  },
+  notes: {
+    title: "Private notes",
+    subtitle: "Personal notebooks — not visible to other admins or employees.",
+    sectionLabel: "More tools",
+  },
+  drive: {
+    title: "File sharing",
+    subtitle: "Upload and share files from your admin account.",
+    sectionLabel: "More tools",
+  },
+  settings: {
+    title: "Settings",
+    subtitle: "Submission windows, display preferences, and security options.",
+    sectionLabel: "Administration",
+  },
+  account: {
+    title: "Your account",
+    subtitle: "Profile details and sign-in preferences.",
+    sectionLabel: "Account",
   },
 };

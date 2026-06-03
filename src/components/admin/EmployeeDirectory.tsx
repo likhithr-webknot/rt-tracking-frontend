@@ -497,7 +497,7 @@ export default function EmployeeDirectory({
     }
     if (!addRoleIsAdmin) {
       if (!addDraft.band.trim() || !addDraft.stream.trim()) return false;
-      if (addDesignationOptions.length > 0 && !addDraft.designation.trim()) return false;
+      if (!addDraft.designation.trim()) return false;
     }
     return true;
   }, [
@@ -1119,10 +1119,10 @@ export default function EmployeeDirectory({
         "",
     ).trim();
 
-    if (!isAdminRole && addDesignationOptions.length > 0 && !designationValue) {
+    if (!isAdminRole && !designationValue) {
       showToast({
-        title: "Designation required",
-        message: "Select a designation that matches this band and department (import lookups first if the list is empty).",
+        title: "Job title required",
+        message: "Enter a job title or pick band and department so it auto-fills from your lookup table.",
       });
       return;
     }
@@ -1881,39 +1881,29 @@ export default function EmployeeDirectory({
                 </div>
 
                 <AddFormField
-                  label="Designation"
-                  required={addDesignationOptions.length > 0}
+                  label="Job title"
+                  required
                   hint={
                     addDesignationLoading
-                      ? "Loading designations for this band and department…"
-                      : addDesignationOptions.length > 0
-                        ? "Pick a title from your designation lookup table."
-                        : "No lookup for this band and department — enter a title or import designation lookups via CSV Import."
+                      ? "Loading job title for this band and department…"
+                      : addDraft.designation.trim()
+                        ? "Auto-filled from your designation lookup. You can edit it before saving."
+                        : "Select band and department — the job title appears here automatically when a lookup exists."
                   }
                 >
-                  {addDesignationOptions.length > 0 ? (
-                    <select
-                      value={addDraft.designation}
-                      onChange={(e) => setAddDraft((d) => ({ ...d, designation: e.target.value }))}
-                      className="rt-input w-full text-sm"
-                      disabled={addDesignationLoading}
-                    >
-                      <option value="">Select designation</option>
-                      {addDesignationOptions.map((label) => (
-                        <option key={`add-des:${label}`} value={label}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      value={addDraft.designation}
-                      onChange={(e) => setAddDraft((d) => ({ ...d, designation: e.target.value }))}
-                      className="rt-input w-full text-sm"
-                      placeholder="e.g., Software Engineer II"
-                      disabled={addDesignationLoading}
-                    />
-                  )}
+                  <input
+                    value={addDraft.designation}
+                    onChange={(e) => setAddDraft((d) => ({ ...d, designation: e.target.value }))}
+                    className="rt-input w-full text-sm"
+                    placeholder={
+                      addDesignationLoading
+                        ? "Loading…"
+                        : addDraft.band && addDraft.stream
+                          ? "Job title will appear here"
+                          : "Select band and department first"
+                    }
+                    disabled={addDesignationLoading || !addDraft.band || !addDraft.stream}
+                  />
                 </AddFormField>
               </AddFormSection>
             ) : null}
