@@ -2,7 +2,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Cloud,
+  Download,
+  Eye,
   FolderOpen,
+  HardDrive,
   Loader2,
   Share2,
   Trash2,
@@ -27,7 +30,91 @@ function formatBytes(n) {
   const b = Number(n) || 0;
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function storageBarTone(usedFraction) {
+  const usedPct = usedFraction * 100;
+  if (usedPct >= 90) return "bg-red-500";
+  if (usedPct >= 75) return "bg-amber-500";
+  return "bg-[rgb(var(--primary))]";
+}
+
+function computeStorageUsage(usedBytes, quotaBytes) {
+  const used = Math.max(0, Number(usedBytes) || 0);
+  const quota = Math.max(0, Number(quotaBytes) || 0);
+  if (!quota) {
+    return {
+      usedBytes: used,
+      quotaBytes: quota,
+      usedFraction: 0,
+      usedPct: 0,
+      availablePct: 100,
+      statusLabel: "Available",
+    };
+  }
+
+  const usedFraction = Math.min(1, used / quota);
+  const usedPctExact = usedFraction * 100;
+  const availablePctExact = 100 - usedPctExact;
+
+  const formatPct = (value) => {
+    if (value <= 0) return 0;
+    if (value < 1) return Number(value.toFixed(1));
+    if (value >= 99.95) return 100;
+    return Math.round(value * 10) / 10;
+  };
+
+  const usedPct = formatPct(usedPctExact);
+  const availablePct = formatPct(availablePctExact);
+
+  let statusLabel = "Available";
+  if (availablePctExact <= 10) statusLabel = "Nearly full";
+  else if (availablePctExact <= 25) statusLabel = "Getting full";
+
+  return {
+    usedBytes: used,
+    quotaBytes: quota,
+    usedFraction,
+    usedPct,
+    availablePct,
+    statusLabel,
+  };
+}
+
+function DriveIconButton({
+  title,
+  onClick,
+  href,
+  download,
+  disabled = false,
+  tone = "default",
+  children,
+}) {
+  const toneClass =
+    tone === "danger"
+      ? "text-[rgb(var(--muted))] hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/20"
+      : "text-[rgb(var(--muted))] hover:bg-[rgb(var(--primary-soft))] hover:text-[rgb(var(--primary))] hover:border-[rgb(var(--primary))]/25";
+  const className = [
+    "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] transition-colors",
+    toneClass,
+    disabled ? "opacity-50 pointer-events-none" : "",
+  ].join(" ");
+
+  if (href) {
+    return (
+      <a href={href} download={download} title={title} aria-label={title} className={className}>
+        {children}
+      </a>
+    );
+  }
+
+  return (
+    <button type="button" title={title} aria-label={title} onClick={onClick} disabled={disabled} className={className}>
+      {children}
+    </button>
+  );
 }
 
 export default function WebknotDrive({ auth = null, portalLabel = "your account" }) {
@@ -132,8 +219,11 @@ export default function WebknotDrive({ auth = null, portalLabel = "your account"
   }
 
   const filteredFiles = useMemo(() => files, [files]);
-  const usedBytes = storageStats?.totalBytes ?? filteredFiles.reduce((s, f) => s + (Number(f.size) || 0), 0);
-  const usedPct = quotaBytes > 0 ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100)) : 0;
+  const storage = useMemo(() => {
+    const usedBytes =
+      storageStats?.totalBytes ?? filteredFiles.reduce((s, f) => s + (Number(f.size) || 0), 0);
+    return computeStorageUsage(usedBytes, quotaBytes);
+  }, [storageStats?.totalBytes, filteredFiles, quotaBytes]);
 
   return (
     <AdminPageShell className="space-y-6">
@@ -162,18 +252,47 @@ export default function WebknotDrive({ auth = null, portalLabel = "your account"
         </span>
         <span className="rt-badge rt-badge--neutral">{filteredFiles.length} files</span>
         <span className="rt-badge rt-badge--neutral">Account: {accountLabel}</span>
-        <span className="rt-badge rt-badge--neutral">
-          {formatBytes(usedBytes)} / {formatBytes(quotaBytes)} ({usedPct}%)
-        </span>
-      </div>
-      <div className="h-2 rounded-full bg-[rgb(var(--surface-2))] overflow-hidden max-w-md">
-        <div
-          className="h-full bg-[rgb(var(--primary))] transition-all"
-          style={{ width: `${usedPct}%` }}
-        />
       </div>
 
       <div className="rt-panel overflow-hidden">
+        <div className="flex flex-col gap-4 border-b border-[rgb(var(--border))] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-lg)] bg-[rgb(var(--accent-soft))] text-[rgb(var(--accent))]">
+              <HardDrive size={18} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[rgb(var(--muted))]">
+                Storage used
+              </p>
+              <p className="mt-1 text-sm font-semibold text-[rgb(var(--text))] tabular-nums">
+                {formatBytes(storage.usedBytes)}
+                <span className="font-normal text-[rgb(var(--muted))]"> / {formatBytes(storage.quotaBytes)}</span>
+              </p>
+              <p className="mt-0.5 text-xs text-[rgb(var(--muted))]">
+                {filteredFiles.length} file{filteredFiles.length === 1 ? "" : "s"} in your drive
+                {storage.usedPct > 0 ? ` · ${storage.usedPct}% used` : ""}
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-end gap-3 sm:flex-col sm:items-end">
+            <span className="text-2xl font-bold tabular-nums leading-none text-[rgb(var(--text))]">
+              {storage.availablePct}%
+            </span>
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-[rgb(var(--muted))]">
+              {storage.statusLabel}
+            </span>
+          </div>
+        </div>
+        <div className="border-b border-[rgb(var(--border))] px-4 pb-4 pt-3 sm:px-5">
+          <div className="h-2.5 overflow-hidden rounded-full bg-[rgb(var(--surface-2))] ring-1 ring-[rgb(var(--border))]/60">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${storageBarTone(storage.usedFraction)}`}
+              style={{
+                width: `${storage.usedBytes > 0 ? Math.max(storage.usedFraction * 100, 0.5) : 0}%`,
+              }}
+            />
+          </div>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
@@ -233,39 +352,32 @@ export default function WebknotDrive({ auth = null, portalLabel = "your account"
                         <span className="text-[rgb(var(--muted))]">Private</span>
                       )}
                     </td>
-                    <td className="p-4 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        className="rt-btn-soft text-xs"
-                        onClick={() => setPreviewFile(f)}
-                      >
-                        Preview
-                      </button>
-                      {f.downloadUrl ? (
-                        <a href={f.downloadUrl} download={f.name} className="rt-btn-soft text-xs">
-                          Download
-                        </a>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="rt-btn-soft text-xs inline-flex items-center gap-1"
-                        onClick={() => setShareFile(f)}
-                      >
-                        <Share2 size={12} /> Share
-                      </button>
-                      <button
-                        type="button"
-                        className="rt-btn-soft text-xs inline-flex items-center gap-1 text-[rgb(var(--danger))]"
-                        disabled={deletingId === f.id}
-                        onClick={() => requestDelete(f)}
-                      >
-                        {deletingId === f.id ? (
-                          <Loader2 size={12} className="animate-spin" />
-                        ) : (
-                          <Trash2 size={12} />
-                        )}{" "}
-                        Remove
-                      </button>
+                    <td className="p-4 text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="inline-flex items-center justify-end gap-1">
+                        <DriveIconButton title="Preview" onClick={() => setPreviewFile(f)}>
+                          <Eye size={15} />
+                        </DriveIconButton>
+                        {f.downloadUrl ? (
+                          <DriveIconButton title="Download" href={f.downloadUrl} download={f.name}>
+                            <Download size={15} />
+                          </DriveIconButton>
+                        ) : null}
+                        <DriveIconButton title="Share" onClick={() => setShareFile(f)}>
+                          <Share2 size={15} />
+                        </DriveIconButton>
+                        <DriveIconButton
+                          title="Remove"
+                          tone="danger"
+                          disabled={deletingId === f.id}
+                          onClick={() => requestDelete(f)}
+                        >
+                          {deletingId === f.id ? (
+                            <Loader2 size={15} className="animate-spin" />
+                          ) : (
+                            <Trash2 size={15} />
+                          )}
+                        </DriveIconButton>
+                      </div>
                     </td>
                   </tr>
                 ))}

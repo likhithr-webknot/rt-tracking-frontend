@@ -19,6 +19,7 @@ import DesignationsWorkspace from "./DesignationsWorkspace";
 import ProjectsDirectory from "./ProjectsDirectory";
 import PortalNotesWorkspace from "../shared/PortalNotesWorkspace";
 import ReportsDashboard from "./ReportsDashboard";
+import EmployeePerformanceScores from "./EmployeePerformanceScores";
 import Toast from "../shared/Toast";
 import PortalUserMenu from "../shared/PortalUserMenu";
 import UserProfilePage from "../shared/UserProfilePage";
@@ -98,6 +99,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     "dashboard",
     "submissions",
     "directory",
+    "performance",
     "projects",
     "reports",
     "kpi",
@@ -359,6 +361,8 @@ export default function AdminControlCenter({ onLogout, auth }) {
           {activeTab === "submissions" && (
             <AdminSubmissions onLogout={onLogout} employees={employees} />
           )}
+
+          {activeTab === "performance" && <EmployeePerformanceScores />}
 
           {activeTab === "directory" && (
             <EmployeeDirectory

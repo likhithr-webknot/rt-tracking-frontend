@@ -43,11 +43,12 @@ ON CONFLICT (name) DO UPDATE SET active = true, updated_at = NOW();
 -- 3) Bands: remove rows whose name is not in the canonical list (only when unused).
 -- Safer approach: use Admin UI "Sync standard catalog" which deactivates/deletes via API.
 -- Reference band codes to keep:
--- B1, B2, B3, B4, B5, B6, B6H, B6L, B7H, B7L, B8
+-- B1, B2, B3, B4, B4L, B4H, B5, B5H, B5L, B6, B6H, B6L, B7H, B7L, B8
 
 INSERT INTO band (name, designation, band_type, kpis)
 SELECT v.code, v.code, 'BOTH', NULL::jsonb
 FROM (VALUES
-  ('B1'), ('B2'), ('B3'), ('B4'), ('B5'), ('B6'), ('B6H'), ('B6L'), ('B7H'), ('B7L'), ('B8')
+  ('B1'), ('B2'), ('B3'), ('B4'), ('B4L'), ('B4H'), ('B5'), ('B5H'), ('B5L'),
+  ('B6'), ('B6H'), ('B6L'), ('B7H'), ('B7L'), ('B8')
 ) AS v(code)
 WHERE NOT EXISTS (SELECT 1 FROM band b WHERE lower(b.name) = lower(v.code));

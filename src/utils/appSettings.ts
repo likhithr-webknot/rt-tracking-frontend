@@ -25,6 +25,18 @@ export const APP_SETTINGS_DEFAULTS = {
   managerReviewReminderDays: 3,
   /** Show band/designation on directory cards */
   showEmploymentOnCards: true,
+  /** Final score: % weight for manager KPI average (1–5 scale) */
+  scoreWeightKpiPercent: 90,
+  /** Final score: % weight for manager Webknot values average */
+  scoreWeightValuesPercent: 10,
+  /** Final score: % weight for certifications / recognitions component */
+  scoreWeightCertificationsPercent: 0,
+  /** Points per certification toward the certs component (1–5 cap) */
+  certificationPointsPerCert: 0.5,
+  /** Points per recognition toward the certs component */
+  recognitionPointsPerItem: 0.25,
+  /** Minimum certs component score when admin tech showcase is awarded */
+  techShowcaseComponentFloor: 2,
 };
 
 function toNumber(value, fallback) {
@@ -37,6 +49,12 @@ function toBool(value, fallback) {
   if (value === "true") return true;
   if (value === "false") return false;
   return fallback;
+}
+
+function toPointsSetting(value, fallback, max = 5) {
+  const n = Number.parseFloat(String(value ?? ""));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(0, Math.round(n * 100) / 100));
 }
 
 function sanitize(settings) {
@@ -83,6 +101,30 @@ function sanitize(settings) {
     raw.showEmploymentOnCards,
     APP_SETTINGS_DEFAULTS.showEmploymentOnCards,
   );
+  const scoreWeightKpiPercent = Math.min(
+    100,
+    Math.max(0, toNumber(raw.scoreWeightKpiPercent, APP_SETTINGS_DEFAULTS.scoreWeightKpiPercent)),
+  );
+  const scoreWeightValuesPercent = Math.min(
+    100,
+    Math.max(0, toNumber(raw.scoreWeightValuesPercent, APP_SETTINGS_DEFAULTS.scoreWeightValuesPercent)),
+  );
+  const scoreWeightCertificationsPercent = Math.min(
+    100,
+    Math.max(0, toNumber(raw.scoreWeightCertificationsPercent, APP_SETTINGS_DEFAULTS.scoreWeightCertificationsPercent)),
+  );
+  const certificationPointsPerCert = toPointsSetting(
+    raw.certificationPointsPerCert,
+    APP_SETTINGS_DEFAULTS.certificationPointsPerCert,
+  );
+  const recognitionPointsPerItem = toPointsSetting(
+    raw.recognitionPointsPerItem,
+    APP_SETTINGS_DEFAULTS.recognitionPointsPerItem,
+  );
+  const techShowcaseComponentFloor = toPointsSetting(
+    raw.techShowcaseComponentFloor,
+    APP_SETTINGS_DEFAULTS.techShowcaseComponentFloor,
+  );
 
   return {
     apiBaseUrl,
@@ -101,6 +143,12 @@ function sanitize(settings) {
     enableSubmissionPlaybook,
     managerReviewReminderDays,
     showEmploymentOnCards,
+    scoreWeightKpiPercent,
+    scoreWeightValuesPercent,
+    scoreWeightCertificationsPercent,
+    certificationPointsPerCert,
+    recognitionPointsPerItem,
+    techShowcaseComponentFloor,
   };
 }
 

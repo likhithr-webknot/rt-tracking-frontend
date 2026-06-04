@@ -9,7 +9,6 @@ import {
 } from "../../api/kpi-definitions";
 import { useBands, useStreams } from "../../hooks/queries/useBandsStreams";
 import KPIGoalsWorkspace from "./KPIGoalsWorkspace";
-import CriteriaWeightIntegrityRadar from "./CriteriaWeightIntegrityRadar";
 import ConfirmDialog from "../shared/ConfirmDialog";
 import ModalOverlay from "../shared/ModalOverlay";
 import Toast from "../shared/Toast";
@@ -200,14 +199,8 @@ export default function AdminGoalsRegistry() {
     [cursor, cursorStack, nextCursor, loading],
   );
 
-  const radarKpis = useMemo(() => {
-    if (Array.isArray(allKpis) && allKpis.length) return allKpis;
-    return kpis;
-  }, [allKpis, kpis]);
-
   return (
     <div className="space-y-6">
-      <CriteriaWeightIntegrityRadar kpis={radarKpis} />
       <KPIGoalsWorkspace
         kpis={kpis}
         allKpis={allKpis}

@@ -11,7 +11,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Target,
   Trash2,
 } from "lucide-react";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
@@ -22,6 +21,7 @@ import {
   evaluationCriteriaDisplayLabel,
   evaluationCriteriaGroupKey,
 } from "../../utils/evaluationCriteria";
+import { computeKpiWeightIntegrity } from "../../utils/kpiWeightIntegrity";
 
 const GROUP_PALETTE = [
   { ring: "ring-indigo-500/25", dot: "bg-indigo-500", band: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/20", dept: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20" },
@@ -162,7 +162,6 @@ export default function KPIGoalsWorkspace({
 
   const grouped = useMemo(() => {
     const map = new Map();
-    const comboWeights = new Map();
 
     for (const kpi of filtered) {
       const band = String(kpi?.band ?? "").trim() || "Unassigned";
@@ -180,36 +179,23 @@ export default function KPIGoalsWorkspace({
         stream,
         evaluationCriteria: criteria || criteriaLabel,
       });
-
-      const comboKey = `${criteriaKey}||${normKey(band)}||${normKey(stream)}`;
-      comboWeights.set(comboKey, (comboWeights.get(comboKey) || 0) + parseWeightPercent(kpi?.weight));
     }
 
-    return Array.from(map.values())
-      .map((group) => {
-        const overweightCombos = [];
-        const seen = new Set();
-        for (const goal of group.goals) {
-          const comboKey = `${group.key}||${normKey(goal.band)}||${normKey(goal.stream)}`;
-          if (seen.has(comboKey)) continue;
-          seen.add(comboKey);
-          const sum = Math.round((comboWeights.get(comboKey) || 0) * 10) / 10;
-          if (sum > 100) {
-            overweightCombos.push({ band: goal.band, stream: goal.stream, sum });
-          }
-        }
-        return { ...group, overweightCombos };
-      })
-      .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+    return Array.from(map.values()).sort((a, b) =>
+      a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+    );
   }, [filtered]);
+
+  const weightReport = useMemo(() => computeKpiWeightIntegrity(searchUniverse), [searchUniverse]);
 
   const stats = useMemo(
     () => ({
       total: searchUniverse.length,
       groups: grouped.length,
       visible: filtered.length,
+      overweightCount: weightReport.overweightCount,
     }),
-    [searchUniverse.length, grouped.length, filtered.length],
+    [searchUniverse.length, grouped.length, filtered.length, weightReport.overweightCount],
   );
 
   return (
@@ -269,13 +255,49 @@ export default function KPIGoalsWorkspace({
           </div>
         </div>
         <div className="rt-panel-subtle p-4">
-          <div className="rt-kicker">Showing</div>
+          <div className="rt-kicker">Over 100%</div>
           <div className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold">
-            <Target size={18} className="text-rose-500" />
-            {stats.visible}
+            <AlertTriangle
+              size={18}
+              className={stats.overweightCount > 0 ? "text-red-500" : "text-emerald-500"}
+            />
+            {stats.overweightCount}
           </div>
         </div>
       </div>
+
+      {weightReport.overweightCount > 0 ? (
+        <div className="rt-panel overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[rgb(var(--border))] px-5 py-3">
+            <div>
+              <p className="text-sm font-semibold text-[rgb(var(--text))]">Weight totals over 100%</p>
+              <p className="mt-0.5 text-xs text-[rgb(var(--muted))]">
+                Band + department weights per evaluation criteria must not exceed 100%.
+              </p>
+            </div>
+            <span className="rt-badge rt-badge--danger uppercase">
+              <AlertTriangle size={12} className="inline mr-1" />
+              Fix overweight
+            </span>
+          </div>
+          <div className="max-h-56 space-y-2 overflow-auto custom-scrollbar p-4">
+            {weightReport.overweight.map((c) => (
+              <div
+                key={`${c.criteriaKey}-${c.band}-${c.stream}`}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-lg)] border border-[rgb(var(--danger))]/25 bg-[rgb(var(--danger-soft))] px-4 py-2.5"
+              >
+                <div>
+                  <div className="text-sm font-semibold text-[rgb(var(--text))]">{c.criteriaLabel}</div>
+                  <div className="text-xs text-[rgb(var(--muted))]">
+                    {c.band} · {c.stream} · {c.goalCount} goal{c.goalCount === 1 ? "" : "s"}
+                  </div>
+                </div>
+                <span className="rt-badge rt-badge--danger tabular-nums">{c.sum}% (+{c.gap}%)</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
         <div className="relative flex-1">
@@ -330,6 +352,7 @@ export default function KPIGoalsWorkspace({
           <AnimatePresence mode="popLayout">
             {grouped.map((group) => {
               const palette = paletteForKey(group.key);
+              const groupOverweight = weightReport.overweight.filter((c) => c.criteriaKey === group.key);
               return (
                 <motion.section
                   key={group.key}
@@ -347,10 +370,22 @@ export default function KPIGoalsWorkspace({
                         </h3>
                         <p className="mt-1 text-[11px] font-medium text-[rgb(var(--muted))]">
                           {group.goals.length} goal{group.goals.length === 1 ? "" : "s"}
-                          {group.overweightCombos?.length
-                            ? ` · ${group.overweightCombos.length} band/dept combo(s) over 100%`
+                          {groupOverweight.length
+                            ? ` · ${groupOverweight.length} combo${groupOverweight.length === 1 ? "" : "s"} over 100%`
                             : ""}
                         </p>
+                        {groupOverweight.length ? (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {groupOverweight.map((c) => (
+                              <span
+                                key={`${c.band}-${c.stream}`}
+                                className="rt-badge rt-badge--danger text-[10px] tabular-nums"
+                              >
+                                {c.band} · {c.stream} · {c.sum}%
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                     <span className={`rt-badge shrink-0 border ${palette.dept}`}>

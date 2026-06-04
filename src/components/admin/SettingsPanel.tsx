@@ -25,6 +25,7 @@ import {
   Cloud,
   Briefcase,
   Mail,
+  PieChart,
 } from "lucide-react";
 import {
   sendMonthlyWorkflowReminders,
@@ -62,6 +63,10 @@ import {
   computeSubmissionWindowOpen,
   parseSettingsWindowFields,
 } from "../../utils/submissionWindow";
+import {
+  scoreWeightsSumPercent,
+  validateScoreWeightPercents,
+} from "../../utils/scoringSettings";
 
 function SectionCard({ icon: Icon, title, description, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -419,6 +424,9 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
     return envBase || "(using Vite proxy / same-origin)";
   }, [settings?.apiBaseUrl]);
 
+  const scoreWeightSum = useMemo(() => scoreWeightsSumPercent(settings), [settings]);
+  const scoreWeightValid = scoreWeightSum === 100;
+
   function updateSetting(key, value) {
     setSettings((prev) => ({ ...prev, [key]: value }));
     setHasUnsaved(true);
@@ -426,6 +434,15 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
 
   function onSave(e) {
     e?.preventDefault?.();
+    const weightCheck = validateScoreWeightPercents(settings);
+    if (!weightCheck.ok) {
+      setToast({
+        title: "Scoring weights invalid",
+        message: weightCheck.message,
+        tone: "error",
+      });
+      return;
+    }
     const next = saveAppSettings(settings);
     setSettings(next);
     setHasUnsaved(false);
@@ -582,6 +599,128 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
               }
               className="rt-input text-sm max-w-[8rem]"
             />
+          </div>
+        </div>
+      </SectionCard>
+
+      {/* ── Performance scoring ── */}
+      <SectionCard
+        icon={PieChart}
+        title="Performance scoring"
+        description="Monthly review weights and certification / recognition criteria"
+        defaultOpen
+      >
+        <p className="text-sm text-[rgb(var(--muted))] leading-relaxed">
+          Final score combines manager KPI average, Webknot values average, and a certifications component
+          (certs, recognitions, tech showcase). Percent weights must total 100%.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <FieldLabel hint="Share of final score">KPI weight (%)</FieldLabel>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={Number(settings?.scoreWeightKpiPercent ?? APP_SETTINGS_DEFAULTS.scoreWeightKpiPercent)}
+              onChange={(e) =>
+                updateSetting("scoreWeightKpiPercent", Number.parseInt(String(e.target.value || "0"), 10) || 0)
+              }
+              className="rt-input text-sm"
+            />
+          </div>
+          <div>
+            <FieldLabel hint="Company values ratings">Webknot values weight (%)</FieldLabel>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={Number(settings?.scoreWeightValuesPercent ?? APP_SETTINGS_DEFAULTS.scoreWeightValuesPercent)}
+              onChange={(e) =>
+                updateSetting("scoreWeightValuesPercent", Number.parseInt(String(e.target.value || "0"), 10) || 0)
+              }
+              className="rt-input text-sm"
+            />
+          </div>
+          <div>
+            <FieldLabel hint="Certs / recognitions component">Certifications weight (%)</FieldLabel>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={Number(
+                settings?.scoreWeightCertificationsPercent ?? APP_SETTINGS_DEFAULTS.scoreWeightCertificationsPercent,
+              )}
+              onChange={(e) =>
+                updateSetting(
+                  "scoreWeightCertificationsPercent",
+                  Number.parseInt(String(e.target.value || "0"), 10) || 0,
+                )
+              }
+              className="rt-input text-sm"
+            />
+          </div>
+        </div>
+        <p
+          className={[
+            "text-xs font-medium",
+            scoreWeightValid ? "text-emerald-600 dark:text-emerald-400" : "text-amber-700 dark:text-amber-300",
+          ].join(" ")}
+        >
+          Weight total: {scoreWeightSum}% {scoreWeightValid ? "(valid)" : "— must equal 100% to save"}
+        </p>
+
+        <div className="border-t border-[rgb(var(--border))] pt-4">
+          <div className="text-sm font-semibold text-[rgb(var(--text))] mb-3">Certification & recognition criteria</div>
+          <p className="text-xs text-[rgb(var(--muted))] mb-4 leading-relaxed">
+            Each certification and recognition adds points toward the certifications component (capped at 5.0 before
+            the certifications weight above is applied). Tech showcase sets a minimum on that component when awarded.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <FieldLabel hint="Points per listed certification">Certification points</FieldLabel>
+              <input
+                type="number"
+                min={0}
+                max={5}
+                step={0.05}
+                value={Number(settings?.certificationPointsPerCert ?? APP_SETTINGS_DEFAULTS.certificationPointsPerCert)}
+                onChange={(e) =>
+                  updateSetting("certificationPointsPerCert", Number.parseFloat(String(e.target.value || "0")) || 0)
+                }
+                className="rt-input text-sm"
+              />
+            </div>
+            <div>
+              <FieldLabel hint="Points per recognition">Recognition points</FieldLabel>
+              <input
+                type="number"
+                min={0}
+                max={5}
+                step={0.05}
+                value={Number(settings?.recognitionPointsPerItem ?? APP_SETTINGS_DEFAULTS.recognitionPointsPerItem)}
+                onChange={(e) =>
+                  updateSetting("recognitionPointsPerItem", Number.parseFloat(String(e.target.value || "0")) || 0)
+                }
+                className="rt-input text-sm"
+              />
+            </div>
+            <div>
+              <FieldLabel hint="Floor when tech showcase is awarded">Tech showcase floor</FieldLabel>
+              <input
+                type="number"
+                min={0}
+                max={5}
+                step={0.1}
+                value={Number(settings?.techShowcaseComponentFloor ?? APP_SETTINGS_DEFAULTS.techShowcaseComponentFloor)}
+                onChange={(e) =>
+                  updateSetting(
+                    "techShowcaseComponentFloor",
+                    Number.parseFloat(String(e.target.value || "0")) || 0,
+                  )
+                }
+                className="rt-input text-sm"
+              />
+            </div>
           </div>
         </div>
       </SectionCard>

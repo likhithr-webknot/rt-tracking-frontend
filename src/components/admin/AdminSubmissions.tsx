@@ -12,6 +12,7 @@ import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-defi
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi";
 import { buildCycleMonthOptions, getCycleForMonth, normalizeYearMonth } from "../../utils/reviewCycles";
 import { computeSubmissionScoreBreakdown } from "../../utils/submissionScoring";
+import { formatWeightPercentLabel, getResolvedScoreWeights } from "../../utils/scoringSettings";
 import ModalOverlay from "../shared/ModalOverlay";
 import ResubmissionPlaybook from "../shared/ResubmissionPlaybook";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
@@ -347,6 +348,15 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
     if (!reviewModal.item?.submission) return null;
     return computeLocalScoreBreakdown(reviewModal.item.submission);
   }, [reviewModal.item?.submission, scoreBreakdown]);
+
+  const [scoreWeightPercents, setScoreWeightPercents] = useState(() => getResolvedScoreWeights().percents);
+
+  useEffect(() => {
+    const sync = () => setScoreWeightPercents(getResolvedScoreWeights().percents);
+    sync();
+    window.addEventListener("rt:app-settings-updated", sync);
+    return () => window.removeEventListener("rt:app-settings-updated", sync);
+  }, []);
 
   const rejectModalIsManagerSelf = useMemo(() => {
     const entry = rejectModal?.item;
@@ -870,17 +880,23 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                         <div className="rt-panel-subtle rounded-md p-3">
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Avg</div>
                           <div className="text-xl font-bold mt-1">{scoringBreakdown?.managerKpiAverage != null ? scoringBreakdown.managerKpiAverage.toFixed(1) : "—"}</div>
-                          <div className="text-[10px] text-[rgb(var(--muted))]">50% weight</div>
+                          <div className="text-[10px] text-[rgb(var(--muted))]">
+                            {formatWeightPercentLabel(scoreWeightPercents.kpi)}
+                          </div>
                         </div>
                         <div className="rt-panel-subtle rounded-md p-3">
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Values Avg</div>
                           <div className="text-xl font-bold mt-1">{scoringBreakdown?.managerWebknotValueAverage != null ? scoringBreakdown.managerWebknotValueAverage.toFixed(1) : "—"}</div>
-                          <div className="text-[10px] text-[rgb(var(--muted))]">35% weight</div>
+                          <div className="text-[10px] text-[rgb(var(--muted))]">
+                            {formatWeightPercentLabel(scoreWeightPercents.values)}
+                          </div>
                         </div>
                         <div className="rt-panel-subtle rounded-md p-3">
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Certs / Awards</div>
                           <div className="text-xl font-bold mt-1">{scoringBreakdown?.certificationAverage != null ? scoringBreakdown.certificationAverage.toFixed(1) : "—"}</div>
-                          <div className="text-[10px] text-[rgb(var(--muted))]">15% weight</div>
+                          <div className="text-[10px] text-[rgb(var(--muted))]">
+                            {formatWeightPercentLabel(scoreWeightPercents.certifications)}
+                          </div>
                         </div>
                         <div className="rt-panel-subtle rounded-md p-3">
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Final Score</div>

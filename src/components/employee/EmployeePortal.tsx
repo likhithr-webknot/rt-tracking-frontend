@@ -184,18 +184,68 @@ function employeeBandAndStream(employee) {
   return { band, stream };
 }
 
-/** Employees only see KPIs that match their exact band and department (no global/wildcard rows). */
+const KPI_DEPT_STREAM_KEYS = new Set([
+  "development",
+  "developer",
+  "dev",
+  "qualityassurance",
+  "projectmanager",
+  "accountmanager",
+  "humanresources",
+  "businessanalyst",
+  "uiux",
+  "deliverymanager",
+  "executive",
+  "aiml",
+  "admin",
+]);
+
+function normalizeJobTitleKey(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function isDepartmentStreamKey(streamKey) {
+  return streamKey ? KPI_DEPT_STREAM_KEYS.has(streamKey) : false;
+}
+
+function kpiRoleKey(kpi) {
+  const explicit = normalizeJobTitleKey(
+    kpi?.role ?? kpi?.designation ?? kpi?.jobTitle ?? kpi?.job_title,
+  );
+  if (explicit) return explicit;
+  const streamKey = normalizeStreamKey(kpi?.stream ?? kpi?.department);
+  if (!streamKey || isDepartmentStreamKey(streamKey)) return "";
+  return normalizeJobTitleKey(kpi?.stream ?? kpi?.department);
+}
+
+/** Employees only see KPIs that match band + job title (Role) or legacy band + department. */
 function kpiAppliesToEmployee(kpi, employee) {
   const { band: empBand, stream: empStream } = employeeBandAndStream(employee);
-  if (!empBand || !empStream) return false;
+  if (!empBand) return false;
 
   const kpiBand = normalizeBandKey(kpi?.band ?? kpi?.bandName ?? kpi?.bandCode);
+  if (!kpiBand || isWildcardValue(kpiBand)) return false;
+  if (kpiBand !== empBand) return false;
+
+  const empRole = normalizeJobTitleKey(employee?.designation ?? employee?.title ?? employee?.jobTitle);
+  const kpiRole = kpiRoleKey(kpi);
+  if (kpiRole) {
+    if (!empRole || kpiRole !== empRole) return false;
+    const kpiStream = normalizeStreamKey(kpi?.stream ?? kpi?.department);
+    if (kpiStream && isDepartmentStreamKey(kpiStream)) {
+      if (!empStream) return false;
+      return normalizeStreamKey(empStream) === kpiStream;
+    }
+    return true;
+  }
+
+  if (!empStream) return false;
   const kpiStream = normalizeStreamKey(kpi?.stream ?? kpi?.department);
-
-  if (!kpiBand || !kpiStream) return false;
-  if (isWildcardValue(kpiBand) || isWildcardValue(kpiStream)) return false;
-
-  return kpiBand === empBand && kpiStream === empStream;
+  if (!kpiStream || isWildcardValue(kpiStream)) return false;
+  return kpiStream === empStream;
 }
 
 function normalizeEmployeeFromMe(me, { fallbackEmail, fallbackRole } = {}) {

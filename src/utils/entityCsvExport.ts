@@ -1,5 +1,30 @@
 // @ts-nocheck
 
+import { KPI_DEFINITIONS_CSV_HEADER } from "./csvImportNormalize";
+
+/** Canonical department label → short code used on WebTrack KPI sheets. */
+const STREAM_EXPORT_SHORT = {
+  development: "Dev",
+  developer: "Dev",
+  qualityassurance: "QA",
+  projectmanager: "PM",
+  accountmanager: "AM",
+  humanresources: "HR",
+  businessanalyst: "BA",
+  "ui/ux": "UI/UX",
+  deliverymanager: "DM",
+  executive: "CXO",
+  "ai/ml": "AI/ML",
+  admin: "Admin",
+};
+
+function kpiDepartmentForExport(kpi) {
+  const stream = String(kpi?.stream ?? kpi?.department ?? "").trim();
+  if (!stream) return "";
+  const key = stream.toLowerCase().replace(/[^a-z0-9/]+/g, "");
+  return STREAM_EXPORT_SHORT[key] || stream;
+}
+
 export function downloadCsv(filename, headerRow, dataRows) {
   const esc = (v) => {
     const s = String(v ?? "");
@@ -32,18 +57,52 @@ export function exportEmployeesCsv(employees) {
   downloadCsv("employees.csv", header, rows);
 }
 
+const KPI_DEPT_STREAM_KEYS = new Set([
+  "development",
+  "developer",
+  "dev",
+  "qualityassurance",
+  "projectmanager",
+  "accountmanager",
+  "humanresources",
+  "businessanalyst",
+  "uiux",
+  "deliverymanager",
+  "executive",
+  "aiml",
+  "admin",
+]);
+
+function kpiRoleForExport(kpi) {
+  const role = String(kpi?.role ?? kpi?.designation ?? kpi?.jobTitle ?? "").trim();
+  if (role) return role;
+  const stream = String(kpi?.stream ?? kpi?.department ?? "").trim();
+  if (!stream) return "";
+  const key = stream.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (KPI_DEPT_STREAM_KEYS.has(key)) return "";
+  return stream;
+}
+
+function formatKpiWeightageExport(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (raw.includes("%")) return raw;
+  const n = Number.parseFloat(raw);
+  if (Number.isFinite(n)) return `${n}%`;
+  return raw;
+}
+
 export function exportKpisCsv(kpis) {
-  const header = ["band", "department", "evaluation_criteria", "kpi_name", "weightage"];
-  const rows = (kpis || []).map((k) => {
-    let w = String(k.weight ?? k.weightage ?? "").replace(/%/g, "").trim();
-    return [
-      k.band || "",
-      k.stream || k.department || "",
-      k.evaluationCriteria || "",
-      k.title || k.kpiName || "",
-      w,
-    ];
-  });
+  const header = KPI_DEFINITIONS_CSV_HEADER.split(",");
+  const rows = (kpis || []).map((k) => [
+    k.band || "",
+    String(k.designation ?? k.role ?? kpiRoleForExport(k) ?? "").trim(),
+    kpiDepartmentForExport(k),
+    k.evaluationCriteria || "",
+    k.title || k.kpiName || k.name || "",
+    k.description || "",
+    formatKpiWeightageExport(k.weight ?? k.weightage),
+  ]);
   downloadCsv("kpi-definitions.csv", header, rows);
 }
 

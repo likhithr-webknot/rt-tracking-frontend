@@ -1,1 +1,3 @@
-band,stream,evaluationCriteria,kpiName,weightage
+Band,Designation,Department,Parameter,KPI,Description,Weightage
+B8,Software Intern,Dev,Technical Excellence,Code Quality Compliance,Code meets standards in reviews,35%
+B8,Software Intern,Dev,Technical Excellence,Learning Progress,Completion of assigned learning modules,

@@ -58,19 +58,22 @@ export const CSV_ENTITY_SCHEMAS = {
   "kpi-definitions": {
     label: "KPI Definitions",
     samplePath: "/sample-csv/kpi-definitions.csv",
-    required: ["band", "stream", "kpiName", "weightage"],
+    required: ["band", "designation", "kpiName"],
     columns: {
       band: ["band", "bandcode", "band_code", "level"],
-      stream: ["stream", "department", "dept", "team"],
+      designation: ["designation", "role", "jobtitle", "job_title", "title", "job role"],
+      stream: ["department", "stream", "dept", "team", "dev"],
       evaluationCriteria: [
+        "parameter",
         "evaluationcriteria",
         "evaluation_criteria",
-        "roles",
-        "role",
         "criteria",
         "competency",
+        "pillar",
+        "category",
       ],
-      kpiName: ["kpiname", "kpi_name", "kpi", "name", "title", "objective"],
+      kpiName: ["kpiname", "kpi_name", "kpi", "name", "objective"],
+      description: ["description", "desc", "details"],
       weightage: ["weightage", "weight", "weight_pct", "weightpercent", "weight_percent"],
     },
   },
@@ -110,13 +113,23 @@ export const CSV_ENTITY_SCHEMAS = {
 };
 
 /** Header-only CSV template from canonical column keys. */
+/** WebTrack KPI sheet header row (import / export / template). */
+export const KPI_DEFINITIONS_CSV_HEADER =
+  "Band,Designation,Department,Parameter,KPI,Description,Weightage";
+
 export function csvTemplateHeadersForEntity(entityKey) {
   const schema = CSV_ENTITY_SCHEMAS[entityKey];
   if (!schema?.columns) return [];
+  if (entityKey === "kpi-definitions") {
+    return KPI_DEFINITIONS_CSV_HEADER.split(",");
+  }
   return Object.keys(schema.columns);
 }
 
 export function csvTemplateContentForEntity(entityKey) {
+  if (entityKey === "kpi-definitions") {
+    return `${KPI_DEFINITIONS_CSV_HEADER}\n`;
+  }
   const headers = csvTemplateHeadersForEntity(entityKey);
   if (!headers.length) return "";
   return `${headers.join(",")}\n`;
@@ -164,9 +177,11 @@ const BACKEND_UPLOAD_HEADERS = {
   },
   "kpi-definitions": {
     band: "band",
+    designation: "role",
     stream: "department",
     evaluationCriteria: "evaluation_criteria",
     kpiName: "kpi_name",
+    description: "description",
     weightage: "weightage",
   },
   "webknot-values": {
@@ -308,9 +323,15 @@ export function normalizeCsvTextForEntity(entityKey, text) {
       if (!canon || !Object.prototype.hasOwnProperty.call(out, canon)) continue;
       out[canon] = String(row[i] ?? "").trim();
     }
-    if (out.stream) out.stream = mapStreamValue(out.stream);
-    if (out.band) out.band = String(out.band).trim().toUpperCase().replace(/\s+/g, "");
-    if (out.weightage) out.weightage = String(out.weightage).replace(/%/g, "").trim();
+    if (entityKey === "kpi-definitions") {
+      if (out.band) out.band = String(out.band).trim().toUpperCase().replace(/\s+/g, "");
+      if (out.weightage) out.weightage = String(out.weightage).replace(/%/g, "").trim();
+      if (out.stream) out.stream = mapStreamValue(out.stream);
+    } else {
+      if (out.stream) out.stream = mapStreamValue(out.stream);
+      if (out.band) out.band = String(out.band).trim().toUpperCase().replace(/\s+/g, "");
+      if (out.weightage) out.weightage = String(out.weightage).replace(/%/g, "").trim();
+    }
     return canonicalHeaders.map((h) => out[h] ?? "");
   });
 
@@ -318,11 +339,13 @@ export function normalizeCsvTextForEntity(entityKey, text) {
   const uploadHeaders = backendMap
     ? canonicalHeaders.map((h) => backendMap[h] || h)
     : canonicalHeaders;
-  const uploadRows = dataRows
+  let uploadRows = dataRows
     .filter((row) => row.some((c) => String(c).trim()))
     .map((row) => row);
 
-  const records = [uploadHeaders, ...uploadRows];
+  const finalUploadHeaders = uploadHeaders;
+
+  const records = [finalUploadHeaders, ...uploadRows];
 
   const missingRequired = (schema.required || []).filter(
     (col) => !usedCanonical.has(col),

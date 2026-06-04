@@ -108,18 +108,19 @@ function buildKpis(srcPath) {
   const parsed = parseCsv(fs.readFileSync(srcPath, "utf8"));
   const header = parsed[0].map((h) => String(h).trim().toLowerCase());
   const idx = Object.fromEntries(header.map((h, i) => [h, i]));
-  const out = [["band", "department", "evaluation_criteria", "kpi_name", "weightage"]];
+  const out = [["Band", "Designation", "Department", "Parameter", "KPI", "Description", "Weightage"]];
   for (let r = 1; r < parsed.length; r++) {
     const row = parsed[r];
     const get = (k) => String(row[idx[k]] ?? "").trim();
     const band = get("band").toUpperCase();
-    const department = mapStream(get("stream"));
-    const evaluationCriteria = get("roles") || get("role") || get("evaluationcriteria");
-    const kpiName = get("kpiname") || get("kpi name");
-    let weight = get("weightage");
-    weight = weight.replace(/%/g, "").trim();
-    if (!band || !department || !kpiName || !weight) continue;
-    out.push([band, department, evaluationCriteria, kpiName, weight]);
+    const designation = get("designation") || get("role");
+    const department = get("department") || mapStream(get("stream")) || get("dept");
+    const parameter = get("parameter") || get("evaluationcriteria") || get("evaluation criteria");
+    const kpiName = get("kpi") || get("kpiname") || get("kpi name");
+    const description = get("description") || get("desc");
+    const weight = get("weightage");
+    if (!band || !designation || !kpiName) continue;
+    out.push([band, designation, department, parameter, kpiName, description, weight]);
   }
   writeCsv("kpi-definitions.csv", out[0], out.slice(1));
   return out.length - 1;

@@ -22,6 +22,8 @@ export default function ThemeToggle({ compact = false, className = "" }) {
     } catch {
       void 0;
     }
+    const meta = document.querySelector('meta[name="theme-color"]:not([media])');
+    if (meta) meta.setAttribute("content", next === "dark" ? "#0a0c14" : "#f5f7fa");
     setTheme(next);
   }, []);
 
@@ -33,9 +35,10 @@ export default function ThemeToggle({ compact = false, className = "" }) {
         type="button"
         onClick={toggleTheme}
         className={[
-          "inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)]",
+          "rt-theme-toggle inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)]",
           "border border-[rgb(var(--border))] bg-[rgb(var(--surface))] text-[rgb(var(--muted))]",
-          "transition-colors hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]",
+          "transition-[colors,box-shadow,border-color] duration-200",
+          "hover:bg-[rgb(var(--surface-2))] hover:text-[rgb(var(--text))]",
           className,
         ].join(" ")}
         title={isDark ? "Light mode" : "Dark mode"}
@@ -51,9 +54,10 @@ export default function ThemeToggle({ compact = false, className = "" }) {
       type="button"
       onClick={toggleTheme}
       className={[
-        "flex w-full items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[rgb(var(--border))]",
-        "bg-[rgb(var(--surface-2))] px-3 py-2.5 text-sm font-medium text-[rgb(var(--text))]",
-        "transition-colors hover:bg-[rgb(var(--sidebar-hover))]",
+        "rt-theme-toggle flex w-full items-center justify-between gap-3 rounded-[var(--radius-md)]",
+        "border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5 text-sm font-medium",
+        "text-[rgb(var(--text))] transition-[colors,box-shadow,border-color] duration-200",
+        "hover:bg-[rgb(var(--sidebar-hover))]",
         className,
       ].join(" ")}
       title={isDark ? "Light mode" : "Dark mode"}

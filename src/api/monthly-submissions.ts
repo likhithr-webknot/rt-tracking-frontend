@@ -889,7 +889,10 @@ export async function fetchMonthlySubmissionScoreBreakdown(payload, { signal } =
     prepared?.managerEvaluation?.webknotValueRatings ??
     payload?.managerWebknotValueRatings ??
     prepared?.webknotValueRatings;
-  const { averageRatings, computeCertificationComponentScore } = await import("../utils/submissionScoring");
+  const { averageRatings, computeCertificationComponentScore, computeWeightedScore503515 } = await import(
+    "../utils/submissionScoring",
+  );
+  const { getResolvedScoreWeights } = await import("../utils/scoringSettings");
   const managerKpiAverage = averageRatings(
     typeof mgrKpi === "object" && !Array.isArray(mgrKpi)
       ? mgrKpi
@@ -909,6 +912,13 @@ export async function fetchMonthlySubmissionScoreBreakdown(payload, { signal } =
 
   const auth = getAuthHeader();
   await ensureCsrfCookie({ signal });
+  const weights = getResolvedScoreWeights();
+  const clientWeightedScore = computeWeightedScore503515(
+    managerKpiAverage,
+    managerWebknotValueAverage,
+    certificationAverage,
+    weights,
+  );
   const body = {
     kpiScore: managerKpiAverage ?? 0,
     webknotValuesScore: managerWebknotValueAverage ?? 0,
@@ -916,6 +926,9 @@ export async function fetchMonthlySubmissionScoreBreakdown(payload, { signal } =
     certificationsCount,
     recognitionsCount,
     techShowcaseAwarded: Boolean(techShowcase),
+    scoreWeightKpiPercent: weights.percents.kpi,
+    scoreWeightValuesPercent: weights.percents.values,
+    scoreWeightCertificationsPercent: weights.percents.certifications,
   };
 
   try {
@@ -935,6 +948,8 @@ export async function fetchMonthlySubmissionScoreBreakdown(payload, { signal } =
       return normalizeScoreBreakdown(data, {
         managerKpiAverage,
         managerWebknotValueAverage,
+        certificationAverage,
+        weightedScore: clientWeightedScore,
         techShowcase,
         certificationsCount,
         recognitionsCount,

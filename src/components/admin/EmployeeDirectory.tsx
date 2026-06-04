@@ -437,7 +437,23 @@ export default function EmployeeDirectory({
       .filter(Boolean);
     if (fromDirectory.length) return fromDirectory;
 
-    const defaults = ["B1", "B2", "B3", "B4", "B5", "B5H", "B5L", "B6H", "B6L", "B7H", "B7L", "B8"];
+    const defaults = [
+      "B1",
+      "B2",
+      "B3",
+      "B4",
+      "B4L",
+      "B4H",
+      "B5",
+      "B5H",
+      "B5L",
+      "B6",
+      "B6H",
+      "B6L",
+      "B7H",
+      "B7L",
+      "B8",
+    ];
     const fromEmployees = searchUniverse
       .map((emp) => String(emp?.band ?? "").trim())
       .filter(Boolean)
@@ -1371,7 +1387,12 @@ export default function EmployeeDirectory({
         <div className="shrink-0 px-4 py-3 border-b border-[rgb(var(--border))]">
           <h2 className="text-sm font-semibold text-[rgb(var(--text))]">Employee roster</h2>
           <p className="rt-section-subtitle mt-0.5">
-            {visibleEmployees.length} in view · scroll inside this panel
+            {visibleEmployees.length} in view
+            {searchUniverse.length !== visibleEmployees.length
+              ? ` (filtered from ${searchUniverse.length})`
+              : ""}
+            {" "}
+            · {totalEmployeesDisplay} total in directory · scroll inside this panel
           </p>
         </div>
         <div className="min-w-0 flex-1 overflow-auto custom-scrollbar">

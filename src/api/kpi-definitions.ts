@@ -95,14 +95,21 @@ function toAddRequestBody(input) {
     (obj.band && typeof obj.band === "object" ? parsePositiveLongId(obj.band.id) : null);
 
   const evaluationCriteria = extractEvaluationCriteria(obj);
+  const roleText = normalizeRelationText(
+    obj.role ?? obj.designation ?? obj.jobTitle ?? obj.job_title ?? null,
+  );
+  const description = String(obj.description ?? obj.desc ?? "").trim();
 
   const body = {
     kpiName: String(kpiName).trim(),
     weightage,
-    stream: streamText || null,
-    department: streamText || null,
+    stream: streamText || roleText || null,
+    department: streamText || roleText || null,
+    role: roleText || null,
+    designation: roleText || null,
     evaluationCriteria: evaluationCriteria || null,
     evaluation_criteria: evaluationCriteria || null,
+    description: description || null,
     bandName: bandText || null,
     bandCode: bandText || null,
   };
@@ -145,6 +152,15 @@ export function normalizeKpiDefinition(data, fallback = {}) {
   const band = normalizeRelationText(obj.band ?? obj.level ?? fallback.band ?? "");
   const evaluationCriteria =
     extractEvaluationCriteria(obj) || extractEvaluationCriteria(fallback);
+  const role = normalizeRelationText(
+    obj.role ??
+      obj.designation ??
+      obj.jobTitle ??
+      obj.job_title ??
+      fallback.role ??
+      "",
+  );
+  const description = String(obj.description ?? obj.desc ?? fallback.description ?? "").trim();
   const rawWeight = obj.weightage ?? obj.weight ?? obj.weightPct ?? fallback.weight ?? "";
   const weight =
     typeof rawWeight === "number" && Number.isFinite(rawWeight)
@@ -156,7 +172,10 @@ export function normalizeKpiDefinition(data, fallback = {}) {
     title: String(title),
     stream: String(stream),
     band: String(band),
+    role: String(role),
+    designation: String(role),
     evaluationCriteria,
+    description,
     weight: String(weight),
   };
 }

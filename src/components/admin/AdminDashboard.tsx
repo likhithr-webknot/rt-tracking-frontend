@@ -53,11 +53,9 @@ import { formatYearMonth } from "../../api/monthly-submissions";
 import { friendlyProxyUnreachableMessage } from "../../api/http";
 import { resolveRoleStatsBucket } from "../../api/employees";
 import {
-  averageRatings,
-  computeBrowniePoints as computeBrowniePointsFromSubmission,
-  computeWeightedScore503515,
-  computeCertificationComponentScore,
-} from "../../utils/submissionScoring";
+  computeEmployeePerformanceScore,
+  computeEmployeeBrowniePoints,
+} from "../../utils/employeePerformanceScore";
 import { computeSubmissionWindowOpen } from "../../utils/submissionWindow";
 
 /* ───── helpers ───── */
@@ -89,50 +87,6 @@ function getDepartmentLabel(emp) {
 
 function isPortalWindowOpen(windowData, at = new Date()) {
   return computeSubmissionWindowOpen(windowData, at);
-}
-
-/**
- * Weighted performance score:
- *   85 % = average of manager KPI ratings for the employee
- *   15 % = average of manager Webknot-value ratings for the employee
- * Returns a 1-5 scale number (rounded to 1 decimal), or null when data is
- * missing.  Falls back to the old ability-score if no manager eval exists.
- */
-function computeEmployeePerformanceScore(emp) {
-  const mgrKpiAvg = averageRatings(emp?.managerKpiRatings);
-  const mgrValueAvg = averageRatings(emp?.managerWebknotValueRatings);
-
-  const certCount = Number(emp?.certCount ?? emp?.certifications?.length ?? 0) || 0;
-  const recCount = Number(emp?.recognitions ?? 0) || 0;
-  const techShowcase = String(emp?.techShowcase ?? "").trim();
-  const certAvg = computeCertificationComponentScore({
-    certificationsCount: certCount,
-    recognitionsCount: recCount,
-    techShowcase,
-  });
-  if (mgrKpiAvg != null || mgrValueAvg != null || certAvg != null) {
-    const weighted = computeWeightedScore503515(mgrKpiAvg, mgrValueAvg, certAvg);
-    return Math.round(Math.min(5, Math.max(1, weighted)) * 10) / 10;
-  }
-
-  /* Fallback: direct ability score from backend */
-  const directRaw = Number(emp?.submissionAbility ?? emp?.abilityScore ?? emp?.avgScore ?? emp?.ability ?? NaN);
-  if (Number.isFinite(directRaw)) return Math.round(Math.min(5, Math.max(1, directRaw)) * 10) / 10;
-  const ratingAvg = Number(emp?.abilityScoreFromRatings ?? emp?.abilityFromRatings ?? emp?.abilityScore ?? NaN);
-  if (Number.isFinite(ratingAvg)) return Math.round(Math.min(5, Math.max(1, ratingAvg)) * 10) / 10;
-  return null;
-}
-
-/**
- * Compute brownie points for an employee:
- *   certifications count + recognitions count + 1 if tech showcase provided
- */
-function computeBrowniePoints(emp) {
-  return computeBrowniePointsFromSubmission({
-    certificationsCount: emp?.certCount,
-    recognitionsCount: emp?.recognitions,
-    techShowcase: emp?.techShowcase,
-  });
 }
 
 function buildBreakdownRows({ employees, ability6m, keySelector, scoreGetter }) {
@@ -247,23 +201,6 @@ function OverviewMetricTile({ icon: Icon, title, value, helper, tone = "slate" }
       </div>
       <div className="mt-2 text-2xl font-semibold tabular-nums text-[rgb(var(--text))]">{value}</div>
       <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{helper}</div>
-    </div>
-  );
-}
-
-function ActionQueueItem({ title, detail, severity = "medium" }) {
-  const severityClass = severity === "high"
-    ? "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/20"
-    : severity === "low"
-      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
-      : "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20";
-  return (
-    <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-3.5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-semibold text-[rgb(var(--text))]">{title}</div>
-        <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${severityClass}`}>{severity}</span>
-      </div>
-      <div className="mt-1.5 text-xs text-[rgb(var(--muted))]">{detail}</div>
     </div>
   );
 }
@@ -470,7 +407,7 @@ export default function AdminDashboard({
         ...merged,
         certCount,
         performanceScore: computeEmployeePerformanceScore(merged),
-        browniePoints: computeBrowniePoints({ ...merged, certCount }),
+        browniePoints: computeEmployeeBrowniePoints({ ...merged, certCount }),
       };
     });
   }, [normalizedEmployees, submissionExtrasByEmployee]);
@@ -834,36 +771,6 @@ export default function AdminDashboard({
     },
   ];
 
-  const actionQueue = (() => {
-    const items = [];
-
-    if (pendingManagerReviews > 0) {
-      items.push({
-        title: "Manager reviews pending",
-        detail: `${pendingManagerReviews} review ${pendingManagerReviews === 1 ? "item is" : "items are"} waiting for manager action.`,
-        severity: pendingManagerReviews > 10 ? "high" : "medium",
-      });
-    }
-
-    for (const row of departmentBreakdown.filter((d) => d.needsIntervention).slice(0, 3)) {
-      items.push({
-        title: `${row.group} needs intervention`,
-        detail: `Score ${row.latestAvg.toFixed(1)} · ${Math.round(row.submissionRate * 100)}% submitted · delta ${formatDelta(row.delta)}`,
-        severity: row.latestAvg < 3.2 || row.submissionRate < 0.4 ? "high" : "medium",
-      });
-    }
-
-    if (!items.length) {
-      items.push({
-        title: "No urgent blockers",
-        detail: "All primary metrics are stable. Continue with cycle monitoring and coaching cadence.",
-        severity: "low",
-      });
-    }
-
-    return items.slice(0, 4);
-  })();
-
   /* ───── Report generator ───── */
   function handleGenerateReport() {
     const ts = new Date().toISOString();
@@ -994,8 +901,7 @@ export default function AdminDashboard({
         </div>
       ) : null}
 
-      <section className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-        <div className="xl:col-span-8 rt-panel p-6">
+      <section className="rt-panel p-6">
           <SectionHeader
             icon={Activity}
             iconClassName="bg-cyan-500/10 text-cyan-600 dark:text-cyan-300"
@@ -1014,26 +920,6 @@ export default function AdminDashboard({
               />
             ))}
           </div>
-        </div>
-
-        <div className="xl:col-span-4 rt-panel p-6">
-          <SectionHeader
-            icon={Shield}
-            iconClassName="bg-rose-500/10 text-rose-700 dark:text-rose-300"
-            title="Action Queue"
-            subtitle="Priority interventions to close this cycle"
-          />
-          <div className="space-y-2.5">
-            {actionQueue.map((item) => (
-              <ActionQueueItem
-                key={item.title}
-                title={item.title}
-                detail={item.detail}
-                severity={item.severity}
-              />
-            ))}
-          </div>
-        </div>
       </section>
 
       <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">

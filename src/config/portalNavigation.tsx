@@ -12,6 +12,7 @@ import {
   Sparkles,
   StickyNote,
   Target,
+  TrendingUp,
   UserCircle2,
   Users,
 } from "lucide-react";
@@ -64,6 +65,12 @@ export const ADMIN_NAV_GROUPS = [
         icon: <ClipboardCheck size={20} />,
         label: "Monthly reviews",
         description: "Approve or send back submissions",
+      },
+      {
+        id: "performance",
+        icon: <TrendingUp size={20} />,
+        label: "Performance scores",
+        description: "All-time review score averages",
       },
     ],
   },
@@ -294,6 +301,11 @@ export const ADMIN_TAB_COPY = {
   directory: {
     title: "Team list",
     subtitle: "View and update employee profiles, bands, and reporting lines.",
+    sectionLabel: "People & reviews",
+  },
+  performance: {
+    title: "Performance scores",
+    subtitle: "All-time average scores from completed monthly manager reviews.",
     sectionLabel: "People & reviews",
   },
   projects: {

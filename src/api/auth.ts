@@ -629,13 +629,17 @@ export async function seedDevQaUsers({ signal } = {} as ApiOptions) {
     method: "POST",
     signal,
     credentials: "include",
+    headers: withCsrfHeaders({ Accept: "application/json" }),
   });
+  const payload = await safeJsonParse(res);
   if (!res.ok) {
-    const err = new Error(await readError(res));
+    const err = new Error(
+      String(payload?.message ?? (await readError(res)) ?? "Could not seed QA users"),
+    );
     err.status = res.status;
     throw err;
   }
-  return res.json().catch(() => ({}));
+  return payload?.data != null ? { ...payload, data: payload.data } : payload;
 }
 
 /** Email + password login (JWT + cookies). */

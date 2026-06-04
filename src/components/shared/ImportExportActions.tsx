@@ -33,7 +33,7 @@ export default function ImportExportActions({
     <div className={["rt-toolbar", className].filter(Boolean).join(" ")} role="group" aria-label="Import and export">
       {useHiddenInput ? (
         <label className={["rt-toolbar-btn cursor-pointer", disabled ? "pointer-events-none opacity-50" : ""].join(" ")}>
-          <Upload size={15} strokeWidth={2} />
+          <Download size={15} strokeWidth={2} />
           {importLabel}
           <input
             type="file"
@@ -53,13 +53,13 @@ export default function ImportExportActions({
           onClick={onImport}
           className="rt-toolbar-btn"
         >
-          <Upload size={15} strokeWidth={2} />
+          <Download size={15} strokeWidth={2} />
           {importLabel}
         </button>
       )}
       <span className="rt-toolbar-divider" aria-hidden />
       <button type="button" disabled={disabled || !onExport} onClick={onExport} className="rt-toolbar-btn">
-        <Download size={15} strokeWidth={2} />
+        <Upload size={15} strokeWidth={2} />
         {exportLabel}
       </button>
       {children ? (

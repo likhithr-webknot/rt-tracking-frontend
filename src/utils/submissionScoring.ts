@@ -1,10 +1,12 @@
 import type { ApiOptions } from "../types/api-options";
+import {
+  getCertificationCriteria,
+  getResolvedScoreWeights,
+  LEGACY_RTP_SCORE_WEIGHTS,
+} from "./scoringSettings";
 
-export const RTP_SCORE_WEIGHTS = {
-  kpi: 0.5,
-  values: 0.35,
-  certifications: 0.15,
-} as const;
+/** @deprecated Use {@link getResolvedScoreWeights} from app settings. */
+export const RTP_SCORE_WEIGHTS = LEGACY_RTP_SCORE_WEIGHTS;
 
 export const PROMOTION_MIN_SCORE = 4.0;
 
@@ -47,28 +49,30 @@ export function computeCertificationComponentScore({
   certificationsCount = 0,
   recognitionsCount = 0,
   techShowcase = "",
+  criteria = null,
 } = {} as ApiOptions) {
+  const rule = criteria ?? getCertificationCriteria();
   const certs = Math.max(0, Number.parseInt(String(certificationsCount ?? 0), 10) || 0);
   const recognitions = Math.max(0, Number.parseInt(String(recognitionsCount ?? 0), 10) || 0);
   const hasTechShowcase = String(techShowcase ?? "").trim().length > 0;
-  let score = certs * 0.5 + recognitions * 0.25;
-  if (hasTechShowcase) score = Math.max(score, 2);
+  let score = certs * rule.pointsPerCertification + recognitions * rule.pointsPerRecognition;
+  if (hasTechShowcase) score = Math.max(score, rule.techShowcaseComponentFloor);
   return clampScore(Math.min(5, score), 0, 5);
 }
 
 /**
- * RTP final score: 50% KPI + 35% values + 15% certifications (1–5 scale).
+ * Weighted final score (1–5): KPI + Webknot values + certifications component.
+ * Weights come from Admin → Settings unless overridden.
  */
-export function computeWeightedScore503515(kpiAverage, valueAverage, certificationAverage) {
+export function computeWeightedScore503515(kpiAverage, valueAverage, certificationAverage, weights = null) {
   const kpi = toFiniteNumber(kpiAverage);
   const values = toFiniteNumber(valueAverage);
   const certs = toFiniteNumber(certificationAverage);
   if (kpi == null && values == null && certs == null) return null;
 
+  const w = weights ?? getResolvedScoreWeights();
   const weighted =
-    (kpi ?? 0) * RTP_SCORE_WEIGHTS.kpi +
-    (values ?? 0) * RTP_SCORE_WEIGHTS.values +
-    (certs ?? 0) * RTP_SCORE_WEIGHTS.certifications;
+    (kpi ?? 0) * w.kpi + (values ?? 0) * w.values + (certs ?? 0) * w.certifications;
 
   return round1(clampScore(weighted, 1, 5));
 }

@@ -109,7 +109,7 @@ export default function EmployeeOnboardingPage({ onComplete }) {
     const fromCatalog = bands
       .map((r) => String(r?.code ?? r?.label ?? "").trim())
       .filter(Boolean);
-    const fromEmps = ["B4", "B5", "B6"];
+    const fromEmps = ["B4", "B4L", "B4H", "B5", "B5H", "B5L", "B6"];
     return Array.from(new Set([...fromCatalog, ...fromEmps])).sort();
   }, [bands]);
 

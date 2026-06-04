@@ -5,16 +5,19 @@ import RootRouter from "./RootRouter";
 import { queryClient } from "./queryClient";
 import "./index.css";
 
+function syncThemeColorMeta(isDark) {
+  const meta = document.querySelector('meta[name="theme-color"]:not([media])');
+  if (meta) meta.setAttribute("content", isDark ? "#0a0c14" : "#f5f7fa");
+}
+
 function applyInitialTheme() {
   try {
     const saved = window.localStorage.getItem("rt_theme");
     const root = document.documentElement;
     root.classList.remove("dark", "light");
-    if (saved === "dark") {
-      root.classList.add("dark");
-    } else {
-      root.classList.add("light");
-    }
+    const isDark = saved === "dark";
+    root.classList.add(isDark ? "dark" : "light");
+    syncThemeColorMeta(isDark);
   } catch {
     void 0;
   }

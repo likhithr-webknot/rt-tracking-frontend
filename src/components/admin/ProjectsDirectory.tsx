@@ -11,6 +11,7 @@ import {
   CalendarOff,
 } from "lucide-react";
 import ImportExportActions from "../shared/ImportExportActions";
+import CursorPagination from "../shared/CursorPagination";
 import { fetchProjects, normalizeProjects } from "../../api/projects";
 import { fetchEmployees, normalizeEmployees } from "../../api/employees";
 import { useQuery } from "@tanstack/react-query";
@@ -31,6 +32,7 @@ import {
 } from "../../utils/projectsCatalog";
 
 const SEED_CSV_URL = "/sample-csv/projects-directory.csv";
+const PAGE_SIZE_OPTIONS = [10, 20, 50];
 
 function rowFromApiProject(p) {
   const desc = String(p?.description || "");
@@ -83,6 +85,8 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
   const [catalog, setCatalog] = useState(() => loadProjectsCatalog());
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [seeded, setSeeded] = useState(false);
 
   const [formOpen, setFormOpen] = useState(false);
@@ -172,6 +176,29 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
         String(p.am || "").toLowerCase().includes(q),
     );
   }, [projects, search, statusFilter]);
+
+  const totalFiltered = filtered.length;
+  const maxPage = Math.max(1, Math.ceil(totalFiltered / pageSize) || 1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter, pageSize]);
+
+  useEffect(() => {
+    if (page > maxPage) setPage(maxPage);
+  }, [page, maxPage]);
+
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
+
+  const rangeLabel = useMemo(() => {
+    if (!totalFiltered) return "No projects";
+    const start = (page - 1) * pageSize + 1;
+    const end = Math.min(page * pageSize, totalFiltered);
+    return `Showing ${start}–${end} of ${totalFiltered}`;
+  }, [page, pageSize, totalFiltered]);
 
   const stats = useMemo(() => {
     const active = projects.filter((p) => p.listedActive).length;
@@ -476,7 +503,7 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
               </tr>
             </thead>
             <tbody>
-              {filtered.map((p) => (
+              {paginated.map((p) => (
                 <tr key={p.id} className="border-b border-[rgb(var(--border))] hover:bg-[rgb(var(--surface-2)/.5)]">
                   <td className="px-4 py-3 font-medium text-[rgb(var(--text))]">{p.name}</td>
                   <td className="px-4 py-3 text-[rgb(var(--muted))]">{formatProjectDate(p.startDate)}</td>
@@ -525,6 +552,53 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
             </tbody>
           </table>
         </div>
+        {totalFiltered > 0 ? (
+          <div className="flex flex-col gap-3 border-t border-[rgb(var(--border))] px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs text-[rgb(var(--muted))]">{rangeLabel}</div>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <label className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[rgb(var(--muted))]">
+                Rows
+                <select
+                  value={String(pageSize)}
+                  onChange={(e) => {
+                    const next = Number.parseInt(e.target.value, 10);
+                    if (Number.isFinite(next) && next > 0) setPageSize(next);
+                  }}
+                  className="rt-input h-9 min-h-0 rounded-lg px-2 py-1 text-[11px] font-semibold normal-case text-[rgb(var(--text))]"
+                  aria-label="Rows per page"
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={String(size)}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={() => setPage(1)}
+                disabled={page <= 1 || apiLoading}
+                className={[
+                  "rt-btn-ghost rt-btn-sm",
+                  page <= 1 || apiLoading ? "opacity-50 cursor-not-allowed" : "",
+                ].join(" ")}
+              >
+                First
+              </button>
+              <CursorPagination
+                canPrev={page > 1}
+                canNext={page < maxPage}
+                onPrev={() => setPage((p) => Math.max(1, p - 1))}
+                onNext={() => setPage((p) => Math.min(maxPage, p + 1))}
+                onPageChange={(p) => setPage(p)}
+                page={page}
+                maxPage={maxPage}
+                loading={apiLoading}
+                pageInputLabel="Page"
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <ModalOverlay
