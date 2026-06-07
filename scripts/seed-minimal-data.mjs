@@ -41,7 +41,7 @@ const MINIMAL_USERS = [
     role: "Employee",
     designation: "Software Engineer",
     bandCode: "B7L",
-    department: "Developer",
+    department: "Development",
   },
 ];
 
@@ -700,10 +700,10 @@ async function fetchWebknotValues(client) {
 }
 
 const MINIMAL_QA_KPIS = [
-  { title: "QA Delivery Quality", weight: 25 },
-  { title: "QA Execution Timeliness", weight: 25 },
-  { title: "QA Technical Excellence", weight: 25 },
-  { title: "QA Stakeholder Impact", weight: 25 },
+  { title: "Delivery & Sprint Commitment", weight: 25 },
+  { title: "Code Quality & Peer Reviews", weight: 25 },
+  { title: "Technical Problem Solving", weight: 25 },
+  { title: "Collaboration & Communication", weight: 25 },
 ];
 
 const MINIMAL_QA_VALUES = [

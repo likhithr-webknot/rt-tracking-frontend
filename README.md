@@ -1,16 +1,38 @@
-# React + Vite
+# Pulse (RT Tracking Frontend)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite UI for employee reviews, manager evaluations, and admin workflows. Talks to the **Webtrak** Spring Boot API.
 
-Currently, two official plugins are available:
+## Quick start
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+**Prerequisites:** Node 20+, Java 17, PostgreSQL, and the [webtrak](https://github.com/your-org/webtrak) backend cloned as a sibling folder.
 
-## React Compiler
+```bash
+cp .env.example .env
+npm install
+npm run setup:check   # verifies backend is reachable
+npm run dev           # http://localhost:3000
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Full setup for a **new machine** (database, backend `.env`, QA seeding, LAN access): **[docs/LOCAL_SETUP.md](./docs/LOCAL_SETUP.md)**
 
-## Expanding the ESLint configuration
+## Scripts
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Dev server on port 3000 (proxies `/api` → Webtrak) |
+| `npm run build` | Production build |
+| `npm run preview` | Preview production build |
+| `npm run setup:check` | Health check (Node, deps, backend) |
+| `npm run seed:minimal` | Seed QA users/project/KPIs (needs admin env vars) |
+
+## Environment
+
+Copy `.env.example` → `.env`. Key variables:
+
+- `VITE_API_DEV_PROXY` — Webtrak URL (default `http://localhost:8080`)
+- `VITE_ENABLE_DEV_QA=true` — QA seed button on login page
+- `VITE_ADMIN_EMAILS` — comma-separated super-admin emails
+
+## Stack
+
+- React 19, Vite 7, Tailwind 4, React Router 7, TanStack Query

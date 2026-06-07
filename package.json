@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
+    "setup:check": "node scripts/check-local-setup.mjs",
     "seed:huge": "node scripts/seed-huge-data.mjs",
     "seed:minimal": "node scripts/seed-minimal-data.mjs",
     "build:hr-csv": "node scripts/build-hr-csv-samples.mjs"

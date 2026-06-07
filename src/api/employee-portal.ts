@@ -24,6 +24,44 @@ function normalizeCursorToken(value) {
   return null;
 }
 
+function normalizeStreamKeyForQuery(value: unknown) {
+  const key = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (!key) return "";
+  if (
+    key === "development" ||
+    key === "developer" ||
+    key === "developers" ||
+    key === "dev" ||
+    key === "engineering" ||
+    key === "backend" ||
+    key === "frontend" ||
+    key === "fullstack" ||
+    key === "mobile"
+  ) {
+    return "development";
+  }
+  return key;
+}
+
+/** Backend KPI filters use exact department strings; try common aliases (e.g. Development vs Developer). */
+function streamQueryLabels(stream: unknown) {
+  const raw = String(stream ?? "").trim();
+  if (!raw) return [];
+  const labels = new Set<string>([raw]);
+  if (normalizeStreamKeyForQuery(raw) === "development") {
+    labels.add("Development");
+    labels.add("Developer");
+  }
+  return [...labels];
+}
+
+function countCursorItems(data: unknown) {
+  return normalizeCursorPage(data).items.length;
+}
+
 export function normalizeCursorPage(data) {
   const root = unwrapRoot(data);
   const items =
@@ -63,42 +101,56 @@ export async function fetchEmployeePortalKpiDefinitions({
   signal,
 } = {} as ApiOptions) {
   const auth = getAuthHeader();
-  const qs = new URLSearchParams();
-  if (limit != null) qs.set("limit", String(limit));
-  if (cursor) qs.set("offset", String(cursor));
-  const emp = sanitizeEmployeeIdForApi(employeeId);
-  if (emp) qs.set("employeeId", emp);
-  if (band) qs.set("band", String(band));
-  if (stream) {
-    qs.set("department", String(stream));
-    qs.set("stream", String(stream));
-  }
-  if (band && stream) {
-    qs.set("limit", String(Math.max(Number(limit) || 0, 100)));
-  }
-  const suffix = qs.toString() ? `?${qs.toString()}` : "";
   const headers = auth ? { Authorization: auth } : undefined;
-  const listPaths = [
+  const emp = sanitizeEmployeeIdForApi(employeeId);
+  const pageLimit =
+    band && stream ? Math.max(Number(limit) || 0, 100) : limit;
+  const streamLabels = stream ? streamQueryLabels(stream) : [null];
+  const listPaths = (suffix: string) => [
     `/api/v1/kpi-directions${suffix}`,
     `/api/v1/list-kpi-directions${suffix}`,
     `/api/v1/kpi-definitions${suffix}`,
     `/api/v1/list-kpi-definitions${suffix}`,
   ];
 
-  let lastErr = null;
-  for (const path of listPaths) {
-    const res = await fetch(buildApiUrl(path), {
-      signal,
-      credentials: "include",
-      headers,
-    });
-    if (res.ok) return res.json().catch(() => ({}));
-    if (res.status === 404 || res.status === 405) {
-      lastErr = await toHttpError(res);
-      continue;
+  let lastErr: Error | null = null;
+  let lastEmpty: unknown = null;
+
+  for (const streamLabel of streamLabels) {
+    const qs = new URLSearchParams();
+    if (pageLimit != null) qs.set("limit", String(pageLimit));
+    if (cursor) qs.set("offset", String(cursor));
+    if (emp) qs.set("employeeId", emp);
+    if (band) qs.set("band", String(band));
+    if (streamLabel) {
+      qs.set("department", String(streamLabel));
+      qs.set("stream", String(streamLabel));
     }
-    throw await toHttpError(res);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+
+    for (const path of listPaths(suffix)) {
+      const res = await fetch(buildApiUrl(path), {
+        signal,
+        credentials: "include",
+        headers,
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (countCursorItems(data) > 0 || streamLabel === streamLabels[streamLabels.length - 1]) {
+          return data;
+        }
+        lastEmpty = data;
+        break;
+      }
+      if (res.status === 404 || res.status === 405) {
+        lastErr = await toHttpError(res);
+        continue;
+      }
+      throw await toHttpError(res);
+    }
   }
+
+  if (lastEmpty != null) return lastEmpty;
   throw lastErr || new Error("KPI definitions list not found.");
 }
 

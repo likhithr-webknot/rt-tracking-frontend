@@ -23,9 +23,12 @@ import {
   PieChart,
 } from "lucide-react";
 import {
+  EMAIL_NOTIFICATION_DEFAULTS,
+  fetchEmailNotificationSettings,
+  saveEmailNotificationSettings,
   sendMonthlyWorkflowReminders,
   sendSubmissionWindowClosingReminders,
-} from "../../api/portal-notifications";
+} from "../../api/email-notification-settings";
 import { fetchDriveStorageStats } from "../../api/webknot-drive";
 import Toast from "../shared/Toast";
 import ConfirmDialog from "../shared/ConfirmDialog";
@@ -238,6 +241,10 @@ export default function SettingsPanel({
 
   const [settingKeyToDelete, setSettingKeyToDelete] = useState(null);
   const [emailReminderBusy, setEmailReminderBusy] = useState("");
+  const [emailConfig, setEmailConfig] = useState(() => ({ ...EMAIL_NOTIFICATION_DEFAULTS }));
+  const [emailConfigLoading, setEmailConfigLoading] = useState(true);
+  const [emailConfigSaving, setEmailConfigSaving] = useState(false);
+  const [emailConfigDirty, setEmailConfigDirty] = useState(false);
 
   const globalIsOpen = useMemo(() => isWindowOpenLocal(globalWin), [globalWin]);
   const empIsOpen = useMemo(() => isWindowOpenLocal(empWin), [empWin]);
@@ -278,6 +285,55 @@ export default function SettingsPanel({
     return () => { alive = false; controller.abort(); };
   }, [refreshAllSubmissionWindows]);
 
+  useEffect(() => {
+    let alive = true;
+    const controller = new AbortController();
+    (async () => {
+      setEmailConfigLoading(true);
+      try {
+        const config = await fetchEmailNotificationSettings({ signal: controller.signal });
+        if (alive) {
+          setEmailConfig(config);
+          setEmailConfigDirty(false);
+        }
+      } catch {
+        if (alive) setEmailConfig({ ...EMAIL_NOTIFICATION_DEFAULTS });
+      } finally {
+        if (alive) setEmailConfigLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, []);
+
+  const updateEmailConfig = useCallback((key, value) => {
+    setEmailConfig((prev) => ({ ...(prev || {}), [key]: value }));
+    setEmailConfigDirty(true);
+  }, []);
+
+  const saveEmailConfig = useCallback(async () => {
+    setEmailConfigSaving(true);
+    try {
+      const saved = await saveEmailNotificationSettings(emailConfig);
+      setEmailConfig(saved);
+      setEmailConfigDirty(false);
+      showToastMsg({
+        title: "Email settings saved",
+        message: "Notification emails will follow these rules on the server.",
+      });
+    } catch (err) {
+      showToastMsg({
+        title: "Could not save email settings",
+        message: err?.message || "Please try again.",
+        tone: "error",
+      });
+    } finally {
+      setEmailConfigSaving(false);
+    }
+  }, [emailConfig]);
+
   function showToastMsg(t) { setToast(t); }
 
   /* ── Window action helpers ── */
@@ -287,7 +343,12 @@ export default function SettingsPanel({
       const res = globalIsOpen ? await closeSubmissionWindowNow() : await openSubmissionWindowNow();
       setGlobalWin(parseSettingsWindowFields(res));
       await refreshAllSubmissionWindows();
-      showToastMsg({ title: globalIsOpen ? "Global window closed" : "Global window opened", message: "Updated." });
+      showToastMsg({
+        title: globalIsOpen ? "Global window closed" : "Global window opened",
+        message: globalIsOpen
+          ? "Updated. Close emails send automatically when enabled in Email reminders."
+          : "Updated. Open emails send automatically to employees when enabled in Email reminders.",
+      });
     } catch (err) {
       showToastMsg({ title: "Failed", message: err?.message || "Please try again." });
     } finally { setGlobalBusy(false); }
@@ -993,19 +1054,6 @@ export default function SettingsPanel({
                 onChange={(v) => updateAdminSetting("showEmploymentOnCards", v)}
                 label="Show band & designation on directory cards"
               />
-              <div>
-                <FieldLabel hint="0 disables reminders">Manager review reminder (days before cycle end)</FieldLabel>
-                <input
-                  type="number"
-                  min={0}
-                  max={30}
-                  value={Number(adminSettings?.managerReviewReminderDays ?? ADMIN_SETTINGS_DEFAULTS.managerReviewReminderDays)}
-                  onChange={(e) =>
-                    updateAdminSetting("managerReviewReminderDays", Number.parseInt(String(e.target.value || "0"), 10) || 0)
-                  }
-                  className="rt-input text-sm max-w-[8rem]"
-                />
-              </div>
             </div>
           </SectionCard>
         </SettingsGroup>
@@ -1182,70 +1230,194 @@ export default function SettingsPanel({
 
       <SectionCard
         icon={Mail}
-        title="Email reminders"
-        description="Notify people about the monthly RT sheet and pending reviews (requires SMTP in Webtrak)"
+        title="Email notifications"
+        description="Automatic and manual emails for submission windows and monthly review workflow"
       >
-        <p className="text-sm text-[rgb(var(--muted))] leading-relaxed">
-          Emails are sent from the Webtrak server using <code className="text-xs">SMTP_USERNAME</code> /{" "}
-          <code className="text-xs">SMTP_PASSWORD</code> in your backend <code className="text-xs">.env</code>.
-          Open the global submission window first so people know the closing date.
-        </p>
-        <div className="flex flex-wrap gap-3 pt-2">
-          <button
-            type="button"
-            className="rt-btn-primary text-sm"
-            disabled={Boolean(emailReminderBusy)}
-            onClick={async () => {
-              setEmailReminderBusy("closing");
-              try {
-                const res = await sendSubmissionWindowClosingReminders();
-                const data = res?.data ?? res;
-                setToast({
-                  title: "RT sheet reminders sent",
-                  message: `Emailed ${data?.sent ?? 0} people. Skipped ${data?.skippedAlreadySubmitted ?? 0} who already submitted.`,
-                });
-              } catch (err) {
-                setToast({
-                  title: "Email failed",
-                  message: err?.message || "Could not send reminders. Check SMTP settings on the server.",
-                  tone: "error",
-                });
-              } finally {
-                setEmailReminderBusy("");
-              }
-            }}
-          >
-            {emailReminderBusy === "closing" ? "Sending…" : "Remind: RT sheet closing"}
-          </button>
-          <button
-            type="button"
-            className="rt-btn-secondary text-sm"
-            disabled={Boolean(emailReminderBusy)}
-            onClick={async () => {
-              setEmailReminderBusy("workflow");
-              try {
-                await sendMonthlyWorkflowReminders();
-                setToast({
-                  title: "Workflow reminders sent",
-                  message: "Managers and HR were emailed about pending monthly reviews.",
-                });
-              } catch (err) {
-                setToast({
-                  title: "Email failed",
-                  message: err?.message || "Could not send workflow reminders.",
-                  tone: "error",
-                });
-              } finally {
-                setEmailReminderBusy("");
-              }
-            }}
-          >
-            {emailReminderBusy === "workflow" ? "Sending…" : "Remind: pending manager reviews"}
-          </button>
-        </div>
-        <p className="text-xs text-[rgb(var(--muted))]">
-          Cron (optional): <code className="text-[11px]">GET /api/v1/monthly-submission-reminders</code> on the server.
-        </p>
+        {emailConfigLoading ? (
+          <div className="text-sm text-[rgb(var(--muted))] animate-pulse py-4 text-center">Loading email settings…</div>
+        ) : (
+          <>
+            <SettingsCallout tone="info">
+              Emails are sent from Webtrak using <code className="text-xs">SMTP_USERNAME</code> /{" "}
+              <code className="text-xs">SMTP_PASSWORD</code> in the backend <code className="text-xs">.env</code>.
+              In non-production environments, mail is redirected to the SMTP account for safety.
+            </SettingsCallout>
+
+            <div className="space-y-4 pt-2">
+              <Toggle
+                checked={emailConfig?.enabled ?? true}
+                onChange={(v) => updateEmailConfig("enabled", v)}
+                label="Enable all submission emails"
+              />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                <Toggle
+                  checked={emailConfig?.autoSendOnWindowOpen ?? true}
+                  onChange={(v) => updateEmailConfig("autoSendOnWindowOpen", v)}
+                  label="Auto-email when global window opens"
+                />
+                <Toggle
+                  checked={emailConfig?.autoSendOnWindowClose ?? true}
+                  onChange={(v) => updateEmailConfig("autoSendOnWindowClose", v)}
+                  label="Auto-email when global window closes"
+                />
+                <Toggle
+                  checked={emailConfig?.closingReminderEnabled ?? true}
+                  onChange={(v) => updateEmailConfig("closingReminderEnabled", v)}
+                  label="Closing deadline reminders"
+                />
+                <Toggle
+                  checked={emailConfig?.workflowReminderEnabled ?? true}
+                  onChange={(v) => updateEmailConfig("workflowReminderEnabled", v)}
+                  label="Pending manager/admin workflow reminders"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <FieldLabel hint="Used by scheduled cron and manual closing reminders">Days before window closes</FieldLabel>
+                  <input
+                    type="number"
+                    min={0}
+                    max={14}
+                    value={Number(emailConfig?.closingReminderDaysBeforeEnd ?? 3)}
+                    onChange={(e) =>
+                      updateEmailConfig(
+                        "closingReminderDaysBeforeEnd",
+                        Number.parseInt(String(e.target.value || "0"), 10) || 0,
+                      )
+                    }
+                    className="rt-input text-sm max-w-[8rem]"
+                  />
+                </div>
+                <div>
+                  <FieldLabel hint="Days after employee submits before managers are nudged">Manager review reminder (days)</FieldLabel>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={Number(emailConfig?.managerReviewReminderDaysAfterSubmit ?? 3)}
+                    onChange={(e) =>
+                      updateEmailConfig(
+                        "managerReviewReminderDaysAfterSubmit",
+                        Number.parseInt(String(e.target.value || "3"), 10) || 3,
+                      )
+                    }
+                    className="rt-input text-sm max-w-[8rem]"
+                  />
+                </div>
+              </div>
+
+              <div className="border-t border-[rgb(var(--border))] pt-4 space-y-3">
+                <div className="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                  Workflow emails
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <Toggle
+                    checked={emailConfig?.employeeSubmitConfirmationEnabled ?? true}
+                    onChange={(v) => updateEmailConfig("employeeSubmitConfirmationEnabled", v)}
+                    label="Employee submit confirmation"
+                  />
+                  <Toggle
+                    checked={emailConfig?.employeeSubmitToManagerEnabled ?? true}
+                    onChange={(v) => updateEmailConfig("employeeSubmitToManagerEnabled", v)}
+                    label="Employee submit → manager"
+                  />
+                  <Toggle
+                    checked={emailConfig?.managerSubmitConfirmationEnabled ?? true}
+                    onChange={(v) => updateEmailConfig("managerSubmitConfirmationEnabled", v)}
+                    label="Manager submit confirmation"
+                  />
+                  <Toggle
+                    checked={emailConfig?.managerSubmitToAdminEnabled ?? true}
+                    onChange={(v) => updateEmailConfig("managerSubmitToAdminEnabled", v)}
+                    label="Manager submit → admin/HR"
+                  />
+                  <Toggle
+                    checked={emailConfig?.adminApproveToEmployeeEnabled ?? true}
+                    onChange={(v) => updateEmailConfig("adminApproveToEmployeeEnabled", v)}
+                    label="Admin approve → employee"
+                  />
+                  <Toggle
+                    checked={emailConfig?.adminRejectToEmployeeEnabled ?? true}
+                    onChange={(v) => updateEmailConfig("adminRejectToEmployeeEnabled", v)}
+                    label="Admin/manager return → employee"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-3 pt-2">
+                <button
+                  type="button"
+                  className="rt-btn-primary text-sm"
+                  disabled={emailConfigSaving || !emailConfigDirty}
+                  onClick={() => saveEmailConfig().catch(() => {})}
+                >
+                  {emailConfigSaving ? "Saving…" : "Save email settings"}
+                </button>
+                <button
+                  type="button"
+                  className="rt-btn-secondary text-sm"
+                  disabled={Boolean(emailReminderBusy)}
+                  onClick={async () => {
+                    setEmailReminderBusy("closing");
+                    try {
+                      const res = await sendSubmissionWindowClosingReminders();
+                      const data = res?.data ?? res;
+                      setToast({
+                        title: "RT sheet reminders sent",
+                        message: `Emailed ${data?.sent ?? 0} people. Skipped ${data?.skippedAlreadySubmitted ?? 0} who already submitted.`,
+                      });
+                    } catch (err) {
+                      setToast({
+                        title: "Email failed",
+                        message: err?.message || "Could not send reminders. Check SMTP settings on the server.",
+                        tone: "error",
+                      });
+                    } finally {
+                      setEmailReminderBusy("");
+                    }
+                  }}
+                >
+                  {emailReminderBusy === "closing" ? "Sending…" : "Send closing reminders now"}
+                </button>
+                <button
+                  type="button"
+                  className="rt-btn-secondary text-sm"
+                  disabled={Boolean(emailReminderBusy)}
+                  onClick={async () => {
+                    setEmailReminderBusy("workflow");
+                    try {
+                      await sendMonthlyWorkflowReminders();
+                      setToast({
+                        title: "Workflow reminders sent",
+                        message: "Managers and HR were emailed about pending monthly reviews.",
+                      });
+                    } catch (err) {
+                      setToast({
+                        title: "Email failed",
+                        message: err?.message || "Could not send workflow reminders.",
+                        tone: "error",
+                      });
+                    } finally {
+                      setEmailReminderBusy("");
+                    }
+                  }}
+                >
+                  {emailReminderBusy === "workflow" ? "Sending…" : "Send workflow reminders now"}
+                </button>
+              </div>
+
+              <p className="text-xs text-[rgb(var(--muted))] leading-relaxed">
+                Optional cron on the server:
+                <br />
+                <code className="text-[11px]">GET /api/v1/submission-window-reminders</code> — closing reminders when within the days-before threshold
+                <br />
+                <code className="text-[11px]">GET /api/v1/monthly-submission-reminders</code> — pending manager/admin reviews
+              </p>
+            </div>
+          </>
+        )}
       </SectionCard>
         </SettingsGroup>
 

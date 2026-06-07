@@ -315,6 +315,11 @@ function toRequestPayload(payload) {
   copyIfPresent(source, next, "adminComments");
   copyIfPresent(source, next, "adminNotes");
   copyIfPresent(source, next, "techShowcase", { asString: true });
+  if (Array.isArray(source.projectIds) && source.projectIds.length) {
+    next.projectIds = source.projectIds
+      .map((id) => String(id || "").trim())
+      .filter(Boolean);
+  }
 
   return next;
 }

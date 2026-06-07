@@ -67,6 +67,7 @@ export default defineConfig(({ mode }) => {
     plugins: [react(), tailwindcss()],
     server: {
       port: 3000,
+      host: true,
       proxy: {
         // Spring Security oauth2 callbacks have to round-trip to the backend.
         "/oauth2": { ...base },
@@ -107,6 +108,10 @@ export default defineConfig(({ mode }) => {
         // 404s because the backend has no `/admin` etc. endpoints — its API
         // lives under `/api/v1/...`.
       },
+    },
+    preview: {
+      port: 4173,
+      host: true,
     },
     build: {
       target: "es2020",

@@ -76,7 +76,8 @@ import {
 import { listActiveProjectsForEmployees } from "../../utils/projectsCatalog";
 import { getAdminSettings, getEmployeeSettings } from "../../utils/appSettings.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
-import { formatPerformanceRating, performanceRatingLabel, performanceRatingScaleText } from "../../utils/ratingLabels";
+import { formatPerformanceRating, performanceRatingLabel, performanceRatingScaleText, parseIntegerPerformanceRating } from "../../utils/ratingLabels";
+import { IntegerPerformanceRatingSelect } from "../shared/PerformanceRatingField";
 import { extractWebtrakBandCode, getPromotionPreview } from "../../utils/careerPromotion";
 import ResubmissionPlaybook from "../shared/ResubmissionPlaybook";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
@@ -148,7 +149,13 @@ function normalizeBandKey(value) {
 function extractBandFromProfile(raw) {
   if (raw == null) return null;
   if (typeof raw === "object") {
-    const nested = raw.name ?? raw.designation ?? raw.code ?? raw.bandCode ?? raw.label;
+    const nested =
+      raw.bandName ??
+      raw.name ??
+      raw.designation ??
+      raw.code ??
+      raw.bandCode ??
+      raw.label;
     return extractWebtrakBandCode(nested) || (nested ? String(nested).trim() : null);
   }
   return extractWebtrakBandCode(raw) || String(raw).trim() || null;
@@ -211,7 +218,7 @@ function normalizeStreamKey(value) {
   if (key === "uiux" || key === "uxui" || key === "ui" || key === "ux" || key === "design" || key === "uidesign" || key === "uxdesign") {
     return "uiux";
   }
-  if (key === "development" || key === "dev" || key === "backend" || key === "frontend" || key === "mobile" || key === "fullstack" || key === "engineering") {
+  if (key === "development" || key === "dev" || key === "developer" || key === "developers" || key === "backend" || key === "frontend" || key === "mobile" || key === "fullstack" || key === "engineering") {
     return "development";
   }
   return key;
@@ -386,7 +393,9 @@ function normalizeKpiRatingsForState(input) {
       if (!id) continue;
       const num = Number.parseFloat(String(item.rating ?? item.value ?? item.score ?? ""));
       if (!Number.isFinite(num)) continue;
-      out[id] = Math.round(num * 10) / 10;
+      const integer = parseIntegerPerformanceRating(Math.round(num));
+      if (integer == null) continue;
+      out[id] = integer;
     }
     return out;
   }
@@ -397,7 +406,9 @@ function normalizeKpiRatingsForState(input) {
       if (!id) continue;
       const num = typeof v === "number" ? v : Number.parseFloat(String(v ?? ""));
       if (!Number.isFinite(num)) continue;
-      out[id] = Math.round(num * 10) / 10;
+      const integer = parseIntegerPerformanceRating(Math.round(num));
+      if (integer == null) continue;
+      out[id] = integer;
     }
     return out;
   }
@@ -420,7 +431,9 @@ function normalizeWebknotValueRatingsForState(input) {
     if (!Number.isFinite(parsed)) return;
     const rounded = Math.round(parsed * 10) / 10;
     if (rounded < 1 || rounded > 5) return;
-    out[id] = rounded;
+    const integer = parseIntegerPerformanceRating(Math.round(rounded));
+    if (integer == null) return;
+    out[id] = integer;
   };
 
   if (Array.isArray(input)) {
@@ -486,6 +499,7 @@ function buildMonthlySubmissionPayload({
   selectedValues,
   valueComments,
   recognitionsCount,
+  projectIds = null,
   submissionType = "EMPLOYEE_MONTHLY_SUBMISSION",
   actorRole = "EMPLOYEE",
   subjectEmployeeId = null,
@@ -544,6 +558,12 @@ function buildMonthlySubmissionPayload({
         ? recognitionsCount
         : Number.parseInt(String(recognitionsCount || "0"), 10) || 0,
   };
+  const normalizedProjectIds = projectIds instanceof Set
+    ? [...projectIds].map((id) => String(id || "").trim()).filter(Boolean)
+    : Array.isArray(projectIds)
+      ? projectIds.map((id) => String(id || "").trim()).filter(Boolean)
+      : [];
+  if (normalizedProjectIds.length) next.projectIds = normalizedProjectIds;
   if (reviewStatus != null) next.reviewStatus = String(reviewStatus || "").trim() || null;
   if (reopenedForResubmission != null) next.reopenedForResubmission = Boolean(reopenedForResubmission);
   return next;
@@ -971,7 +991,6 @@ function KpisTab({
                 const title = String(k?.title || "");
                 const weight = toPercentNumber(k?.weight);
                 const value = ratings?.[id];
-                const display = typeof value === "number" && Number.isFinite(value) ? value : "";
                 return (
                   <tr key={id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
                     <td className="p-6">
@@ -984,40 +1003,22 @@ function KpisTab({
                       <span className="font-mono text-[rgb(var(--text))]">{weight}%</span>
                     </td>
                     <td className="p-6">
-                      <div className="space-y-1">
-                        <input
-                          type="number"
-                          min={1}
-                          max={5}
-                          step={0.1}
-                          value={display}
-                          onWheel={preventWheelInputChange}
-                          onChange={(e) => {
-                            if (locked) return;
-                            const text = String(e.target.value ?? "").trim();
-                            const parsed = text === "" ? null : Number.parseFloat(text);
-                            setRatings((prev) => {
-                              const next = { ...(prev || {}) };
-                              if (parsed == null || !Number.isFinite(parsed)) {
-                                delete next[id];
-                                return next;
-                              }
-                              const rounded = Math.round(parsed * 10) / 10;
-                              next[id] = rounded;
-                              return next;
-                            });
-                          }}
-                          disabled={locked}
-                          className={[
-                            "rt-input w-40 py-3 px-4 text-sm",
-                            locked ? "opacity-75 cursor-not-allowed" : "focus:border-blue-500",
-                          ].join(" ")}
-                          placeholder="e.g., 4.2"
-                        />
-                        {performanceRatingLabel(value) ? (
-                          <div className="text-[11px] text-[rgb(var(--muted))]">{formatPerformanceRating(value)}</div>
-                        ) : null}
-                      </div>
+                      <IntegerPerformanceRatingSelect
+                        value={value}
+                        disabled={locked}
+                        onChange={(next) => {
+                          if (locked) return;
+                          setRatings((prev) => {
+                            const updated = { ...(prev || {}) };
+                            if (next == null) {
+                              delete updated[id];
+                              return updated;
+                            }
+                            updated[id] = next;
+                            return updated;
+                          });
+                        }}
+                      />
                     </td>
                   </tr>
                 );
@@ -1053,7 +1054,7 @@ function KpisTab({
           hint={
             proceedDisabled
               ? !allRated
-                ? "Rate every KPI from 1.0 to 5.0 to continue."
+                ? "Rate every KPI from 1 to 5 to continue."
                 : "Write your self-review notes before continuing."
               : `${ratedCount}/${all.length} KPIs rated — ready for the next step.`
           }
@@ -1152,7 +1153,6 @@ function ValuesTab({
               {list.map((v) => {
                 const id = String(v?.id || "");
                 const value = valueRatings?.[id];
-                const display = typeof value === "number" && Number.isFinite(value) ? value : "";
                 const pillar = String(v?.pillar || "—");
                 const isPillarMissing = !pillar || pillar === "—";
                 const colors = colorForPillar(isPillarMissing ? "" : pillar);
@@ -1174,44 +1174,23 @@ function ValuesTab({
                       </span>
                     </td>
                     <td className="p-6">
-                      <label className="inline-flex flex-col gap-1 select-none">
-                        <input
-                          type="number"
-                          min={1}
-                          max={5}
-                          step={0.1}
-                          value={display}
-                          disabled={locked}
-                          onWheel={preventWheelInputChange}
-                          onChange={(e) => {
-                            if (locked) return;
-                            const text = String(e.target.value ?? "").trim();
-                            const parsed = text === "" ? null : Number.parseFloat(text);
-                            setSelectedValues((prev) => {
-                              const next = normalizeWebknotValueRatingsForState(prev);
-                              if (parsed == null || !Number.isFinite(parsed)) {
-                                delete next[id];
-                                return next;
-                              }
-                              const rounded = Math.round(parsed * 10) / 10;
-                              if (rounded < 1 || rounded > 5) {
-                                delete next[id];
-                                return next;
-                              }
-                              next[id] = rounded;
-                              return next;
-                            });
-                          }}
-                          className={[
-                            "rt-input w-32 py-3 px-4 text-sm",
-                            locked ? "opacity-75 cursor-not-allowed" : "focus:border-blue-500",
-                          ].join(" ")}
-                          placeholder="e.g., 4.2"
-                        />
-                        {performanceRatingLabel(value) ? (
-                          <span className="text-[11px] text-[rgb(var(--muted))]">{formatPerformanceRating(value)}</span>
-                        ) : null}
-                      </label>
+                      <IntegerPerformanceRatingSelect
+                        value={value}
+                        disabled={locked}
+                        className="rt-input w-56 py-3 px-4 text-sm"
+                        onChange={(next) => {
+                          if (locked) return;
+                          setSelectedValues((prev) => {
+                            const updated = normalizeWebknotValueRatingsForState(prev);
+                            if (next == null) {
+                              delete updated[id];
+                              return updated;
+                            }
+                            updated[id] = next;
+                            return updated;
+                          });
+                        }}
+                      />
                     </td>
                   </tr>
                 );
@@ -3056,14 +3035,20 @@ export default function EmployeePortal({ onLogout, auth }) {
     if (!String(submissionMonth || "").trim()) return;
     if (hydratingSubmission) return;
     if (locked) return;
-    if (!canEnterSubmissionValues) return;
+
+    const canAutosaveDraft =
+      canEnterSubmissionValues || Boolean(isResubmissionRequested(submissionMeta));
+    if (!canAutosaveDraft) return;
+
     const payload = buildMonthlySubmissionPayload({
       month: submissionMonth,
       selfReviewText,
       selectedCertifications,
       kpiRatings,
       selectedValues,
+      valueComments,
       recognitionsCount,
+      projectIds: selectedProjectIds,
       submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
       actorRole: "EMPLOYEE",
       subjectEmployeeId,
@@ -3078,8 +3063,19 @@ export default function EmployeePortal({ onLogout, auth }) {
       setDraftSaveError("");
       setDraftSaving(true);
       try {
-        await saveMonthlyDraft(payload);
+        const saved = await saveMonthlyDraft(payload);
         lastSavedDraftHashRef.current = hash;
+        const normalized = normalizeMonthlySubmission(saved);
+        if (normalized) {
+          setSubmissionMeta((prev) => ({
+            ...(prev || {}),
+            id: normalized.id ?? prev?.id,
+            month: normalized.month || submissionMonth,
+            status: normalized.status || prev?.status || "DRAFT",
+            reviewStatus: normalized.reviewStatus || prev?.reviewStatus || "DRAFT",
+            updatedAt: normalized.updatedAt || new Date().toISOString(),
+          }));
+        }
       } catch (err) {
         if (err?.status === 401) {
           onLogout?.();
@@ -3093,18 +3089,20 @@ export default function EmployeePortal({ onLogout, auth }) {
 
     return () => window.clearTimeout(id);
   }, [
+    canEnterSubmissionValues,
     hydratingSubmission,
     kpiRatings,
     locked,
     onLogout,
     recognitionsCount,
     selectedCertifications,
+    selectedProjectIds,
     selectedValues,
     selfReviewText,
     subjectEmployeeId,
-    submissionMeta?.reviewStatus,
-    submissionMeta?.reopenedForResubmission,
+    submissionMeta,
     submissionMonth,
+    valueComments,
   ]);
 
   async function saveDraftNow() {
@@ -3116,7 +3114,9 @@ export default function EmployeePortal({ onLogout, auth }) {
       selectedCertifications,
       kpiRatings,
       selectedValues,
+      valueComments,
       recognitionsCount,
+      projectIds: selectedProjectIds,
       submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
       actorRole: "EMPLOYEE",
       subjectEmployeeId,
@@ -3127,8 +3127,19 @@ export default function EmployeePortal({ onLogout, auth }) {
     setDraftSaveError("");
     setDraftSaving(true);
     try {
-      await saveMonthlyDraft(payload);
+      const saved = await saveMonthlyDraft(payload);
       lastSavedDraftHashRef.current = hash;
+      const normalized = normalizeMonthlySubmission(saved);
+      if (normalized) {
+        setSubmissionMeta((prev) => ({
+          ...(prev || {}),
+          id: normalized.id ?? prev?.id,
+          month: normalized.month || submissionMonth,
+          status: normalized.status || prev?.status || "DRAFT",
+          reviewStatus: normalized.reviewStatus || prev?.reviewStatus || "DRAFT",
+          updatedAt: normalized.updatedAt || new Date().toISOString(),
+        }));
+      }
     } catch (err) {
       if (err?.status === 401) {
         onLogout?.();
@@ -3452,6 +3463,42 @@ export default function EmployeePortal({ onLogout, auth }) {
     recognitionsCanProceed,
     valuesCanProceed,
   ]);
+
+  const currentDraftHash = useMemo(
+    () =>
+      payloadHash(
+        buildMonthlySubmissionPayload({
+          month: submissionMonth,
+          selfReviewText,
+          selectedCertifications,
+          kpiRatings,
+          selectedValues,
+          valueComments,
+          recognitionsCount,
+          projectIds: selectedProjectIds,
+          submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
+          actorRole: "EMPLOYEE",
+          subjectEmployeeId,
+          reviewStatus: submissionMeta?.reviewStatus || "DRAFT",
+          reopenedForResubmission: submissionMeta?.reopenedForResubmission,
+        }),
+      ),
+    [
+      kpiRatings,
+      recognitionsCount,
+      selectedCertifications,
+      selectedProjectIds,
+      selectedValues,
+      selfReviewText,
+      subjectEmployeeId,
+      submissionMeta?.reviewStatus,
+      submissionMeta?.reopenedForResubmission,
+      submissionMonth,
+      valueComments,
+    ],
+  );
+
+  const draftIsSynced = currentDraftHash === lastSavedDraftHashRef.current;
 
   const main = (() => {
     if (activeTab === "settings") {
@@ -3875,7 +3922,9 @@ export default function EmployeePortal({ onLogout, auth }) {
                   ? "Saving…"
                   : draftSaveError
                     ? "Not saved"
-                    : "Draft saved"}
+                    : draftIsSynced
+                      ? "Draft saved"
+                      : "Unsaved changes"}
             </span>
           </div>
         </div>
