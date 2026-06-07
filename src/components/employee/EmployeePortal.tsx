@@ -31,10 +31,11 @@ import Toast from "../shared/Toast";
 import UserAvatar from "../shared/UserAvatar";
 import ModalOverlay from "../shared/ModalOverlay";
 import PortalUserMenu from "../shared/PortalUserMenu";
+import PortalNotificationsBell, { resolveNotificationUserId } from "../shared/PortalNotificationsBell";
 import AppShell from "../shared/AppShell";
 import PortalSidebar from "../shared/PortalSidebar";
 import UserProfilePage from "../shared/UserProfilePage";
-import PortalSettingsModal from "../shared/PortalSettingsModal";
+import EmployeeSettingsPanel from "../shared/settings/EmployeeSettingsPanel";
 import PortalPageHeader from "../shared/PortalPageHeader";
 import SubmissionWindowClosed from "./SubmissionWindowClosed";
 import { fetchSubmissionAccessForRole } from "../../api/submission-window";
@@ -55,8 +56,7 @@ import {
   saveMonthlyDraft,
   submitMonthlySubmission,
 } from "../../api/monthly-submissions";
-import { fetchPortalEmployee, updatePortalEmployee } from "../../api/portal";
-import { fetchDesignations } from "../../api/designations";
+import { fetchPortalEmployee } from "../../api/portal";
 import {
   fetchEmployeePortalKpiDefinitions,
   fetchEmployeePortalWebknotValues,
@@ -74,10 +74,13 @@ import {
   updateMyProjects,
 } from "../../api/projects";
 import { listActiveProjectsForEmployees } from "../../utils/projectsCatalog";
-import { getAppSettings } from "../../utils/appSettings.js";
+import { getAdminSettings, getEmployeeSettings } from "../../utils/appSettings.js";
 import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
+import { formatPerformanceRating, performanceRatingLabel, performanceRatingScaleText } from "../../utils/ratingLabels";
+import { extractWebtrakBandCode, getPromotionPreview } from "../../utils/careerPromotion";
 import ResubmissionPlaybook from "../shared/ResubmissionPlaybook";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
+import EmployeePerformanceHistory from "./EmployeePerformanceHistory";
 import { EMPLOYEE_NAV_GROUPS, EMPLOYEE_REVIEW_STEP_IDS, EMPLOYEE_TAB_COPY } from "../../config/portalNavigation";
 import PortalStepper from "../shared/PortalStepper";
 import PortalWorkflowActions from "../shared/PortalWorkflowActions";
@@ -87,13 +90,13 @@ const DEFAULT_PAGE_LIMIT = 10;
 const EMPLOYEE_SIDEBAR_PREF_KEY = "rt_tracking_employee_sidebar_open_v1";
 
 function getEmployeeValuesPageSize() {
-  const n = Number.parseInt(String(getAppSettings()?.employeeValuesPageSize ?? DEFAULT_PAGE_LIMIT), 10);
+  const n = Number.parseInt(String(getAdminSettings()?.employeeValuesPageSize ?? DEFAULT_PAGE_LIMIT), 10);
   if (!Number.isFinite(n)) return DEFAULT_PAGE_LIMIT;
   return Math.min(100, Math.max(5, n));
 }
 
 function getDraftAutosaveDelayMs() {
-  const n = Number.parseInt(String(getAppSettings()?.draftAutosaveDelayMs ?? 900), 10);
+  const n = Number.parseInt(String(getEmployeeSettings()?.draftAutosaveDelayMs ?? 900), 10);
   if (!Number.isFinite(n)) return 900;
   return Math.min(5000, Math.max(500, n));
 }
@@ -137,7 +140,63 @@ function normalizeFilterKey(value) {
 }
 
 function normalizeBandKey(value) {
+  const code = extractWebtrakBandCode(value);
+  if (code) return normalizeFilterKey(code).replace(/[^a-z0-9]/g, "");
   return normalizeFilterKey(value).replace(/[^a-z0-9]/g, "");
+}
+
+function extractBandFromProfile(raw) {
+  if (raw == null) return null;
+  if (typeof raw === "object") {
+    const nested = raw.name ?? raw.designation ?? raw.code ?? raw.bandCode ?? raw.label;
+    return extractWebtrakBandCode(nested) || (nested ? String(nested).trim() : null);
+  }
+  return extractWebtrakBandCode(raw) || String(raw).trim() || null;
+}
+
+function extractBandTypeFromProfile(raw, fallback = "BOTH") {
+  const source = raw && typeof raw === "object" ? raw : null;
+  const bandType = String(source?.bandType ?? source?.type ?? fallback).trim().toUpperCase();
+  if (bandType === "TECH" || bandType === "NON_TECH" || bandType === "BOTH") return bandType;
+  return fallback;
+}
+
+function extractStreamFromProfile(raw, ...fallbacks) {
+  if (raw != null && typeof raw === "object") {
+    const nested = raw.name ?? raw.department ?? raw.stream ?? raw.label;
+    if (nested) return String(nested).trim() || null;
+  }
+  if (raw != null && String(raw).trim()) return String(raw).trim();
+  for (const fallback of fallbacks) {
+    if (fallback != null && String(fallback).trim()) return String(fallback).trim();
+  }
+  return null;
+}
+
+async function fetchAllEmployeePortalKpis({ employeeId, band, stream, signal }) {
+  const merged = [];
+  const seen = new Set();
+  let cursor = null;
+  for (let pageIndex = 0; pageIndex < 50; pageIndex += 1) {
+    const data = await fetchEmployeePortalKpiDefinitions({
+      limit: DEFAULT_PAGE_LIMIT,
+      cursor,
+      employeeId,
+      band,
+      stream,
+      signal,
+    });
+    const page = normalizeCursorPage(data);
+    for (const kpi of normalizeKpiDefinitions(page.items)) {
+      const id = String(kpi?.id || "").trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(kpi);
+    }
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+  return merged;
 }
 
 function normalizeStreamKey(value) {
@@ -222,13 +281,14 @@ function kpiRoleKey(kpi) {
 }
 
 /** Employees only see KPIs that match band + job title (Role) or legacy band + department. */
-function kpiAppliesToEmployee(kpi, employee) {
+function kpiAppliesToEmployee(kpi, employee, { bandOverride = null } = {}) {
   const { band: empBand, stream: empStream } = employeeBandAndStream(employee);
-  if (!empBand) return false;
+  const targetBand = normalizeBandKey(bandOverride ?? empBand);
+  if (!targetBand) return false;
 
   const kpiBand = normalizeBandKey(kpi?.band ?? kpi?.bandName ?? kpi?.bandCode);
   if (!kpiBand || isWildcardValue(kpiBand)) return false;
-  if (kpiBand !== empBand) return false;
+  if (kpiBand !== targetBand) return false;
 
   const empRole = normalizeJobTitleKey(employee?.designation ?? employee?.title ?? employee?.jobTitle);
   const kpiRole = kpiRoleKey(kpi);
@@ -265,8 +325,12 @@ function normalizeEmployeeFromMe(me, { fallbackEmail, fallbackRole } = {}) {
     fallbackRole,
   );
   const designation = String(obj.designation ?? obj.title ?? obj.jobTitle ?? "").trim() || null;
-  const band = String(obj.band ?? obj.level ?? "").trim() || null;
-  const stream = String(obj.stream ?? obj.department ?? obj.dept ?? obj.context ?? "").trim() || null;
+  const bandRaw = obj.band ?? obj.level ?? obj.bandCode ?? null;
+  const band = extractBandFromProfile(bandRaw);
+  const bandType = extractBandTypeFromProfile(typeof bandRaw === "object" ? bandRaw : null);
+  const stream = extractStreamFromProfile(
+    obj.stream ?? obj.department ?? obj.dept ?? obj.context ?? null,
+  );
   const managerId = String(obj.managerId ?? "").trim() || null;
 
   return {
@@ -276,6 +340,7 @@ function normalizeEmployeeFromMe(me, { fallbackEmail, fallbackRole } = {}) {
     role,
     designation,
     band,
+    bandType,
     stream,
     managerId,
   };
@@ -289,9 +354,10 @@ function normalizeEmployeeFromAuth(auth, { fallbackEmail, fallbackRole } = {}) {
     email: String(fallbackEmail || obj.email || "").trim(),
     role: resolvePortalRoleLabel(obj.role, obj.empRole, obj.userRole, fallbackRole),
     designation: String(obj.designation ?? "").trim() || null,
-    band: String(obj.band ?? "").trim() || null,
-    stream: String(obj.stream ?? obj.department ?? "").trim() || null,
-    department: String(obj.department ?? obj.stream ?? "").trim() || null,
+    band: extractBandFromProfile(obj.band ?? obj.level ?? null),
+    bandType: extractBandTypeFromProfile(typeof obj.band === "object" ? obj.band : null),
+    stream: extractStreamFromProfile(obj.stream ?? obj.department ?? null),
+    department: extractStreamFromProfile(obj.department ?? obj.stream ?? null),
     managerId: String(obj.managerId ?? "").trim() || null,
   };
 }
@@ -461,6 +527,8 @@ function buildMonthlySubmissionPayload({
     cycleStartMonth: cycleMeta.cycleStartMonth,
     cycleEndMonth: cycleMeta.cycleEndMonth,
     cycleMonth: cycleMeta.month,
+    profileVerified: true,
+    targetRole: "MANAGER",
     submissionType: String(submissionType || "").trim() || null,
     actorRole: String(actorRole || "").trim() || null,
     subjectEmployeeId: String(subjectEmployeeId || "").trim() || null,
@@ -566,55 +634,12 @@ function ProfileTab({
   employee,
   auth,
   authEmail,
-  onUpdateEmployee,
   locked = false,
   onProceed,
   canProceed = true,
 }) {
   const display = employee || null;
   const email = authEmail || display?.email || "—";
-
-  const [designations, setDesignations] = useState([]);
-  const [designationsLoading, setDesignationsLoading] = useState(false);
-  const [isUpdatingDesignation, setIsUpdatingDesignation] = useState(false);
-  const [designationError, setDesignationError] = useState("");
-
-  const loadDesignations = useCallback(async () => {
-    if (!display?.band || !display?.stream) return;
-    setDesignationsLoading(true);
-    setDesignationError("");
-    try {
-      const list = await fetchDesignations({
-        bandId: display.band,
-        department: normalizeStreamKey(display.stream),
-      });
-      setDesignations(Array.isArray(list) ? list : []);
-    } catch (err) {
-      setDesignationError(err?.message || "Failed to load designations.");
-    } finally {
-      setDesignationsLoading(false);
-    }
-  }, [display?.band, display?.stream]);
-
-  const handleDesignationSelect = async (newDesignation) => {
-    if (!newDesignation || newDesignation === display?.designation) {
-      setIsUpdatingDesignation(false);
-      return;
-    }
-    setDesignationsLoading(true);
-    setDesignationError("");
-    try {
-      await updatePortalEmployee({ designation: newDesignation });
-      if (onUpdateEmployee) {
-        onUpdateEmployee({ ...display, designation: newDesignation });
-      }
-      setIsUpdatingDesignation(false);
-    } catch (err) {
-      setDesignationError(err?.message || "Failed to update designation.");
-    } finally {
-      setDesignationsLoading(false);
-    }
-  };
 
   return (
     <PortalWorkflowFrame>
@@ -652,85 +677,7 @@ function ProfileTab({
         <div className="px-6 sm:px-8 py-6">
           <InfoRow label="Email" value={email} />
           <InfoRow label="Role" value={display?.role || "Employee"} />
-          <InfoRow
-            label="Designation"
-            value={display?.designation || "—"}
-            action={
-              isUpdatingDesignation ? (
-                <button
-                  type="button"
-                  onClick={() => setIsUpdatingDesignation(false)}
-                  className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-[rgb(var(--surface-2))] border border-[rgb(var(--border))] text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]"
-                >
-                  Cancel
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsUpdatingDesignation(true);
-                    loadDesignations();
-                  }}
-                  className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-[rgb(var(--primary)/.1)] border border-[rgb(var(--primary)/.2)] text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary)/.2)]"
-                >
-                  {display?.designation ? "Change" : "Select"}
-                </button>
-              )
-            }
-          />
-
-          <AnimatePresence>
-            {isUpdatingDesignation ? (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="overflow-hidden"
-              >
-                <div className="mt-2 pb-4 pt-2 px-4 rounded-xl bg-[rgb(var(--surface-2)/.5)] border border-[rgb(var(--border)/.5)]">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-[rgb(var(--muted))] mb-3">
-                    Available Designations
-                  </div>
-                  {designationsLoading ? (
-                    <div className="flex items-center gap-2 text-xs text-[rgb(var(--muted))] py-2">
-                      <RefreshCw size={12} className="animate-spin" /> Loading…
-                    </div>
-                  ) : designationError ? (
-                    <div className="text-xs text-red-500 py-2">{designationError}</div>
-                  ) : !designations.length ? (
-                    <div className="text-xs text-[rgb(var(--muted))] py-2 italic">
-                      No designations found for your band ({display?.band}) and stream ({display?.stream}).
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {designations.map((d) => {
-                        const dValue = typeof d === "string" ? d : d?.name || d?.title || d?.designation;
-                        if (!dValue) return null;
-                        const isCurrent = dValue === display?.designation;
-                        return (
-                          <button
-                            key={dValue}
-                            type="button"
-                            disabled={isCurrent}
-                            onClick={() => handleDesignationSelect(dValue)}
-                            className={[
-                              "px-3 py-1.5 rounded-lg text-xs font-medium transition-all border",
-                              isCurrent
-                                ? "bg-[rgb(var(--primary)/.05)] border-[rgb(var(--primary)/.3)] text-[rgb(var(--primary))] opacity-60 cursor-default"
-                                : "bg-[rgb(var(--surface))] border-[rgb(var(--border))] text-[rgb(var(--text))] hover:border-[rgb(var(--primary)/.4)] hover:shadow-sm",
-                            ].join(" ")}
-                          >
-                            {dValue}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
-
+          <InfoRow label="Designation" value={display?.designation || "—"} />
           <InfoRow label="Stream" value={display?.stream || "—"} />
           <InfoRow label="Band" value={display?.band || "—"} />
         </div>
@@ -741,7 +688,7 @@ function ProfileTab({
           onContinue={onProceed}
           continueLabel="Continue to projects"
           continueDisabled={!canProceed}
-          hint="Confirm your profile details, then choose your active projects."
+          hint="Review your profile details, then choose your active projects."
         />
       ) : null}
     </PortalWorkflowFrame>
@@ -842,6 +789,87 @@ function SelfReviewEditor({
   );
 }
 
+function NextBandKpisPreview({
+  currentBand,
+  nextBand,
+  kpis = [],
+  loading = false,
+  error = "",
+  isMaxBand = false,
+}) {
+  if (isMaxBand) {
+    return (
+      <section className="pulse-callout pulse-callout--success">
+        <Target size={18} className="shrink-0 mt-0.5 text-emerald-700 dark:text-emerald-300" />
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-900 dark:text-emerald-100">
+            Career path
+          </div>
+          <p className="mt-1 text-sm text-[rgb(var(--text))]">
+            You are at the top band on your ladder{currentBand ? ` (${currentBand})` : ""}. There is no next-band KPI preview.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  if (!nextBand) return null;
+
+  const items = Array.isArray(kpis) ? kpis : [];
+
+  return (
+    <section className="pulse-callout pulse-callout--success">
+      <Target size={18} className="shrink-0 mt-0.5 text-emerald-700 dark:text-emerald-300" />
+      <div className="min-w-0 flex-1 space-y-3">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-900 dark:text-emerald-100">
+            Next band KPI preview · {currentBand || "—"} → {nextBand}
+          </div>
+          <p className="mt-1 text-sm text-[rgb(var(--text))] leading-relaxed">
+            Read-only preview of KPI expectations at the next level. Use this to plan growth before your next promotion cycle.
+          </p>
+        </div>
+
+        {loading ? (
+          <div className="text-sm text-[rgb(var(--muted))] animate-pulse">Loading next-band KPIs…</div>
+        ) : null}
+
+        {!loading && error ? (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:text-red-200">
+            {error}
+          </div>
+        ) : null}
+
+        {!loading && !error && items.length ? (
+          <div className="rounded-xl border border-emerald-500/25 bg-[rgb(var(--surface))]/80 overflow-hidden">
+            <div className="divide-y divide-[rgb(var(--border))]">
+              {items.map((k) => (
+                <div key={k.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-[rgb(var(--text))] truncate">{k.title || k.id}</div>
+                    {k?.stream ? (
+                      <div className="text-[11px] text-[rgb(var(--muted))] mt-0.5">{String(k.stream)}</div>
+                    ) : null}
+                  </div>
+                  <div className="text-xs font-mono text-[rgb(var(--muted))] shrink-0">
+                    {toPercentNumber(k?.weight) ? `${toPercentNumber(k.weight)}%` : "—"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {!loading && !error && !items.length ? (
+          <div className="text-sm text-[rgb(var(--muted))]">
+            No KPI definitions are published yet for {nextBand} in your department. Ask HR if you expected to see them here.
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function KpisTab({
   pageKpis,
   allKpis,
@@ -856,6 +884,10 @@ function KpisTab({
   selfReviewText,
   setSelfReviewText,
   locked,
+  nextBandPreview,
+  nextBandKpis,
+  nextBandKpisLoading,
+  nextBandKpisError,
 }) {
   const items = Array.isArray(pageKpis) ? pageKpis : [];
   const all = Array.isArray(allKpis) ? allKpis : [];
@@ -893,6 +925,15 @@ function KpisTab({
         </div>
       ) : null}
 
+      <NextBandKpisPreview
+        currentBand={nextBandPreview?.currentCode || null}
+        nextBand={nextBandPreview?.nextBand || null}
+        isMaxBand={Boolean(nextBandPreview?.isMaxBand)}
+        kpis={nextBandKpis}
+        loading={nextBandKpisLoading}
+        error={nextBandKpisError}
+      />
+
       <section className="rt-panel rounded-2xl overflow-hidden">
         <div className="px-6 sm:px-8 py-6 flex items-center justify-between gap-4 flex-wrap border-b border-[rgb(var(--border))]">
           <div>
@@ -913,6 +954,9 @@ function KpisTab({
         </div>
 
         <div className="overflow-x-auto">
+          <p className="px-4 pt-4 pb-2 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
+            Rating scale: {performanceRatingScaleText()}
+          </p>
           <table className="w-full text-left">
             <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-t border-b border-[rgb(var(--border))]">
               <tr>
@@ -937,38 +981,43 @@ function KpisTab({
                       ) : null}
                     </td>
                     <td className="p-6">
-                      <span className="font-mono text-blue-200">{weight}%</span>
+                      <span className="font-mono text-[rgb(var(--text))]">{weight}%</span>
                     </td>
                     <td className="p-6">
-                      <input
-                        type="number"
-                        min={1}
-                        max={5}
-                        step={0.1}
-                        value={display}
-                        onWheel={preventWheelInputChange}
-                        onChange={(e) => {
-                          if (locked) return;
-                          const text = String(e.target.value ?? "").trim();
-                          const parsed = text === "" ? null : Number.parseFloat(text);
-                          setRatings((prev) => {
-                            const next = { ...(prev || {}) };
-                            if (parsed == null || !Number.isFinite(parsed)) {
-                              delete next[id];
+                      <div className="space-y-1">
+                        <input
+                          type="number"
+                          min={1}
+                          max={5}
+                          step={0.1}
+                          value={display}
+                          onWheel={preventWheelInputChange}
+                          onChange={(e) => {
+                            if (locked) return;
+                            const text = String(e.target.value ?? "").trim();
+                            const parsed = text === "" ? null : Number.parseFloat(text);
+                            setRatings((prev) => {
+                              const next = { ...(prev || {}) };
+                              if (parsed == null || !Number.isFinite(parsed)) {
+                                delete next[id];
+                                return next;
+                              }
+                              const rounded = Math.round(parsed * 10) / 10;
+                              next[id] = rounded;
                               return next;
-                            }
-                            const rounded = Math.round(parsed * 10) / 10;
-                            next[id] = rounded;
-                            return next;
-                          });
-                        }}
-                        disabled={locked}
-                        className={[
-                          "rt-input w-40 py-3 px-4 text-sm",
-                          locked ? "opacity-75 cursor-not-allowed" : "focus:border-blue-500",
-                        ].join(" ")}
-                        placeholder="e.g., 4.2"
-                      />
+                            });
+                          }}
+                          disabled={locked}
+                          className={[
+                            "rt-input w-40 py-3 px-4 text-sm",
+                            locked ? "opacity-75 cursor-not-allowed" : "focus:border-blue-500",
+                          ].join(" ")}
+                          placeholder="e.g., 4.2"
+                        />
+                        {performanceRatingLabel(value) ? (
+                          <div className="text-[11px] text-[rgb(var(--muted))]">{formatPerformanceRating(value)}</div>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1088,6 +1137,9 @@ function ValuesTab({
         </div>
 
         <div className="overflow-x-auto">
+          <p className="px-4 pt-4 pb-2 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
+            Rating scale: {performanceRatingScaleText()}
+          </p>
           <table className="w-full text-left">
             <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-t border-b border-[rgb(var(--border))]">
               <tr>
@@ -1122,7 +1174,7 @@ function ValuesTab({
                       </span>
                     </td>
                     <td className="p-6">
-                      <label className="inline-flex items-center gap-3 select-none">
+                      <label className="inline-flex flex-col gap-1 select-none">
                         <input
                           type="number"
                           min={1}
@@ -1156,6 +1208,9 @@ function ValuesTab({
                           ].join(" ")}
                           placeholder="e.g., 4.2"
                         />
+                        {performanceRatingLabel(value) ? (
+                          <span className="text-[11px] text-[rgb(var(--muted))]">{formatPerformanceRating(value)}</span>
+                        ) : null}
                       </label>
                     </td>
                   </tr>
@@ -1501,6 +1556,8 @@ function ReviewTab({
   }, [selectedValues, valuesIndex]);
 
   const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false);
+  const [confirmSubmitBusy, setConfirmSubmitBusy] = useState(false);
+  const [confirmSubmitError, setConfirmSubmitError] = useState("");
 
   const reviewFeedback = useMemo(() => {
     const manager = submissionMeta?.managerReview && typeof submissionMeta.managerReview === "object"
@@ -1668,7 +1725,7 @@ function ReviewTab({
             {kpis.map((k) => (
               <div key={k.id} className="flex items-center justify-between gap-4">
                 <div className="text-sm text-[rgb(var(--text))]">{k.title}</div>
-                <div className="text-sm font-mono text-blue-200">
+                <div className="text-sm font-mono text-[rgb(var(--text))]">
                   {String(kpiRatings?.[k.id] ?? "—")}
                 </div>
               </div>
@@ -1695,7 +1752,7 @@ function ReviewTab({
             {valueRatings.map((row) => (
               <div key={row.id} className="flex items-center justify-between gap-4">
                 <div className="text-sm text-[rgb(var(--text))]">{row.title}</div>
-                <div className="text-sm font-mono text-blue-200">{row.rating.toFixed(1)}</div>
+                <div className="text-sm font-mono text-[rgb(var(--text))]">{row.rating.toFixed(1)}</div>
               </div>
             ))}
           </div>
@@ -1727,7 +1784,7 @@ function ReviewTab({
           Recognitions
         </div>
         <div className="text-sm text-[rgb(var(--text))]">
-          Awards received at All Hands: <span className="font-mono text-blue-200">{Number(recognitionsCount || 0)}</span>
+          Awards received at All Hands: <span className="font-mono text-[rgb(var(--text))]">{Number(recognitionsCount || 0)}</span>
         </div>
       </section>
 
@@ -1761,6 +1818,7 @@ function ReviewTab({
               type="button"
               onClick={() => {
                 if (!canFinalSubmit) return;
+                setConfirmSubmitError("");
                 setConfirmSubmitOpen(true);
               }}
               disabled={!canFinalSubmit}
@@ -1798,46 +1856,60 @@ function ReviewTab({
                 <Lock size={18} className="text-[rgb(var(--primary))]" />
               </div>
               <div>
-                <h3 className="font-semibold tracking-tight">Confirm Final Submission</h3>
+                <h3 className="font-semibold tracking-tight text-[rgb(var(--text))]">Confirm Final Submission</h3>
                 <p className="text-xs text-[rgb(var(--muted))] mt-0.5">This action cannot be undone</p>
               </div>
             </div>
           }
         >
           <div className="mt-4 space-y-4">
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
-              <div className="flex items-start gap-3">
-                <ShieldAlert size={18} className="text-amber-700 dark:text-amber-300 mt-0.5 shrink-0" />
-                <div className="text-sm text-amber-800 dark:text-amber-200 leading-relaxed">
-                  Once submitted, your self-review form will be <strong>locked for this month</strong>. 
-                  You will not be able to edit your ratings, self-review text, or any other responses unless an admin reopens it for you.
-                  Selected projects will notify the project manager, account manager, or HR/admin if no PM/AM is assigned.
-                </div>
+            <div className="pulse-callout pulse-callout--warn">
+              <ShieldAlert size={18} className="mt-0.5 shrink-0 text-amber-700 dark:text-amber-300" />
+              <div className="leading-relaxed text-[rgb(var(--text))]">
+                Once submitted, your self-review form will be <strong>locked for this month</strong>.
+                You will not be able to edit your ratings, self-review text, or any other responses unless an admin reopens it for you.
+                Selected projects will notify the project manager, account manager, or HR/admin if no PM/AM is assigned.
               </div>
             </div>
+
+            {confirmSubmitError ? (
+              <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-800 dark:text-red-200">
+                {confirmSubmitError}
+              </div>
+            ) : null}
 
             <div className="flex justify-end gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => setConfirmSubmitOpen(false)}
+                onClick={() => {
+                  if (confirmSubmitBusy) return;
+                  setConfirmSubmitError("");
+                  setConfirmSubmitOpen(false);
+                }}
                 className="rt-btn-ghost"
+                disabled={confirmSubmitBusy}
               >
                 Go back
               </button>
               <button
                 type="button"
                 onClick={async () => {
-                  setConfirmSubmitOpen(false);
+                  setConfirmSubmitError("");
+                  setConfirmSubmitBusy(true);
                   try {
                     await onFinalSubmit?.();
+                    setConfirmSubmitOpen(false);
                     showToast({ title: "Submitted", message: "Locked for manager review.", tone: "success" });
                   } catch (err) {
-                    showToast({ title: "Submit failed", message: err?.message || "Please try again.", tone: "error" });
+                    setConfirmSubmitError(err?.message || "Submit failed. Please try again.");
+                  } finally {
+                    setConfirmSubmitBusy(false);
                   }
                 }}
-                className="rt-btn-primary bg-[rgb(var(--success))] text-white hover:opacity-90"
+                disabled={confirmSubmitBusy}
+                className="rt-btn-primary bg-[rgb(var(--success))] text-white hover:opacity-90 disabled:opacity-60"
               >
-                <Lock size={16} /> Yes, submit & lock
+                <Lock size={16} /> {confirmSubmitBusy ? "Submitting…" : "Yes, submit & lock"}
               </button>
             </div>
           </div>
@@ -1863,6 +1935,10 @@ function AlreadyRespondedScreen({
   submissionMeta,
   employee,
   authEmail,
+  nextBandPreview,
+  nextBandKpis,
+  nextBandKpisLoading,
+  nextBandKpisError,
 }) {
   const monthLabel = formatMonthHeadline(month);
   const submittedLabel = submittedAt ? formatReviewTimestamp(submittedAt) : "—";
@@ -1908,8 +1984,19 @@ function AlreadyRespondedScreen({
   }, [mgrValueRatings, valuesIndex]);
 
   return (
-    <div className="rt-shell font-sans overflow-x-hidden">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-12 py-8 sm:py-12">
+    <div className="w-full min-w-0 space-y-8">
+        <div className="pulse-callout pulse-callout--success">
+          <CheckCircle2 size={20} className="shrink-0 mt-0.5 text-emerald-700 dark:text-emerald-300" />
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-950 dark:text-emerald-50">
+              Submitted & locked
+            </div>
+            <p className="mt-1 text-sm text-[rgb(var(--text))] leading-relaxed">
+              Your {monthLabel} self-review is submitted. The form is locked for this month — you can still browse notes, drive, and settings.
+            </p>
+          </div>
+        </div>
+
         {/* ── Header ── */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -1921,32 +2008,34 @@ function AlreadyRespondedScreen({
           <div className="relative p-6 sm:p-8">
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div>
-                <motion.div
-                  initial={{ scale: 0.8, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  transition={{ delay: 0.15, type: "spring", stiffness: 400, damping: 20 }}
-                  className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-200"
-                >
-                  <CheckCircle2 size={14} /> Submitted & Locked
-                </motion.div>
+                <div className="rt-success-badge">
+                  <CheckCircle2 size={14} strokeWidth={2.5} />
+                  Submitted & locked
+                </div>
                 <h1 className="mt-3 text-2xl sm:text-3xl font-semibold tracking-tight text-[rgb(var(--text))]">
-                  {monthLabel} — Submission Review
+                  {monthLabel} — submission review
                 </h1>
                 <p className="mt-1.5 text-sm text-[rgb(var(--muted))]">
-                  {employee?.name || authEmail || "—"} &middot; Submitted {submittedLabel}
+                  {employee?.name || authEmail || "—"} · Submitted {submittedLabel}
                 </p>
                 <div className="mt-2 inline-flex items-center gap-1.5 text-[10px] font-semibold text-[rgb(var(--muted))] uppercase tracking-wider">
-                  <Lock size={11} /> Your form is locked for this month
+                  <Lock size={11} /> Your self-review form is locked for this month — the portal stays open to browse notes, drive, and settings.
                 </div>
               </div>
-              {typeof onLogout === "function" ? (
-                <button type="button" onClick={onLogout} className="rt-btn-ghost" title="Logout">
-                  <LogOut size={15} /> Logout
-                </button>
-              ) : null}
             </div>
           </div>
         </motion.div>
+
+        <NextBandKpisPreview
+          currentBand={nextBandPreview?.currentCode || employee?.band || null}
+          nextBand={nextBandPreview?.nextBand || null}
+          isMaxBand={Boolean(nextBandPreview?.isMaxBand)}
+          kpis={nextBandKpis}
+          loading={nextBandKpisLoading}
+          error={nextBandKpisError}
+        />
+
+        <EmployeePerformanceHistory compact className="mb-2" />
 
         {/* ── Side-by-side content ── */}
         <motion.div
@@ -2115,16 +2204,19 @@ function AlreadyRespondedScreen({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.3, duration: 0.4 }}
-          className="mt-8 rounded-lg border border-amber-400/40 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 p-5"
+          className="mt-8 pulse-callout pulse-callout--warn"
         >
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-200">
-            <ShieldAlert size={14} /> Need Corrections?
-          </div>
-          <div className="mt-2 text-sm text-amber-800 dark:text-amber-100">
-            If you find any mistake in your response, contact HR at <span className="font-mono">hr@webknot.in</span> to request reopening.
+          <ShieldAlert size={18} className="shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--text))]">
+              Need corrections?
+            </div>
+            <p className="mt-1.5 text-sm text-[rgb(var(--text))] leading-relaxed">
+              If you find any mistake in your response, contact HR at{" "}
+              <span className="font-mono font-medium">hr@webknot.in</span> to request reopening.
+            </p>
           </div>
         </motion.div>
-      </div>
     </div>
   );
 }
@@ -2141,7 +2233,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   });
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
   const EMP_VALID_TABS = useMemo(
-    () => new Set(["profile", "account", "projects", "kpis", "values", "certifications", "recognitions", "review", "notes", "drive"]),
+    () => new Set(["profile", "account", "projects", "kpis", "values", "certifications", "recognitions", "review", "performance", "notes", "drive", "settings"]),
     [],
   );
 
@@ -2180,7 +2272,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     })
   );
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const [portalWindow, setPortalWindow] = useState(null);
   const [portalWindowLoading, setPortalWindowLoading] = useState(true);
   const [portalWindowError, setPortalWindowError] = useState("");
@@ -2218,6 +2310,9 @@ export default function EmployeePortal({ onLogout, auth }) {
   const [kpiPrefetching, setKpiPrefetching] = useState(false);
   const [kpisError, setKpisError] = useState("");
   const [kpiRatings, setKpiRatings] = useState({}); // { [kpiId]: number }
+  const [nextBandKpis, setNextBandKpis] = useState([]);
+  const [nextBandKpisLoading, setNextBandKpisLoading] = useState(false);
+  const [nextBandKpisError, setNextBandKpisError] = useState("");
   const [valuesIndex, setValuesIndex] = useState({}); // { [id]: { title, pillar } }
   const [valuesPage, setValuesPage] = useState({ cursor: null, nextCursor: null, stack: [], items: [] });
   const [valuesLoading, setValuesLoading] = useState(false);
@@ -2260,6 +2355,17 @@ export default function EmployeePortal({ onLogout, auth }) {
     ).trim(),
     [auth?.claims?.employeeId, auth?.empId, auth?.employeeId, auth?.id, employee?.id]
   );
+  const notificationUserId = useMemo(
+    () =>
+      resolveNotificationUserId(
+        auth?.userId,
+        auth?.id,
+        auth?.claims?.userId,
+        employee?.userId,
+        employee?.id,
+      ),
+    [auth?.claims?.userId, auth?.id, auth?.userId, employee?.id, employee?.userId]
+  );
   const cycleInfo = useMemo(
     () => getCycleForMonth(submissionMonth || new Date()),
     [submissionMonth]
@@ -2268,6 +2374,61 @@ export default function EmployeePortal({ onLogout, auth }) {
     () => buildCycleMonthOptions(submissionMonth || new Date()),
     [submissionMonth]
   );
+
+  const nextBandPreview = useMemo(() => {
+    if (!employee?.band) return null;
+    return getPromotionPreview(employee.band, employee?.bandType || "BOTH");
+  }, [employee?.band, employee?.bandType]);
+
+  const visibleNextBandKpis = useMemo(() => {
+    if (!nextBandPreview?.nextBand) return [];
+    return (Array.isArray(nextBandKpis) ? nextBandKpis : []).filter((k) =>
+      kpiAppliesToEmployee(k, employee, { bandOverride: nextBandPreview.nextBand }),
+    );
+  }, [employee, nextBandKpis, nextBandPreview?.nextBand]);
+
+  useEffect(() => {
+    if (!nextBandPreview?.nextBand) {
+      setNextBandKpis([]);
+      setNextBandKpisError("");
+      setNextBandKpisLoading(false);
+      return;
+    }
+    const { stream: empStream } = employeeBandAndStream(employee);
+    if (!empStream) return;
+
+    let mounted = true;
+    const controller = new AbortController();
+    (async () => {
+      setNextBandKpisLoading(true);
+      setNextBandKpisError("");
+      try {
+        const rows = await fetchAllEmployeePortalKpis({
+          employeeId: employee?.id || null,
+          band: nextBandPreview.nextBand,
+          stream: empStream,
+          signal: controller.signal,
+        });
+        if (!mounted) return;
+        setNextBandKpis(rows);
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (!mounted) return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
+        }
+        setNextBandKpis([]);
+        setNextBandKpisError(err?.message || "Failed to load next-band KPIs.");
+      } finally {
+        if (mounted) setNextBandKpisLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, [employee?.band, employee?.id, employee?.stream, nextBandPreview?.nextBand, onLogout]);
 
   useEffect(() => {
     if (!subjectEmployeeId || !cycleInfo?.key) return;
@@ -2537,7 +2698,6 @@ export default function EmployeePortal({ onLogout, auth }) {
   }, [employee?.band, employee?.id, employee?.stream, onLogout]);
 
   useEffect(() => {
-    if (activeTab !== "kpis") return;
     if (kpisFullyLoaded) return;
     if (kpiPrefetching) return;
     const startCursor = kpiPrefetchCursorRef.current;
@@ -2596,7 +2756,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       alive = false;
       controller.abort();
     };
-  }, [activeTab, employee?.band, employee?.id, employee?.stream, kpiPrefetching, kpisFullyLoaded, onLogout]);
+  }, [employee?.band, employee?.id, employee?.stream, kpiPrefetching, kpisFullyLoaded, onLogout]);
 
   useEffect(() => {
     let mounted = true;
@@ -3012,9 +3172,15 @@ export default function EmployeePortal({ onLogout, auth }) {
     }
 
     const projectIds = [...selectedProjectIds];
-    await updateSelectedProjects(projectIds, { month: submissionMonth }).catch(() =>
-      updateMyProjects(projectIds, { month: submissionMonth }),
-    );
+    try {
+      await updateSelectedProjects(projectIds, { month: submissionMonth });
+    } catch {
+      try {
+        await updateMyProjects(projectIds, { month: submissionMonth });
+      } catch {
+        // Project preference sync is best-effort — do not block final submit.
+      }
+    }
 
     const payload = {
       ...buildMonthlySubmissionPayload({
@@ -3030,6 +3196,8 @@ export default function EmployeePortal({ onLogout, auth }) {
         reviewStatus: "SUBMITTED",
         reopenedForResubmission: false,
       }),
+      employeeId: subjectEmployeeId,
+      projectIds,
       submittedAt: new Date().toISOString(),
     };
 
@@ -3090,7 +3258,13 @@ export default function EmployeePortal({ onLogout, auth }) {
     } catch (err) {
       if (err?.status === 401) {
         onLogout?.();
-        return;
+        throw new Error("Your session expired. Please sign in again and retry submit.");
+      }
+      if (err?.status === 403) {
+        throw new Error(
+          err?.message ||
+            "Submit was denied. Sign out, sign back in, and try again. If it persists, contact HR."
+        );
       }
       throw err;
     } finally {
@@ -3236,7 +3410,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       mounted = false;
       controller.abort();
     };
-  }, [auth, authEmail, onLogout, role]);
+  }, [auth?.employeeId, auth?.empId, authEmail, onLogout, role]);
 
   const needsResubmission = useMemo(
     () => Boolean(isResubmissionRequested(submissionMeta)),
@@ -3280,6 +3454,9 @@ export default function EmployeePortal({ onLogout, auth }) {
   ]);
 
   const main = (() => {
+    if (activeTab === "settings") {
+      return <EmployeeSettingsPanel />;
+    }
     if (activeTab === "account") {
       return (
         <UserProfilePage
@@ -3301,7 +3478,6 @@ export default function EmployeePortal({ onLogout, auth }) {
             employee={employee}
             auth={auth}
             authEmail={authEmail}
-            onUpdateEmployee={(upd) => setEmployee(upd)}
             locked={locked && !needsResubmission}
             onProceed={() => goToTab("projects")}
             canProceed={!loading}
@@ -3340,6 +3516,10 @@ export default function EmployeePortal({ onLogout, auth }) {
           selfReviewText={selfReviewText}
           setSelfReviewText={setSelfReviewText}
           locked={locked}
+          nextBandPreview={nextBandPreview}
+          nextBandKpis={visibleNextBandKpis}
+          nextBandKpisLoading={nextBandKpisLoading}
+          nextBandKpisError={nextBandKpisError}
           onProceed={() => goToTab("values")}
           onBack={() => goToTab("projects")}
         />
@@ -3387,6 +3567,9 @@ export default function EmployeePortal({ onLogout, auth }) {
         />
       );
     }
+    if (activeTab === "performance") {
+      return <EmployeePerformanceHistory />;
+    }
     if (activeTab === "notes") {
       return (
         <PortalNotesWorkspace
@@ -3401,6 +3584,29 @@ export default function EmployeePortal({ onLogout, auth }) {
       return <WebknotDrive auth={auth} portalLabel="your employee account" />;
     }
     if (activeTab === "review") {
+      if (locked && !needsResubmission) {
+        return (
+          <AlreadyRespondedScreen
+            month={submissionMeta?.month || submissionMonth}
+            submittedAt={submissionMeta?.submittedAt || submissionMeta?.updatedAt || null}
+            onLogout={onLogout}
+            selfReviewText={selfReviewText}
+            kpis={visibleKpis}
+            kpiRatings={kpiRatings}
+            selectedValues={selectedValues}
+            selectedCertifications={selectedCertifications}
+            recognitionsCount={recognitionsCount}
+            valuesIndex={valuesIndex}
+            submissionMeta={submissionMeta}
+            employee={employee}
+            authEmail={authEmail}
+            nextBandPreview={nextBandPreview}
+            nextBandKpis={visibleNextBandKpis}
+            nextBandKpisLoading={nextBandKpisLoading}
+            nextBandKpisError={nextBandKpisError}
+          />
+        );
+      }
       return (
         <ReviewTab
           employee={employee}
@@ -3433,6 +3639,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     !portalWindowLoading &&
     !canEnterSubmissionValues &&
     !needsResubmission &&
+    !locked &&
     reviewTabs.has(activeTab)
   ) {
     return (
@@ -3454,32 +3661,18 @@ export default function EmployeePortal({ onLogout, auth }) {
     );
   }
 
-  if (locked && !needsResubmission) {
-    return (
-      <AlreadyRespondedScreen
-        month={submissionMeta?.month || submissionMonth}
-        submittedAt={submissionMeta?.submittedAt || submissionMeta?.updatedAt || null}
-        onLogout={onLogout}
-        selfReviewText={selfReviewText}
-        kpis={visibleKpis}
-        kpiRatings={kpiRatings}
-        selectedValues={selectedValues}
-        selectedCertifications={selectedCertifications}
-        recognitionsCount={recognitionsCount}
-        valuesIndex={valuesIndex}
-        submissionMeta={submissionMeta}
-        employee={employee}
-        authEmail={authEmail}
-      />
-    );
-  }
-
   return (
     <>
     <AppShell
       isSidebarOpen={isSidebarOpen}
       setIsSidebarOpen={setIsSidebarOpen}
-      maxWidth={activeTab === "notes" || activeTab === "drive" ? "max-w-[1600px]" : "max-w-5xl"}
+      maxWidth={
+        activeTab === "notes" || activeTab === "drive"
+          ? "max-w-[1600px]"
+          : activeTab === "settings"
+            ? "max-w-3xl"
+            : "max-w-5xl"
+      }
       sidebar={
         <PortalSidebar
           isOpen={isSidebarOpen}
@@ -3489,7 +3682,8 @@ export default function EmployeePortal({ onLogout, auth }) {
           portalTag="Your monthly review"
           navGroups={EMPLOYEE_NAV_GROUPS}
           showThemeToggle
-          onSettingsClick={() => setSettingsOpen(true)}
+          onSettingsClick={() => setActiveTab("settings")}
+          settingsActive={activeTab === "settings"}
         />
       }
       topbar={
@@ -3498,6 +3692,13 @@ export default function EmployeePortal({ onLogout, auth }) {
             <Calendar size={14} className="shrink-0" />
             {cycleInfo?.label || "—"}
           </span>
+          <PortalNotificationsBell
+            portal="employee"
+            userId={notificationUserId}
+            onLogout={onLogout}
+            onToast={showToast}
+            ariaLabel="Employee notifications"
+          />
           <PortalUserMenu
             auth={auth}
             roleLabel={role}
@@ -3508,21 +3709,57 @@ export default function EmployeePortal({ onLogout, auth }) {
       }
     >
         <div className="w-full min-w-0">
+        {activeTab !== "settings" ? (
         <PortalPageHeader
           title={EMPLOYEE_TAB_COPY[activeTab]?.title || "Employee"}
           subtitle={EMPLOYEE_TAB_COPY[activeTab]?.subtitle || ""}
         />
+        ) : null}
 
-        {isHrUser ? (
+        {activeTab !== "settings" && isHrUser ? (
           <div className="max-w-4xl mx-auto w-full min-w-0 mb-6 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-4 py-3 text-sm text-[rgb(var(--muted))]">
-            HR workspace: complete your monthly review here like other employees. Ratings from other HR colleagues are hidden on your review screen.{" "}
+            HR workspace: complete your leadership self-review (band KPIs, all Webknot values, super admin reviewer) in the{" "}
+            <a href="/manager/self-review" className="text-[rgb(var(--primary))] hover:underline">
+              leadership self-review portal
+            </a>
+            .{" "}
             <a href="/admin" className="text-[rgb(var(--primary))] hover:underline">
               Open HR admin tools
             </a>
           </div>
         ) : null}
 
-        {!locked && needsResubmission ? (
+        {locked && !needsResubmission && activeTab !== "settings" && activeTab !== "review" ? (
+          <div className="max-w-4xl mx-auto w-full min-w-0 mb-6 pulse-callout pulse-callout--success">
+            <CheckCircle2 size={18} className="shrink-0 mt-0.5 text-emerald-700 dark:text-emerald-300" />
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-950 dark:text-emerald-50">
+                Submitted & locked
+              </div>
+              <p className="mt-1 text-sm text-[rgb(var(--text))] leading-relaxed">
+                Your {formatMonthHeadline(submissionMonth)} self-review is submitted and locked. You can still browse this portal. Open{" "}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("review")}
+                  className="font-semibold text-emerald-800 underline underline-offset-2 hover:text-emerald-950 dark:text-emerald-200 dark:hover:text-emerald-50"
+                >
+                  Review
+                </button>{" "}
+                for submission details, or{" "}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("performance")}
+                  className="font-semibold text-emerald-800 underline underline-offset-2 hover:text-emerald-950 dark:text-emerald-200 dark:hover:text-emerald-50"
+                >
+                  My ratings
+                </button>{" "}
+                for all-time history.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        {!locked && needsResubmission && activeTab !== "settings" ? (
           <div className="max-w-4xl mx-auto w-full min-w-0 mb-6">
             <div className="relative overflow-hidden rounded-2xl border border-amber-500/45 bg-gradient-to-r from-amber-50 via-amber-50 to-white shadow-sm dark:from-amber-950/40 dark:via-amber-900/40 dark:to-transparent">
               <div className="absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-amber-500 to-orange-500" aria-hidden="true" />
@@ -3662,7 +3899,6 @@ export default function EmployeePortal({ onLogout, auth }) {
         </AnimatePresence>
         </div>
     </AppShell>
-    <PortalSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
     <Toast toast={toast} onDismiss={() => setToast(null)} durationMs={2800} />
     </>

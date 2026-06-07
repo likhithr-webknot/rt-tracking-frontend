@@ -27,9 +27,10 @@ const pathDraw = {
   },
 };
 
-export default function NotFoundPage({ onGoHome }) {
+export default function NotFoundPage({ onGoHome, attemptedPath = "" }) {
+  const pathLabel = String(attemptedPath ?? "").trim();
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[rgb(var(--bg))] px-6 py-12 overflow-hidden relative select-none">
+    <div className="min-h-[70vh] flex items-center justify-center bg-[rgb(var(--bg))] px-6 py-12 overflow-hidden relative select-none rounded-[var(--radius-lg)]">
       {/* ── Ambient background blobs ── */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <motion.div
@@ -147,8 +148,13 @@ export default function NotFoundPage({ onGoHome }) {
           variants={fadeUp}
           className="mt-3 text-sm sm:text-base text-[rgb(var(--muted))] max-w-md mx-auto leading-relaxed"
         >
-          The page you're looking for doesn't exist or has been moved.
-          Let's get you back on track.
+          The page you&apos;re looking for doesn&apos;t exist or has been moved.
+          {pathLabel ? (
+            <>
+              {" "}
+              <code className="text-xs px-1.5 py-0.5 rounded bg-[rgb(var(--surface-2))]">{pathLabel}</code>
+            </>
+          ) : null}
         </motion.p>
 
         {/* ── Animated dots trail ── */}

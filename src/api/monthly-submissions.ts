@@ -3,7 +3,7 @@ import type { ApiOptions } from "../types/api-options";
 import { sanitizeEmployeeIdForApi } from "../utils/employeeId";
 import { getAuthHeader } from "./auth";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
-import { buildCycleMeta, formatYearMonth as formatYearMonthFromCycle, normalizeYearMonth } from "../utils/reviewCycles";
+import { buildCycleMeta, formatYearMonth as formatYearMonthFromCycle, normalizeCycleKey, normalizeYearMonth, resolveSubmissionCycleKey } from "../utils/reviewCycles";
 
 export function formatYearMonth(date) {
   return formatYearMonthFromCycle(date);
@@ -21,6 +21,38 @@ function copyIfPresent(source, target, key, options = {}) {
     return;
   }
   target[key] = value;
+}
+
+function pickNumericRating(...candidates) {
+  for (const candidate of candidates) {
+    if (candidate == null || candidate === "") continue;
+    if (typeof candidate === "number" && Number.isFinite(candidate)) return candidate;
+    if (typeof candidate === "string") {
+      const parsed = Number.parseFloat(candidate);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function pickKpiItemRating(item) {
+  if (!item || typeof item !== "object") return null;
+  return pickNumericRating(
+    item.rating,
+    item.kpiRating,
+    item.score,
+    typeof item.value !== "object" ? item.value : null
+  );
+}
+
+function pickValueItemRating(item) {
+  if (!item || typeof item !== "object") return null;
+  return pickNumericRating(
+    item.rating,
+    item.valueRating,
+    item.score,
+    typeof item.value !== "object" ? item.value : null
+  );
 }
 
 function normalizeWebknotValueRatings(input) {
@@ -58,11 +90,11 @@ function normalizeWebknotValueRatings(input) {
           item.value ??
           item.title ??
           item.name;
-        const rating = item.rating ?? item.valueRating ?? item.score ?? item.value;
-        assign(id, rating, 1);
+        const rating = pickValueItemRating(item);
+        assign(id, rating, null);
         continue;
       }
-      assign(item, null, 1);
+      assign(item, null, null);
     }
   }
 
@@ -102,15 +134,94 @@ function normalizeKpiRatings(input) {
           item.key ??
           item.title ??
           item.name;
-        const rating = item.rating ?? item.kpiRating ?? item.score ?? item.value;
-        assign(id, rating, 1);
+        const rating = pickKpiItemRating(item);
+        assign(id, rating, null);
         continue;
       }
-      assign(item, null, 1);
+      assign(item, null, null);
     }
   }
 
   return out;
+}
+
+function resolveSubmissionPayloadRoots(source) {
+  if (!source || typeof source !== "object") {
+    return { raw: {}, payload: {}, submission: null };
+  }
+  const raw = source.raw && typeof source.raw === "object" ? source.raw : source;
+  const submission = source.payload && typeof source.payload === "object" ? source.payload : null;
+  const nestedPayload = raw.payload && typeof raw.payload === "object" ? raw.payload : null;
+  let parsedPayload = null;
+  const payloadJson = raw.payloadJson ?? source.payloadJson;
+  if (typeof payloadJson === "string" && payloadJson.trim()) {
+    try {
+      parsedPayload = JSON.parse(payloadJson);
+    } catch {
+      parsedPayload = null;
+    }
+  }
+  const payload = submission ?? nestedPayload ?? parsedPayload ?? raw;
+  return { raw, payload, submission };
+}
+
+export function resolveSubmissionKpiRatings(source) {
+  const { raw, payload, submission } = resolveSubmissionPayloadRoots(source);
+  return normalizeKpiRatings(
+    submission?.kpiRatings ??
+      payload?.kpiRatings ??
+      payload?.kpis ??
+      payload?.kpiSelfRatings ??
+      raw?.kpiRatings ??
+      raw?.kpis ??
+      raw?.kpiSelfRatings
+  );
+}
+
+export function resolveSubmissionValueRatings(source) {
+  const { raw, payload, submission } = resolveSubmissionPayloadRoots(source);
+  const rawValues = Array.isArray(payload?.webknotValues ?? payload?.values)
+    ? (payload?.webknotValues ?? payload?.values)
+    : Array.isArray(submission?.webknotValues)
+      ? submission.webknotValues
+      : [];
+  return normalizeWebknotValueRatings(
+    submission?.webknotValueRatings ??
+      payload?.webknotValueRatings ??
+      payload?.valuesRatings ??
+      payload?.valueRatings ??
+      rawValues ??
+      raw?.webknotValueRatings ??
+      raw?.valuesRatings ??
+      raw?.valueRatings
+  );
+}
+
+export function resolveManagerKpiRatings(source) {
+  const { raw, payload, submission } = resolveSubmissionPayloadRoots(source);
+  const managerEval =
+    submission?.managerEvaluation ??
+    payload?.managerEvaluation ??
+    raw?.managerEvaluation ??
+    null;
+  return normalizeKpiRatings(
+    managerEval?.kpiRatings ?? payload?.managerKpiRatings ?? raw?.managerKpiRatings
+  );
+}
+
+export function resolveManagerValueRatings(source) {
+  const { raw, payload, submission } = resolveSubmissionPayloadRoots(source);
+  const managerEval =
+    submission?.managerEvaluation ??
+    payload?.managerEvaluation ??
+    raw?.managerEvaluation ??
+    null;
+  return normalizeWebknotValueRatings(
+    managerEval?.webknotValueRatings ??
+      managerEval?.webknotValues ??
+      payload?.managerWebknotValueRatings ??
+      raw?.managerWebknotValueRatings
+  );
 }
 
 function toRequestPayload(payload) {
@@ -235,8 +346,16 @@ export function normalizeMonthlySubmission(data) {
     try {
       const mgr = JSON.parse(obj.managerReviewJson);
       if (mgr && typeof mgr === "object") {
-        payload.managerEvaluation = payload.managerEvaluation ?? mgr.managerEvaluation;
-        payload.managerReview = payload.managerReview ?? mgr.managerReview;
+        const hasManagerSubmit = Boolean(
+          obj.managerSubmittedAt ?? payload?.managerSubmittedAt
+        );
+        if (hasManagerSubmit) {
+          if (mgr.managerEvaluation) payload.managerEvaluation = mgr.managerEvaluation;
+          if (mgr.managerReview) payload.managerReview = mgr.managerReview;
+        } else {
+          payload.managerEvaluation = payload.managerEvaluation ?? mgr.managerEvaluation;
+          payload.managerReview = payload.managerReview ?? mgr.managerReview;
+        }
       }
     } catch {
       /* ignore */
@@ -263,9 +382,7 @@ export function normalizeMonthlySubmission(data) {
   const rawWebknotValues = Array.isArray(payload.webknotValues ?? payload.values)
     ? (payload.webknotValues ?? payload.values)
     : [];
-  const webknotValueRatings = normalizeWebknotValueRatings(
-    payload.webknotValueRatings ?? payload.valuesRatings ?? payload.valueRatings ?? rawWebknotValues
-  );
+  const webknotValueRatings = resolveSubmissionValueRatings({ raw: obj, payload });
   const webknotValues = Array.from(
     new Set([
       ...rawWebknotValues
@@ -285,10 +402,21 @@ export function normalizeMonthlySubmission(data) {
       ? recognitionsCountRaw
       : Number.parseInt(String(recognitionsCountRaw || "0"), 10) || 0;
   const certifications = Array.isArray(payload.certifications) ? payload.certifications : [];
-  const kpiRatings = normalizeKpiRatings(payload.kpiRatings);
+  const kpiRatings = resolveSubmissionKpiRatings({ raw: obj, payload });
   const techShowcase = String(
     payload?.techShowcase ?? payload?.techShowcaseNotes ?? obj?.techShowcase ?? ""
   ).trim();
+  const projectIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(payload?.projectIds) ? payload.projectIds : []),
+        ...(Array.isArray(obj?.selectedProjectIds) ? obj.selectedProjectIds : []),
+        ...(Array.isArray(obj?.projectIds) ? obj.projectIds : []),
+      ]
+        .map((id) => String(id ?? "").trim())
+        .filter(Boolean),
+    ),
+  );
 
   const submittedAt = obj.submittedAt ?? obj.submittedOn ?? obj.employeeSubmittedAt ?? null;
   const updatedAt = obj.updatedAt ?? obj.lastUpdatedAt ?? null;
@@ -389,46 +517,57 @@ export function normalizeMonthlySubmission(data) {
      portals don't show a stale "REJECTED" badge.                         */
   const statusUpper = String(status || "").toUpperCase();
   const reviewStatusUpper = String(reviewStatus || "").toUpperCase();
+  const rawManagerAction = String(managerReview?.action ?? "").trim().toUpperCase();
+  const rawAdminAction = String(adminReview?.action ?? "").trim().toUpperCase();
+  /* Fresh employee resubmit: reviewStatus is SUBMITTED again but stale reject
+     objects may still be attached from the prior cycle. */
   const isResubmittedStatus =
-    (reviewStatusUpper === "SUBMITTED") ||
-    (statusUpper === "SUBMITTED" && (reviewStatusUpper.includes("REJECT") || reviewStatusUpper.includes("NEEDS_REVIEW")));
-  /* Override stale reviewStatus when the submission itself is SUBMITTED */
+    reviewStatusUpper === "SUBMITTED" &&
+    statusUpper === "SUBMITTED" &&
+    (rawManagerAction === "REJECT" || rawAdminAction === "REJECT");
   const effectiveReviewStatus = isResubmittedStatus ? "SUBMITTED" : reviewStatus;
+  const effectiveReviewStatusUpper = String(effectiveReviewStatus || "").toUpperCase();
   const clearedManagerSubmittedAt = isResubmittedStatus ? null : managerSubmittedAt;
   const effectiveManagerReview =
-    isResubmittedStatus &&
-    managerReview &&
-    String(managerReview.action ?? "").trim().toUpperCase() === "REJECT"
-      ? null
-      : managerReview;
+    isResubmittedStatus && rawManagerAction === "REJECT" ? null : managerReview;
   const effectiveAdminReview =
-    isResubmittedStatus &&
-    adminReview &&
-    String(adminReview.action ?? "").trim().toUpperCase() === "REJECT"
-      ? null
-      : adminReview;
+    isResubmittedStatus && rawAdminAction === "REJECT" ? null : adminReview;
   const effectiveManagerEvaluation = isResubmittedStatus ? null : managerEvaluation;
   const effectiveAdminEvaluation = isResubmittedStatus ? null : adminEvaluation;
 
   const managerAction = String(effectiveManagerReview?.action ?? "").trim().toUpperCase();
   const adminAction = String(effectiveAdminReview?.action ?? "").trim().toUpperCase();
+  const needsManagerRework = effectiveReviewStatusUpper === "NEEDS_MANAGER_REVIEW";
   const reopenedForResubmission = Boolean(
     isResubmittedStatus
       ? false
       : (payload?.reopenedForResubmission ??
          obj?.reopenedForResubmission ??
-         effectiveReviewStatus?.toUpperCase().includes("NEEDS_REVIEW") ??
-         false)
+         effectiveReviewStatusUpper === "NEEDS_REVIEW")
   );
   const resubmissionRequested = Boolean(
-    reopenedForResubmission ||
-    effectiveReviewStatus?.toUpperCase().includes("NEEDS_REVIEW") ||
-    effectiveReviewStatus?.toUpperCase().includes("REJECT") ||
-    managerAction === "REJECT" ||
-    adminAction === "REJECT"
+    !needsManagerRework &&
+    (reopenedForResubmission ||
+      effectiveReviewStatusUpper === "NEEDS_REVIEW" ||
+      effectiveReviewStatusUpper === "REJECT" ||
+      managerAction === "REJECT" ||
+      adminAction === "REJECT")
   );
 
-  const managerSubmitted = Boolean(clearedManagerSubmittedAt) && !resubmissionRequested;
+  const managerSubmitted =
+    Boolean(clearedManagerSubmittedAt) && !resubmissionRequested && !needsManagerRework;
+  const employeeId =
+    String(
+      subjectEmployeeId ??
+      obj?.userId ??
+      payload?.employeeId ??
+      obj?.employeeId ??
+      ""
+    ).trim() || null;
+  const empId =
+    String(obj?.empId ?? payload?.subjectEmployeeId ?? subjectEmployeeId ?? "").trim() || null;
+  const userId = obj?.userId == null ? null : String(obj.userId);
+  const finalScore = toFiniteNumberOrNull(obj?.finalScore);
 
   return {
     id: id == null ? null : String(id),
@@ -437,7 +576,17 @@ export function normalizeMonthlySubmission(data) {
     submissionType,
     targetRole,
     subjectEmployeeId,
-    cycleKey: String(payload?.cycleKey ?? obj?.cycleKey ?? cycleMeta.cycleKey ?? "").trim() || null,
+    employeeId,
+    empId,
+    userId,
+    finalScore,
+    cycleKey:
+      resolveSubmissionCycleKey({
+        month,
+        cycleKey: payload?.cycleKey ?? obj?.cycleKey,
+      }) ||
+      cycleMeta.cycleKey ||
+      null,
     cycleLabel: String(payload?.cycleLabel ?? obj?.cycleLabel ?? cycleMeta.cycleLabel ?? "").trim() || null,
     cycleShortLabel: String(payload?.cycleShortLabel ?? obj?.cycleShortLabel ?? cycleMeta.cycleShortLabel ?? "").trim() || null,
     cycleStartMonth: normalizeYearMonth(payload?.cycleStartMonth ?? obj?.cycleStartMonth) || cycleMeta.cycleStartMonth || null,
@@ -459,6 +608,7 @@ export function normalizeMonthlySubmission(data) {
     webknotValueRatings,
     recognitionsCount,
     techShowcase,
+    projectIds,
     submittedAt: submittedAt ? String(submittedAt) : null,
     updatedAt: updatedAt ? String(updatedAt) : null,
     raw: obj,
@@ -525,12 +675,14 @@ function unwrapGenericPage(raw) {
 }
 
 function resolveCycleKey({ month, cycleKey } = {} as ApiOptions) {
+  const fromKey = normalizeCycleKey(cycleKey);
+  if (fromKey) return fromKey;
   const monthKey = normalizeYearMonth(month) || String(month ?? "").trim();
   if (monthKey) {
     const meta = buildCycleMeta(monthKey);
-    return String(meta?.cycleKey ?? monthKey).trim();
+    return String(meta?.cycleKey ?? "").trim() || null;
   }
-  return normalizeYearMonth(cycleKey) || String(cycleKey ?? "").trim();
+  return null;
 }
 
 function toFiniteNumberOrNull(...values) {
@@ -623,6 +775,10 @@ function pickSubmissionRowForMonth(list, monthKey) {
 export async function submitMonthlySubmission(payload, { signal } = {} as ApiOptions) {
   const auth = getAuthHeader();
   const preparedPayload = toRequestPayload(payload);
+  await ensureCsrfCookie({
+    signal,
+    headers: auth ? { Authorization: auth } : undefined,
+  });
   const baseHeaders = {
     "Content-Type": "application/json",
     ...(auth ? { Authorization: auth } : {}),
@@ -690,7 +846,7 @@ export async function submitMonthlySubmission(payload, { signal } = {} as ApiOpt
     });
     if (!res) continue;
 
-    if (!res.ok && res.status === 403) {
+    if (!res.ok && (res.status === 403 || res.status === 401)) {
       await ensureCsrfCookie({
         signal,
         headers: auth ? { Authorization: auth } : undefined,
@@ -816,10 +972,28 @@ export async function fetchManagerTeamSubmissions({ month, status, limit = null,
 }
 
 export async function fetchAdminAllSubmissions({ month, status, signal } = {} as ApiOptions) {
-  const page = await fetchAdminMonthlySubmissionsPage({ month, size: 500, signal });
+  const pageSize = 500;
+  const maxPages = 40;
+  const allItems = [];
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const pageResult = await fetchAdminMonthlySubmissionsPage({
+      month,
+      page,
+      size: pageSize,
+      signal,
+    });
+    const batch = Array.isArray(pageResult?.items) ? pageResult.items : [];
+    allItems.push(...batch);
+
+    const total = Number.isFinite(Number(pageResult?.total)) ? Number(pageResult.total) : null;
+    if (batch.length < pageSize) break;
+    if (total != null && allItems.length >= total) break;
+  }
+
   const wantedStatus = String(status ?? "").trim().toUpperCase();
-  if (!wantedStatus) return page.items;
-  return page.items.filter((item) => {
+  if (!wantedStatus) return allItems;
+  return allItems.filter((item) => {
     const normalized = normalizeMonthlySubmission(item);
     const value = String(
       normalized?.reviewStatus ??
@@ -832,7 +1006,7 @@ export async function fetchAdminAllSubmissions({ month, status, signal } = {} as
   });
 }
 
-/** Manager self-reviews routed to a super manager (reviewer) for the cycle month. */
+/** Manager/admin self-reviews routed to the selected super admin reviewer for the cycle month. */
 export async function fetchAssignedManagerSelfReviews(month, reviewerId, { signal } = {} as ApiOptions) {
   const reviewerKey = String(reviewerId ?? "").trim();
   if (!reviewerKey) return [];
@@ -981,7 +1155,11 @@ function normalizeAdminOverview(raw, fallback = {}) {
 
   return {
     month: String(obj.month ?? fallback.month ?? "").trim() || null,
-    cycleKey: String(obj.cycleKey ?? fallback.cycleKey ?? "").trim() || null,
+    cycleKey:
+      resolveSubmissionCycleKey({
+        month: obj.month ?? fallback.month,
+        cycleKey: obj.cycleKey ?? fallback.cycleKey,
+      }) || null,
     totalSubmissions: readNumber(obj.totalSubmissions, obj.submissionCount, obj.total, fallback.totalSubmissions),
     pendingManagerReviews: readNumber(obj.pendingManagerReviews, obj.pendingReviews, obj.pending, fallback.pendingManagerReviews),
     managerReviewedCount: readNumber(obj.managerReviewedCount, obj.managerReviewed, obj.reviewed, fallback.managerReviewedCount),

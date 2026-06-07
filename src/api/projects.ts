@@ -51,7 +51,7 @@ export function normalizeProject(raw) {
     managerEmployeeId: String(row.managerEmployeeId ?? row.managerEmployeeID ?? row.managerEmployeeId ?? "").trim(),
     managerName: pm || String(row.managerName ?? row.manager?.name ?? row.manager?.employeeName ?? am ?? "").trim(),
     managerEmail: String(row.managerEmail ?? row.manager?.email ?? "").trim(),
-    active: row.active !== false && row.status !== "INACTIVE",
+    active: row.isActive !== false && row.active !== false && row.status !== "INACTIVE",
     createdAt: row.createdAt || null,
     updatedAt: row.updatedAt || null,
   };
@@ -76,16 +76,17 @@ export function normalizeProjects(data) {
 
 /* ── admin endpoints ── */
 
-export async function fetchProjects({ signal } = {} as ApiOptions) {
+export async function fetchProjects({ signal, includeInactive = false } = {} as ApiOptions & { includeInactive?: boolean }) {
   const auth = getAuthHeader();
+  const inactiveQs = includeInactive ? "?includeInactive=true" : "";
   /**
    * Prefer full catalog (Admin/HR/Manager). Fall back to assigned projects for other roles.
    */
   return requestWithFallbacks(
     [
-      "/api/v1/projects/all",
+      `/api/v1/projects/all${inactiveQs}`,
+      `/api/v1/getAllprojects${inactiveQs}`,
       "/api/v1/projects?page=0&size=500",
-      "/api/v1/getAllprojects",
       "/api/v1/projects",
       "/api/v1/project-assigned-to-user",
     ],
@@ -101,8 +102,16 @@ export async function fetchProjects({ signal } = {} as ApiOptions) {
 }
 
 export async function addProject({ code, name, description = "", managerEmployeeId, active = true }, { signal } = {} as ApiOptions) {
+  const projectCode = String(code || name || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toUpperCase();
   const payload = {
-    code: String(code || name || "").trim(),
+    projectCode: projectCode || String(name || "").trim().toUpperCase(),
+    projectName: String(name || "").trim(),
+    projectType: "IN_HOUSE",
+    code: projectCode || String(name || "").trim(),
     name: String(name || "").trim(),
     description: String(description || "").trim(),
     managerEmployeeId: String(managerEmployeeId || "").trim(),
@@ -124,20 +133,56 @@ export async function addProject({ code, name, description = "", managerEmployee
   );
 }
 
-export async function updateProject(id, { name, description, managerId, active }, { signal } = {} as ApiOptions) {
-  void id;
-  void name;
-  void description;
-  void managerId;
-  void active;
-  void signal;
-  throw new Error("Webtrak backend does not expose a project update endpoint yet.");
+export async function updateProject(id, { name, active }, { signal } = {} as ApiOptions) {
+  const safeId = encodeURIComponent(String(id ?? "").trim());
+  if (!safeId) throw new Error("Project id is required.");
+  const payload = {};
+  if (name != null && String(name).trim()) payload.projectName = String(name).trim();
+  if (active != null) payload.isActive = Boolean(active);
+  const res = await fetch(buildApiUrl(`/api/v1/project/${safeId}`), {
+    method: "PUT",
+    signal,
+    credentials: "include",
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 404 || res.status === 405) {
+    const alt = await fetch(buildApiUrl(`/api/v1/projects/${safeId}`), {
+      method: "PUT",
+      signal,
+      credentials: "include",
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!alt.ok) throw await toHttpError(alt);
+    return parseResponse(alt, {});
+  }
+  if (!res.ok) throw await toHttpError(res);
+  return parseResponse(res, {});
 }
 
-export async function deleteProject(id, { signal } = {} as ApiOptions) {
-  void id;
-  void signal;
-  throw new Error("Webtrak backend does not expose a project delete endpoint yet.");
+export async function deleteProject(id, { hardDelete = false, signal } = {} as ApiOptions & { hardDelete?: boolean }) {
+  const safeId = encodeURIComponent(String(id ?? "").trim());
+  if (!safeId) throw new Error("Project id is required.");
+  const qs = hardDelete ? "?hardDelete=true" : "";
+  const res = await fetch(buildApiUrl(`/api/v1/project/${safeId}${qs}`), {
+    method: "DELETE",
+    signal,
+    credentials: "include",
+    headers: authHeaders(),
+  });
+  if (res.status === 404 || res.status === 405) {
+    const alt = await fetch(buildApiUrl(`/api/v1/projects/${safeId}${qs}`), {
+      method: "DELETE",
+      signal,
+      credentials: "include",
+      headers: authHeaders(),
+    });
+    if (!alt.ok) throw await toHttpError(alt);
+    return parseResponse(alt, {});
+  }
+  if (!res.ok) throw await toHttpError(res);
+  return parseResponse(res, {});
 }
 
 /* ── employee endpoints ── */

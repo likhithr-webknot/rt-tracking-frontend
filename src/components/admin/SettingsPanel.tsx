@@ -3,8 +3,6 @@ import type { ApiOptions } from "../../types/api-options";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Calendar,
-  ChevronDown,
-  ChevronRight,
   Clock,
   Database,
   Info,
@@ -12,9 +10,6 @@ import {
   Play,
   Plus,
   RefreshCw,
-  RotateCcw,
-  Save,
-  Search,
   Shield,
   Sliders,
   Square,
@@ -35,14 +30,33 @@ import { fetchDriveStorageStats } from "../../api/webknot-drive";
 import Toast from "../shared/Toast";
 import ConfirmDialog from "../shared/ConfirmDialog";
 import ModalOverlay, { DialogFooter } from "../shared/ModalOverlay";
-import AdminPageHeader from "./AdminPageHeader";
-import EmployeeSubmissionOverride from "./EmployeeSubmissionOverride";
+import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import {
-  APP_SETTINGS_DEFAULTS,
-  getAppSettings,
-  resetAppSettings,
-  saveAppSettings,
-} from "../../utils/appSettings";
+  FieldLabel,
+  SectionCard,
+  SettingsFooter,
+  SettingsGroup,
+  SettingsPage,
+  SettingsCallout,
+  Toggle,
+} from "../shared/settings/SettingsLayout";
+import EmployeeSubmissionOverride from "./EmployeeSubmissionOverride";
+import useScopedSettings from "../../hooks/useScopedSettings";
+import {
+  buildCycleMeta,
+  currentReviewCycleKey,
+  formatCycleKeyLabel,
+  getCycleSlotLabel,
+} from "../../utils/reviewCycles";
+import {
+  ADMIN_SETTINGS_DEFAULTS,
+  SETTINGS_SCOPES,
+  SUPER_ADMIN_SETTINGS_DEFAULTS,
+} from "../../utils/portalSettings";
+import {
+  scoreWeightsSumPercent,
+  validateScoreWeightPercents,
+} from "../../utils/scoringSettings";
 import {
   fetchSubmissionWindowCurrent,
   scheduleSubmissionWindow,
@@ -63,69 +77,21 @@ import {
   computeSubmissionWindowOpen,
   parseSettingsWindowFields,
 } from "../../utils/submissionWindow";
-import {
-  scoreWeightsSumPercent,
-  validateScoreWeightPercents,
-} from "../../utils/scoringSettings";
 
-function SectionCard({ icon: Icon, title, description, children, defaultOpen = false }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="rt-panel overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-3 p-5 text-left hover:bg-[rgb(var(--surface-2))]/50 transition-colors"
-      >
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[rgb(var(--primary))]/10 text-[rgb(var(--primary))] shrink-0">
-          <Icon size={18} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="font-semibold text-sm text-[rgb(var(--text))]">{title}</div>
-          {description ? <div className="text-xs text-[rgb(var(--muted))] mt-0.5">{description}</div> : null}
-        </div>
-        {open ? <ChevronDown size={16} className="text-[rgb(var(--muted))]" /> : <ChevronRight size={16} className="text-[rgb(var(--muted))]" />}
-      </button>
-      {open ? <div className="border-t border-[rgb(var(--border))] p-5 space-y-5">{children}</div> : null}
-    </div>
-  );
-}
-
-function FieldLabel({ children, hint }) {
-  return (
-    <div className="mb-1.5">
-      <div className="text-[10px] font-semibold text-[rgb(var(--muted))] uppercase tracking-wider">{children}</div>
-      {hint ? <div className="text-[10px] text-[rgb(var(--muted))]/70 mt-0.5">{hint}</div> : null}
-    </div>
-  );
-}
-
-function Toggle({ checked, onChange, label }) {
-  return (
-    <label className="flex items-center justify-between gap-3 cursor-pointer group">
-      <span className="text-sm text-[rgb(var(--text))]">{label}</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={[
-          "relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 shrink-0",
-          checked ? "bg-[rgb(var(--primary))]" : "bg-[rgb(var(--border))]",
-        ].join(" ")}
-      >
-        <span
-          className={[
-            "inline-block h-4 w-4 rounded-full bg-white shadow-sm transform transition-transform duration-200",
-            checked ? "translate-x-6" : "translate-x-1",
-          ].join(" ")}
-        />
-      </button>
-    </label>
-  );
-}
-
-/* ── datetime helpers ── */
+const REVIEW_CYCLE_MONTH_OPTIONS = [
+  { value: 1, label: "January" },
+  { value: 2, label: "February" },
+  { value: 3, label: "March" },
+  { value: 4, label: "April" },
+  { value: 5, label: "May" },
+  { value: 6, label: "June" },
+  { value: 7, label: "July" },
+  { value: 8, label: "August" },
+  { value: 9, label: "September" },
+  { value: 10, label: "October" },
+  { value: 11, label: "November" },
+  { value: 12, label: "December" },
+];
 
 function toLocalInputValue(date) {
   if (!date || !(date instanceof Date) || Number.isNaN(date.getTime())) return "";
@@ -227,10 +193,28 @@ function WindowCard({ icon: Icon, iconColor, title, win, setWin, isOpen, busy, o
   );
 }
 
-export default function SettingsPanel({ employees = [], employeesLoading = false }) {
-  const [settings, setSettings] = useState(() => getAppSettings());
+export default function SettingsPanel({
+  employees = [],
+  employeesLoading = false,
+  isSuperAdmin = false,
+}) {
+  const {
+    settings: superSettings,
+    hasUnsaved: superHasUnsaved,
+    updateSetting: updateSuperSetting,
+    onSave: saveSuperSettings,
+    onReset: resetSuperSettings,
+  } = useScopedSettings(SETTINGS_SCOPES.SUPER_ADMIN);
+
+  const {
+    settings: adminSettings,
+    hasUnsaved: adminHasUnsaved,
+    updateSetting: updateAdminSetting,
+    onSave: saveAdminSettings,
+    onReset: resetAdminSettings,
+  } = useScopedSettings(SETTINGS_SCOPES.ADMIN);
+
   const [toast, setToast] = useState(null);
-  const [hasUnsaved, setHasUnsaved] = useState(false);
   const [driveStats, setDriveStats] = useState(null);
   const [driveStatsLoading, setDriveStatsLoading] = useState(false);
 
@@ -363,16 +347,6 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
     [mgrWin, mgrIsOpen, refreshAllSubmissionWindows],
   );
 
-  useEffect(() => {
-    function onUpdated(event) {
-      const next = event?.detail && typeof event.detail === "object" ? event.detail : getAppSettings();
-      setSettings(next);
-      setHasUnsaved(false);
-    }
-    window.addEventListener("rt:app-settings-updated", onUpdated);
-    return () => window.removeEventListener("rt:app-settings-updated", onUpdated);
-  }, []);
-
   const refreshServerSettings = useCallback(async ({ signal } = {} as ApiOptions) => {
     setServerLoading(true);
     setServerError("");
@@ -394,10 +368,11 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
   }, []);
 
   useEffect(() => {
+    if (!isSuperAdmin) return undefined;
     const ac = new AbortController();
     refreshServerSettings({ signal: ac.signal }).catch(() => {});
     return () => ac.abort();
-  }, [refreshServerSettings]);
+  }, [refreshServerSettings, isSuperAdmin]);
 
   useEffect(() => {
     let alive = true;
@@ -418,23 +393,24 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
   }, []);
 
   const effectiveApiBase = useMemo(() => {
-    const runtime = String(settings?.apiBaseUrl || "").trim();
+    const runtime = String(superSettings?.apiBaseUrl || "").trim();
     if (runtime) return runtime;
     const envBase = String(import.meta?.env?.VITE_API_BASE_URL || "").trim();
     return envBase || "(using Vite proxy / same-origin)";
-  }, [settings?.apiBaseUrl]);
+  }, [superSettings?.apiBaseUrl]);
 
-  const scoreWeightSum = useMemo(() => scoreWeightsSumPercent(settings), [settings]);
+  const scoreWeightSum = useMemo(() => scoreWeightsSumPercent(superSettings), [superSettings]);
   const scoreWeightValid = scoreWeightSum === 100;
+  const currentReviewCycle = useMemo(() => buildCycleMeta(new Date()), [
+    superSettings?.reviewCycleMayStartMonth,
+    superSettings?.reviewCycleMayEndMonth,
+    superSettings?.reviewCycleNovStartMonth,
+    superSettings?.reviewCycleNovEndMonth,
+  ]);
 
-  function updateSetting(key, value) {
-    setSettings((prev) => ({ ...prev, [key]: value }));
-    setHasUnsaved(true);
-  }
-
-  function onSave(e) {
+  function onSaveSuper(e) {
     e?.preventDefault?.();
-    const weightCheck = validateScoreWeightPercents(settings);
+    const weightCheck = validateScoreWeightPercents(superSettings);
     if (!weightCheck.ok) {
       setToast({
         title: "Scoring weights invalid",
@@ -443,17 +419,24 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
       });
       return;
     }
-    const next = saveAppSettings(settings);
-    setSettings(next);
-    setHasUnsaved(false);
-    setToast({ title: "Settings saved", message: "All changes have been applied." });
+    saveSuperSettings();
+    setToast({ title: "Platform settings saved", message: "Super admin configuration updated." });
   }
 
-  function onReset() {
-    const next = resetAppSettings();
-    setSettings(next);
-    setHasUnsaved(false);
-    setToast({ title: "Reset complete", message: "All settings restored to defaults." });
+  function onResetSuper() {
+    resetSuperSettings();
+    setToast({ title: "Platform defaults restored", message: "Super admin settings were reset." });
+  }
+
+  function onSaveAdmin(e) {
+    e?.preventDefault?.();
+    saveAdminSettings();
+    setToast({ title: "Admin settings saved", message: "Operational policies and console preferences updated." });
+  }
+
+  function onResetAdmin() {
+    resetAdminSettings();
+    setToast({ title: "Admin defaults restored", message: "Operational settings were reset." });
   }
 
   async function handleCreateServerSetting() {
@@ -517,99 +500,118 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500">
+    <AdminPageShell maxWidth="max-w-3xl">
       <AdminPageHeader
         title="Settings"
-        subtitle="Application behaviour, display preferences, and security options."
+        subtitle={
+          isSuperAdmin
+            ? "Platform configuration for super admins, plus operational policies for HR and admin staff."
+            : "Operational policies, submission windows, and admin console preferences."
+        }
       />
 
-      {/* ── Webknot Drive storage ── */}
-      <SectionCard icon={Cloud} title="Webknot Drive" description="Object storage quota and upload limits" defaultOpen>
-        {driveStatsLoading ? (
-          <p className="text-sm text-[rgb(var(--muted))]">Loading storage usage…</p>
-        ) : driveStats ? (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm mb-4">
-            <div className="rounded-lg border border-[rgb(var(--border))] p-3">
-              <div className="text-[10px] uppercase text-[rgb(var(--muted))]">Files</div>
-              <div className="font-semibold text-lg">{driveStats.fileCount}</div>
+      <SettingsPage>
+        {isSuperAdmin ? (
+          <>
+            <SettingsGroup title="Platform" description="Super admin only — review cycles, scoring, and infrastructure.">
+              <SectionCard
+                icon={Calendar}
+                title="Review cycles"
+                description="Two six-month review cycles per year (MAY-OCT and NOV-APR keys)."
+              >
+          <p className="text-sm text-[rgb(var(--muted))] leading-relaxed">
+            Monthly submissions roll up into exactly two review cycles. Configure each cycle&apos;s start and end month
+            below. Backend keys stay <code className="text-xs">MAY-OCT-YYYY</code> and{" "}
+            <code className="text-xs">NOV-APR-YYYY-YYYY</code> for Cycle one and Cycle two respectively.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="rounded-lg border border-[rgb(var(--border))] p-4 space-y-3">
+              <div className="text-sm font-semibold text-[rgb(var(--text))]">Cycle one</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <FieldLabel>Start month</FieldLabel>
+                  <select
+                    value={Number(superSettings?.reviewCycleMayStartMonth ?? SUPER_ADMIN_SETTINGS_DEFAULTS.reviewCycleMayStartMonth)}
+                    onChange={(e) => updateSuperSetting("reviewCycleMayStartMonth", Number.parseInt(e.target.value, 10))}
+                    className="rt-input text-sm w-full"
+                  >
+                    {REVIEW_CYCLE_MONTH_OPTIONS.map((opt) => (
+                      <option key={`may-start-${opt.value}`} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <FieldLabel>End month</FieldLabel>
+                  <select
+                    value={Number(superSettings?.reviewCycleMayEndMonth ?? SUPER_ADMIN_SETTINGS_DEFAULTS.reviewCycleMayEndMonth)}
+                    onChange={(e) => updateSuperSetting("reviewCycleMayEndMonth", Number.parseInt(e.target.value, 10))}
+                    className="rt-input text-sm w-full"
+                  >
+                    {REVIEW_CYCLE_MONTH_OPTIONS.map((opt) => (
+                      <option key={`may-end-${opt.value}`} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
-            <div className="rounded-lg border border-[rgb(var(--border))] p-3">
-              <div className="text-[10px] uppercase text-[rgb(var(--muted))]">Used</div>
-              <div className="font-semibold text-lg">{driveStats.totalMb} MB</div>
-            </div>
-            <div className="rounded-lg border border-[rgb(var(--border))] p-3 col-span-2">
-              <div className="text-[10px] uppercase text-[rgb(var(--muted))]">Source</div>
-              <div className="font-medium">{driveStats.source === "server" ? "Linode object storage" : "Local browser cache"}</div>
+            <div className="rounded-lg border border-[rgb(var(--border))] p-4 space-y-3">
+              <div className="text-sm font-semibold text-[rgb(var(--text))]">Cycle two</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <FieldLabel>Start month</FieldLabel>
+                  <select
+                    value={Number(superSettings?.reviewCycleNovStartMonth ?? SUPER_ADMIN_SETTINGS_DEFAULTS.reviewCycleNovStartMonth)}
+                    onChange={(e) => updateSuperSetting("reviewCycleNovStartMonth", Number.parseInt(e.target.value, 10))}
+                    className="rt-input text-sm w-full"
+                  >
+                    {REVIEW_CYCLE_MONTH_OPTIONS.map((opt) => (
+                      <option key={`nov-start-${opt.value}`} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <FieldLabel>End month</FieldLabel>
+                  <select
+                    value={Number(superSettings?.reviewCycleNovEndMonth ?? SUPER_ADMIN_SETTINGS_DEFAULTS.reviewCycleNovEndMonth)}
+                    onChange={(e) => updateSuperSetting("reviewCycleNovEndMonth", Number.parseInt(e.target.value, 10))}
+                    className="rt-input text-sm w-full"
+                  >
+                    {REVIEW_CYCLE_MONTH_OPTIONS.map((opt) => (
+                      <option key={`nov-end-${opt.value}`} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
-        ) : null}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <FieldLabel hint="Shown on Drive page as quota bar">Storage quota (GB)</FieldLabel>
-            <input
-              type="number"
-              min={1}
-              max={500}
-              value={Number(settings?.driveQuotaGb ?? APP_SETTINGS_DEFAULTS.driveQuotaGb)}
-              onChange={(e) => updateSetting("driveQuotaGb", Number.parseInt(String(e.target.value || "50"), 10) || 50)}
-              className="rt-input text-sm"
-            />
+          <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))]/50 px-4 py-3 text-sm">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-[rgb(var(--muted))]">
+              Current cycle preview
+            </div>
+            <div className="mt-1 font-medium text-[rgb(var(--text))]">
+              {getCycleSlotLabel(currentReviewCycle?.cycleKey) || "—"}
+            </div>
+            <div className="text-xs text-[rgb(var(--muted))] mt-1">
+              Key: <code>{currentReviewCycle?.cycleKey || currentReviewCycleKey() || "—"}</code>
+              {" · "}
+              {formatCycleKeyLabel(currentReviewCycle?.cycleKey || currentReviewCycleKey())}
+            </div>
           </div>
-          <div>
-            <FieldLabel hint="Reject uploads larger than this">Max upload size (MB)</FieldLabel>
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={Number(settings?.driveMaxUploadMb ?? APP_SETTINGS_DEFAULTS.driveMaxUploadMb)}
-              onChange={(e) => updateSetting("driveMaxUploadMb", Number.parseInt(String(e.target.value || "10"), 10) || 10)}
-              className="rt-input text-sm"
-            />
-          </div>
-        </div>
-      </SectionCard>
+        </SectionCard>
 
-      {/* ── Employee & manager experience ── */}
-      <SectionCard icon={Briefcase} title="Employee & manager experience" description="Features that improve review cycles and team workflows">
-        <div className="space-y-4">
-          <Toggle
-            checked={settings?.managerCalibrationHints ?? APP_SETTINGS_DEFAULTS.managerCalibrationHints}
-            onChange={(v) => updateSetting("managerCalibrationHints", v)}
-            label="Manager calibration hints (blind compare)"
-          />
-          <Toggle
-            checked={settings?.enableSubmissionPlaybook ?? APP_SETTINGS_DEFAULTS.enableSubmissionPlaybook}
-            onChange={(v) => updateSetting("enableSubmissionPlaybook", v)}
-            label="Resubmission playbook checklist (employees)"
-          />
-          <Toggle
-            checked={settings?.showEmploymentOnCards ?? APP_SETTINGS_DEFAULTS.showEmploymentOnCards}
-            onChange={(v) => updateSetting("showEmploymentOnCards", v)}
-            label="Show band & designation on directory cards"
-          />
-          <div>
-            <FieldLabel hint="0 disables reminders">Manager review reminder (days before cycle end)</FieldLabel>
-            <input
-              type="number"
-              min={0}
-              max={30}
-              value={Number(settings?.managerReviewReminderDays ?? APP_SETTINGS_DEFAULTS.managerReviewReminderDays)}
-              onChange={(e) =>
-                updateSetting("managerReviewReminderDays", Number.parseInt(String(e.target.value || "0"), 10) || 0)
-              }
-              className="rt-input text-sm max-w-[8rem]"
-            />
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* ── Performance scoring ── */}
-      <SectionCard
-        icon={PieChart}
-        title="Performance scoring"
-        description="Monthly review weights and certification / recognition criteria"
-        defaultOpen
-      >
+              <SectionCard
+                icon={PieChart}
+                title="Performance scoring"
+                description="Monthly review weights and certification / recognition criteria"
+              >
         <p className="text-sm text-[rgb(var(--muted))] leading-relaxed">
           Final score combines manager KPI average, Webknot values average, and a certifications component
           (certs, recognitions, tech showcase). Percent weights must total 100%.
@@ -621,9 +623,9 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
               type="number"
               min={0}
               max={100}
-              value={Number(settings?.scoreWeightKpiPercent ?? APP_SETTINGS_DEFAULTS.scoreWeightKpiPercent)}
+              value={Number(superSettings?.scoreWeightKpiPercent ?? SUPER_ADMIN_SETTINGS_DEFAULTS.scoreWeightKpiPercent)}
               onChange={(e) =>
-                updateSetting("scoreWeightKpiPercent", Number.parseInt(String(e.target.value || "0"), 10) || 0)
+                updateSuperSetting("scoreWeightKpiPercent", Number.parseInt(String(e.target.value || "0"), 10) || 0)
               }
               className="rt-input text-sm"
             />
@@ -634,9 +636,9 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
               type="number"
               min={0}
               max={100}
-              value={Number(settings?.scoreWeightValuesPercent ?? APP_SETTINGS_DEFAULTS.scoreWeightValuesPercent)}
+              value={Number(superSettings?.scoreWeightValuesPercent ?? SUPER_ADMIN_SETTINGS_DEFAULTS.scoreWeightValuesPercent)}
               onChange={(e) =>
-                updateSetting("scoreWeightValuesPercent", Number.parseInt(String(e.target.value || "0"), 10) || 0)
+                updateSuperSetting("scoreWeightValuesPercent", Number.parseInt(String(e.target.value || "0"), 10) || 0)
               }
               className="rt-input text-sm"
             />
@@ -648,10 +650,10 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
               min={0}
               max={100}
               value={Number(
-                settings?.scoreWeightCertificationsPercent ?? APP_SETTINGS_DEFAULTS.scoreWeightCertificationsPercent,
+                superSettings?.scoreWeightCertificationsPercent ?? SUPER_ADMIN_SETTINGS_DEFAULTS.scoreWeightCertificationsPercent,
               )}
               onChange={(e) =>
-                updateSetting(
+                updateSuperSetting(
                   "scoreWeightCertificationsPercent",
                   Number.parseInt(String(e.target.value || "0"), 10) || 0,
                 )
@@ -683,9 +685,9 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
                 min={0}
                 max={5}
                 step={0.05}
-                value={Number(settings?.certificationPointsPerCert ?? APP_SETTINGS_DEFAULTS.certificationPointsPerCert)}
+                value={Number(superSettings?.certificationPointsPerCert ?? SUPER_ADMIN_SETTINGS_DEFAULTS.certificationPointsPerCert)}
                 onChange={(e) =>
-                  updateSetting("certificationPointsPerCert", Number.parseFloat(String(e.target.value || "0")) || 0)
+                  updateSuperSetting("certificationPointsPerCert", Number.parseFloat(String(e.target.value || "0")) || 0)
                 }
                 className="rt-input text-sm"
               />
@@ -697,9 +699,9 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
                 min={0}
                 max={5}
                 step={0.05}
-                value={Number(settings?.recognitionPointsPerItem ?? APP_SETTINGS_DEFAULTS.recognitionPointsPerItem)}
+                value={Number(superSettings?.recognitionPointsPerItem ?? SUPER_ADMIN_SETTINGS_DEFAULTS.recognitionPointsPerItem)}
                 onChange={(e) =>
-                  updateSetting("recognitionPointsPerItem", Number.parseFloat(String(e.target.value || "0")) || 0)
+                  updateSuperSetting("recognitionPointsPerItem", Number.parseFloat(String(e.target.value || "0")) || 0)
                 }
                 className="rt-input text-sm"
               />
@@ -711,9 +713,9 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
                 min={0}
                 max={5}
                 step={0.1}
-                value={Number(settings?.techShowcaseComponentFloor ?? APP_SETTINGS_DEFAULTS.techShowcaseComponentFloor)}
+                value={Number(superSettings?.techShowcaseComponentFloor ?? SUPER_ADMIN_SETTINGS_DEFAULTS.techShowcaseComponentFloor)}
                 onChange={(e) =>
-                  updateSetting(
+                  updateSuperSetting(
                     "techShowcaseComponentFloor",
                     Number.parseFloat(String(e.target.value || "0")) || 0,
                   )
@@ -724,154 +726,48 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
           </div>
         </div>
       </SectionCard>
+            </SettingsGroup>
 
-      {/* ── General Settings ── */}
-      <SectionCard icon={Sliders} title="General" description="Display and behaviour preferences">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <FieldLabel hint="5 – 100 items per page">Employee Values Page Size</FieldLabel>
-            <input
-              type="number"
-              min={5}
-              max={100}
-              step={1}
-              value={Number(settings?.employeeValuesPageSize ?? APP_SETTINGS_DEFAULTS.employeeValuesPageSize)}
-              onChange={(e) => updateSetting("employeeValuesPageSize", Number.parseInt(String(e.target.value || "10"), 10) || APP_SETTINGS_DEFAULTS.employeeValuesPageSize)}
-              className="rt-input text-sm"
-            />
-          </div>
+            <SettingsGroup title="Infrastructure" description="API overrides, debug tools, and server-side key-value settings.">
+              <SectionCard icon={Wrench} title="Developer" description="API configuration and verbose logging">
+                <SettingsCallout variant="warn">
+                  These settings are intended for developers and platform owners. Incorrect values may affect application stability.
+                </SettingsCallout>
 
-          <div>
-            <FieldLabel hint="How months appear across the app">Date Display Format</FieldLabel>
-            <select
-              value={settings?.dateFormat ?? APP_SETTINGS_DEFAULTS.dateFormat}
-              onChange={(e) => updateSetting("dateFormat", e.target.value)}
-              className="rt-input text-sm"
-            >
-              <option value="MMM YYYY">Mar 2026 (MMM YYYY)</option>
-              <option value="YYYY-MM">2026-03 (YYYY-MM)</option>
-              <option value="MM/YYYY">03/2026 (MM/YYYY)</option>
-            </select>
-          </div>
-        </div>
+                <div>
+                  <FieldLabel hint="Leave empty so Vite proxies to Spring (VITE_API_DEV_PROXY or :8080). Set only for a real remote API.">
+                    API Base URL Override
+                  </FieldLabel>
+                  <input
+                    value={String(superSettings?.apiBaseUrl ?? "")}
+                    onChange={(e) => updateSuperSetting("apiBaseUrl", e.target.value)}
+                    className="rt-input text-sm font-mono"
+                    placeholder="https://api.example.com"
+                  />
+                  <div className="mt-2 text-xs text-[rgb(var(--muted))]">
+                    Effective: <span className="font-mono text-[rgb(var(--text))]">{effectiveApiBase}</span>
+                    {import.meta.env?.DEV ? (
+                      <span className="block mt-1.5 text-amber-700 dark:text-amber-300">
+                        Dev: many <strong>502</strong> responses in the Network tab usually mean the proxy cannot reach the backend — fix connectivity first; the UI cannot load profile or KPI data without a live API.
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
 
-        <div className="space-y-4 pt-2">
-          <Toggle
-            checked={settings?.tableAnimations ?? APP_SETTINGS_DEFAULTS.tableAnimations}
-            onChange={(v) => updateSetting("tableAnimations", v)}
-            label="Table animations"
-          />
-          <Toggle
-            checked={settings?.compactTables ?? APP_SETTINGS_DEFAULTS.compactTables}
-            onChange={(v) => updateSetting("compactTables", v)}
-            label="Compact table rows"
-          />
-          <Toggle
-            checked={settings?.enableSoundAlerts ?? APP_SETTINGS_DEFAULTS.enableSoundAlerts}
-            onChange={(v) => updateSetting("enableSoundAlerts", v)}
-            label="Notification sound alerts"
-          />
-        </div>
-      </SectionCard>
+                <div className="pt-2">
+                  <Toggle
+                    checked={superSettings?.debugMode ?? SUPER_ADMIN_SETTINGS_DEFAULTS.debugMode}
+                    onChange={(v) => updateSuperSetting("debugMode", v)}
+                    label="Debug mode (verbose console logging)"
+                  />
+                </div>
+              </SectionCard>
 
-      {/* ── Notifications & Timing ── */}
-      <SectionCard icon={Info} title="Notifications & Timing" description="Control polling and autosave intervals">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <FieldLabel hint="500 – 5,000 ms">Draft Autosave Delay</FieldLabel>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={500}
-                max={5000}
-                step={100}
-                value={Number(settings?.draftAutosaveDelayMs ?? APP_SETTINGS_DEFAULTS.draftAutosaveDelayMs)}
-                onChange={(e) => updateSetting("draftAutosaveDelayMs", Number.parseInt(String(e.target.value || "900"), 10) || APP_SETTINGS_DEFAULTS.draftAutosaveDelayMs)}
-                className="rt-input text-sm flex-1"
-              />
-              <span className="text-xs text-[rgb(var(--muted))] shrink-0">ms</span>
-            </div>
-          </div>
-
-          <div>
-            <FieldLabel hint="5,000 – 120,000 ms">Notification Poll Interval</FieldLabel>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={5000}
-                max={120000}
-                step={1000}
-                value={Number(settings?.notificationPollIntervalMs ?? APP_SETTINGS_DEFAULTS.notificationPollIntervalMs)}
-                onChange={(e) => updateSetting("notificationPollIntervalMs", Number.parseInt(String(e.target.value || "30000"), 10) || APP_SETTINGS_DEFAULTS.notificationPollIntervalMs)}
-                className="rt-input text-sm flex-1"
-              />
-              <span className="text-xs text-[rgb(var(--muted))] shrink-0">ms</span>
-            </div>
-          </div>
-
-          <div>
-            <FieldLabel hint="5 – 480 minutes">Session Timeout</FieldLabel>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={5}
-                max={480}
-                step={5}
-                value={Number(settings?.sessionTimeoutMinutes ?? APP_SETTINGS_DEFAULTS.sessionTimeoutMinutes)}
-                onChange={(e) => updateSetting("sessionTimeoutMinutes", Number.parseInt(String(e.target.value || "60"), 10) || APP_SETTINGS_DEFAULTS.sessionTimeoutMinutes)}
-                className="rt-input text-sm flex-1"
-              />
-              <span className="text-xs text-[rgb(var(--muted))] shrink-0">min</span>
-            </div>
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* ── Advanced ── */}
-      <SectionCard icon={Wrench} title="Advanced" description="API configuration and developer options" defaultOpen={false}>
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 mb-1 flex items-start gap-2">
-          <Info size={14} className="text-amber-500 mt-0.5 shrink-0" />
-          <p className="text-xs text-amber-700 dark:text-amber-300">
-            These settings are intended for developers and administrators. Incorrect values may affect application stability.
-          </p>
-        </div>
-
-        <div>
-          <FieldLabel hint="Leave empty so Vite proxies to Spring (VITE_API_DEV_PROXY or :8080). Set only for a real remote API.">
-            API Base URL Override
-          </FieldLabel>
-          <input
-            value={String(settings?.apiBaseUrl ?? "")}
-            onChange={(e) => updateSetting("apiBaseUrl", e.target.value)}
-            className="rt-input text-sm font-mono"
-            placeholder="https://api.example.com"
-          />
-          <div className="mt-2 text-xs text-[rgb(var(--muted))]">
-            Effective: <span className="font-mono text-[rgb(var(--text))]">{effectiveApiBase}</span>
-            {import.meta.env?.DEV ? (
-              <span className="block mt-1.5 text-amber-700 dark:text-amber-300">
-                Dev: many <strong>502</strong> responses in the Network tab usually mean the proxy cannot reach the backend — fix connectivity first; the UI cannot load profile or KPI data without a live API.
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="pt-2">
-          <Toggle
-            checked={settings?.debugMode ?? APP_SETTINGS_DEFAULTS.debugMode}
-            onChange={(v) => updateSetting("debugMode", v)}
-            label="Debug mode (verbose console logging)"
-          />
-        </div>
-      </SectionCard>
-
-      {/* ── Server settings (Webtrak API) ── */}
-      <SectionCard
-        icon={Database}
-        title="Server settings"
-        description="Key-value pairs from the Spring API (SettingsController). Distinct from browser preferences above."
-        defaultOpen={false}
-      >
+              <SectionCard
+                icon={Database}
+                title="Server settings"
+                description="Key-value pairs from the Spring API (SettingsController)."
+              >
         <div className="flex flex-wrap items-center gap-2 justify-between mb-4">
           <p className="text-xs text-[rgb(var(--muted))] max-w-xl">
             GET/POST <span className="font-mono">/api/v1/settings</span>, GET/PUT/PATCH/DELETE{" "}
@@ -1022,9 +918,198 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
           </button>
         </div>
       </SectionCard>
+            </SettingsGroup>
 
-      {/* ── Submission Windows ── */}
-      <SectionCard icon={Calendar} title="Windows" description="Manage submission window schedules for all portals">
+            <SettingsFooter
+              hasUnsaved={superHasUnsaved}
+              onSave={onSaveSuper}
+              onReset={onResetSuper}
+              saveLabel="Save platform settings"
+              resetLabel="Reset platform defaults"
+            />
+          </>
+        ) : null}
+
+        <SettingsGroup title="Organization" description="Storage limits and workforce-facing policies.">
+          <SectionCard icon={Cloud} title="Webknot Drive" description="Object storage quota and upload limits">
+            {driveStatsLoading ? (
+              <p className="text-sm text-[rgb(var(--muted))]">Loading storage usage…</p>
+            ) : driveStats ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm mb-4">
+                <div className="rounded-lg border border-[rgb(var(--border))] p-3">
+                  <div className="text-[10px] uppercase text-[rgb(var(--muted))]">Files</div>
+                  <div className="font-semibold text-lg">{driveStats.fileCount}</div>
+                </div>
+                <div className="rounded-lg border border-[rgb(var(--border))] p-3">
+                  <div className="text-[10px] uppercase text-[rgb(var(--muted))]">Used</div>
+                  <div className="font-semibold text-lg">{driveStats.totalMb} MB</div>
+                </div>
+                <div className="rounded-lg border border-[rgb(var(--border))] p-3 col-span-2">
+                  <div className="text-[10px] uppercase text-[rgb(var(--muted))]">Source</div>
+                  <div className="font-medium">{driveStats.source === "server" ? "Linode object storage" : "Local browser cache"}</div>
+                </div>
+              </div>
+            ) : null}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <FieldLabel hint="Shown on Drive page as quota bar">Storage quota (GB)</FieldLabel>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={Number(adminSettings?.driveQuotaGb ?? ADMIN_SETTINGS_DEFAULTS.driveQuotaGb)}
+                  onChange={(e) => updateAdminSetting("driveQuotaGb", Number.parseInt(String(e.target.value || "50"), 10) || 50)}
+                  className="rt-input text-sm"
+                />
+              </div>
+              <div>
+                <FieldLabel hint="Reject uploads larger than this">Max upload size (MB)</FieldLabel>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={Number(adminSettings?.driveMaxUploadMb ?? ADMIN_SETTINGS_DEFAULTS.driveMaxUploadMb)}
+                  onChange={(e) => updateAdminSetting("driveMaxUploadMb", Number.parseInt(String(e.target.value || "10"), 10) || 10)}
+                  className="rt-input text-sm"
+                />
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard icon={Briefcase} title="Workforce experience" description="Org-wide toggles for employees and managers">
+            <div className="space-y-4">
+              <Toggle
+                checked={adminSettings?.managerCalibrationHints ?? ADMIN_SETTINGS_DEFAULTS.managerCalibrationHints}
+                onChange={(v) => updateAdminSetting("managerCalibrationHints", v)}
+                label="Manager calibration hints (org default)"
+              />
+              <Toggle
+                checked={adminSettings?.enableSubmissionPlaybook ?? ADMIN_SETTINGS_DEFAULTS.enableSubmissionPlaybook}
+                onChange={(v) => updateAdminSetting("enableSubmissionPlaybook", v)}
+                label="Resubmission playbook checklist (employees)"
+              />
+              <Toggle
+                checked={adminSettings?.showEmploymentOnCards ?? ADMIN_SETTINGS_DEFAULTS.showEmploymentOnCards}
+                onChange={(v) => updateAdminSetting("showEmploymentOnCards", v)}
+                label="Show band & designation on directory cards"
+              />
+              <div>
+                <FieldLabel hint="0 disables reminders">Manager review reminder (days before cycle end)</FieldLabel>
+                <input
+                  type="number"
+                  min={0}
+                  max={30}
+                  value={Number(adminSettings?.managerReviewReminderDays ?? ADMIN_SETTINGS_DEFAULTS.managerReviewReminderDays)}
+                  onChange={(e) =>
+                    updateAdminSetting("managerReviewReminderDays", Number.parseInt(String(e.target.value || "0"), 10) || 0)
+                  }
+                  className="rt-input text-sm max-w-[8rem]"
+                />
+              </div>
+            </div>
+          </SectionCard>
+        </SettingsGroup>
+
+        <SettingsGroup title="Admin console" description="Display and timing for the HR / admin workspace.">
+          <SectionCard icon={Sliders} title="General" description="Display preferences in admin views">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <FieldLabel hint="5 – 100 items per page">Employee values page size</FieldLabel>
+                <input
+                  type="number"
+                  min={5}
+                  max={100}
+                  step={1}
+                  value={Number(adminSettings?.employeeValuesPageSize ?? ADMIN_SETTINGS_DEFAULTS.employeeValuesPageSize)}
+                  onChange={(e) =>
+                    updateAdminSetting(
+                      "employeeValuesPageSize",
+                      Number.parseInt(String(e.target.value || "10"), 10) || ADMIN_SETTINGS_DEFAULTS.employeeValuesPageSize,
+                    )
+                  }
+                  className="rt-input text-sm"
+                />
+              </div>
+              <div>
+                <FieldLabel hint="How months appear in admin tables">Date display format</FieldLabel>
+                <select
+                  value={adminSettings?.dateFormat ?? ADMIN_SETTINGS_DEFAULTS.dateFormat}
+                  onChange={(e) => updateAdminSetting("dateFormat", e.target.value)}
+                  className="rt-input text-sm"
+                >
+                  <option value="MMM YYYY">Mar 2026 (MMM YYYY)</option>
+                  <option value="YYYY-MM">2026-03 (YYYY-MM)</option>
+                  <option value="MM/YYYY">03/2026 (MM/YYYY)</option>
+                </select>
+              </div>
+            </div>
+            <div className="space-y-4 pt-2">
+              <Toggle
+                checked={adminSettings?.tableAnimations ?? ADMIN_SETTINGS_DEFAULTS.tableAnimations}
+                onChange={(v) => updateAdminSetting("tableAnimations", v)}
+                label="Table animations"
+              />
+              <Toggle
+                checked={adminSettings?.compactTables ?? ADMIN_SETTINGS_DEFAULTS.compactTables}
+                onChange={(v) => updateAdminSetting("compactTables", v)}
+                label="Compact table rows"
+              />
+              <Toggle
+                checked={adminSettings?.enableSoundAlerts ?? ADMIN_SETTINGS_DEFAULTS.enableSoundAlerts}
+                onChange={(v) => updateAdminSetting("enableSoundAlerts", v)}
+                label="Notification sound alerts"
+              />
+            </div>
+          </SectionCard>
+
+          <SectionCard icon={Info} title="Notifications & timing" description="Admin console polling and session limits">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <FieldLabel hint="5,000 – 120,000 ms">Notification poll interval</FieldLabel>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={5000}
+                    max={120000}
+                    step={1000}
+                    value={Number(adminSettings?.notificationPollIntervalMs ?? ADMIN_SETTINGS_DEFAULTS.notificationPollIntervalMs)}
+                    onChange={(e) =>
+                      updateAdminSetting(
+                        "notificationPollIntervalMs",
+                        Number.parseInt(String(e.target.value || "30000"), 10) || ADMIN_SETTINGS_DEFAULTS.notificationPollIntervalMs,
+                      )
+                    }
+                    className="rt-input text-sm flex-1"
+                  />
+                  <span className="text-xs text-[rgb(var(--muted))] shrink-0">ms</span>
+                </div>
+              </div>
+              <div>
+                <FieldLabel hint="5 – 480 minutes">Session timeout</FieldLabel>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={5}
+                    max={480}
+                    step={5}
+                    value={Number(adminSettings?.sessionTimeoutMinutes ?? ADMIN_SETTINGS_DEFAULTS.sessionTimeoutMinutes)}
+                    onChange={(e) =>
+                      updateAdminSetting(
+                        "sessionTimeoutMinutes",
+                        Number.parseInt(String(e.target.value || "60"), 10) || ADMIN_SETTINGS_DEFAULTS.sessionTimeoutMinutes,
+                      )
+                    }
+                    className="rt-input text-sm flex-1"
+                  />
+                  <span className="text-xs text-[rgb(var(--muted))] shrink-0">min</span>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+        </SettingsGroup>
+
+        <SettingsGroup title="Operations" description="Submission windows and reminder emails.">
+      <SectionCard icon={Calendar} title="Submission windows" description="Manage submission window schedules for all portals">
         {winLoading ? (
           <div className="text-sm text-[rgb(var(--muted))] animate-pulse py-4 text-center">Loading window status…</div>
         ) : (
@@ -1099,7 +1184,6 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
         icon={Mail}
         title="Email reminders"
         description="Notify people about the monthly RT sheet and pending reviews (requires SMTP in Webtrak)"
-        defaultOpen
       >
         <p className="text-sm text-[rgb(var(--muted))] leading-relaxed">
           Emails are sent from the Webtrak server using <code className="text-xs">SMTP_USERNAME</code> /{" "}
@@ -1163,31 +1247,16 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
           Cron (optional): <code className="text-[11px]">GET /api/v1/monthly-submission-reminders</code> on the server.
         </p>
       </SectionCard>
+        </SettingsGroup>
 
-      {/* ── Save / Reset bar ── */}
-      <div className="flex items-center justify-between gap-3 sticky bottom-4 z-10">
-        <div className="flex-1">
-          {hasUnsaved ? (
-            <span className="text-xs font-medium text-amber-600 dark:text-amber-400">You have unsaved changes</span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onReset}
-            className="rt-btn-ghost text-sm"
-          >
-            <RotateCcw size={14} /> Reset Defaults
-          </button>
-          <button
-            type="button"
-            onClick={onSave}
-            className="rt-btn-primary text-sm"
-          >
-            <Save size={14} /> Save Settings
-          </button>
-        </div>
-      </div>
+        <SettingsFooter
+          hasUnsaved={adminHasUnsaved}
+          onSave={onSaveAdmin}
+          onReset={onResetAdmin}
+          saveLabel="Save admin settings"
+          resetLabel="Reset admin defaults"
+        />
+      </SettingsPage>
 
       <ConfirmDialog
         open={Boolean(settingKeyToDelete)}
@@ -1205,6 +1274,6 @@ export default function SettingsPanel({ employees = [], employeesLoading = false
       />
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-    </div>
+    </AdminPageShell>
   );
 }

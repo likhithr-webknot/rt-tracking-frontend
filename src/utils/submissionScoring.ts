@@ -9,6 +9,8 @@ import {
 export const RTP_SCORE_WEIGHTS = LEGACY_RTP_SCORE_WEIGHTS;
 
 export const PROMOTION_MIN_SCORE = 4.0;
+/** Placeholder score for a month row without admin-approved or manager-computed ratings. */
+export const DEFAULT_INCOMPLETE_SUBMISSION_SCORE = 2;
 
 function toFiniteNumber(value) {
   const num = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
@@ -57,6 +59,7 @@ export function computeCertificationComponentScore({
   const hasTechShowcase = String(techShowcase ?? "").trim().length > 0;
   let score = certs * rule.pointsPerCertification + recognitions * rule.pointsPerRecognition;
   if (hasTechShowcase) score = Math.max(score, rule.techShowcaseComponentFloor);
+  if (score <= 0) return null;
   return clampScore(Math.min(5, score), 0, 5);
 }
 

@@ -20,6 +20,7 @@ import {
   Eye,
   Maximize2,
   Minimize2,
+  History,
 } from "lucide-react";
 import {
   importCsvSingle,
@@ -45,6 +46,7 @@ const ENTITY_ICONS = {
   certifications: Award,
   "designation-lookups": BookOpen,
   "monthly-submissions": FileSpreadsheet,
+  "ratings-history": History,
 };
 
 const ENTITY_COLORS = {
@@ -56,6 +58,7 @@ const ENTITY_COLORS = {
   certifications: "text-teal-500",
   "designation-lookups": "text-blue-500",
   "monthly-submissions": "text-cyan-500",
+  "ratings-history": "text-violet-500",
 };
 
 function schemaHint(entityKey) {
@@ -437,7 +440,10 @@ export default function CsvImportPanel({ onImportComplete, showToast }) {
         Array.isArray(res?.warnings) && res.warnings.length
           ? ` ${res.warnings.join(" ")}`
           : "";
-      const msg = (res?.message || `Successfully imported ${entity}.`) + warnNote;
+      const msg =
+        ((typeof res?.data === "string" ? res.data : null) ||
+          res?.message ||
+          `Successfully imported ${entity}.`) + warnNote;
       setResult({ type: "success", message: msg.trim() });
       setHistory((h) => [{ ts: Date.now(), entity, status: "success", message: msg }, ...h].slice(0, 20));
       setSingleFile(null);

@@ -33,15 +33,11 @@ export async function loginWithEmailPassword(email, password, { signal } = {} as
     { username: emailTrim, password: pass },
   ];
 
-  const credentialModes = import.meta.env?.DEV
-    ? [
-        { credentials: "include" as RequestCredentials, useCsrf: true },
-        { credentials: "omit" as RequestCredentials, useCsrf: false },
-      ]
-    : [
-        { credentials: "omit" as RequestCredentials, useCsrf: false },
-        { credentials: "include" as RequestCredentials, useCsrf: true },
-      ];
+  // Always try session cookies first so httpOnly accessToken is set for API calls.
+  const credentialModes = [
+    { credentials: "include" as RequestCredentials, useCsrf: true },
+    { credentials: "omit" as RequestCredentials, useCsrf: false },
+  ];
 
   let lastErr = null;
 

@@ -128,18 +128,15 @@ function buildKpis(srcPath) {
 
 function buildWebknotValues(srcPath) {
   const parsed = parseCsv(fs.readFileSync(srcPath, "utf8"));
-  const out = [["title", "evaluation_criteria"]];
+  const out = [["Evaluation Criteria", "Details"]];
   let pillar = "";
   for (let r = 1; r < parsed.length; r++) {
     const row = parsed[r];
     const col0 = String(row[0] ?? "").trim();
     const col1 = String(row[1] ?? "").trim();
-    if (col0) {
-      pillar = col0;
-      if (col1) out.push([col1, pillar]);
-    } else if (col1 && pillar) {
-      out.push([col1, pillar]);
-    }
+    if (col0) pillar = col0;
+    if (!col1 || !pillar) continue;
+    out.push([col0 ? col0 : "", col1]);
   }
   writeCsv("webknot-values.csv", out[0], out.slice(1));
   return out.length - 1;

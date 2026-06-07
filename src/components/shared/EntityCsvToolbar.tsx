@@ -35,7 +35,10 @@ export default function EntityCsvToolbar({
     setBusy(true);
     try {
       const res = await importCsvSingle(entityKey, file, { allowMissingRequired, replaceCatalog });
-      const msg = res?.message || `Imported ${schema?.label || entityKey}.`;
+      const msg =
+        (typeof res?.data === "string" ? res.data : null) ||
+        res?.message ||
+        `Imported ${schema?.label || entityKey}.`;
       showToast?.({ title: "Import complete", message: msg, tone: "success" });
       await onImportComplete?.();
     } catch (err) {
@@ -73,13 +76,14 @@ export default function EntityCsvToolbar({
           exportLabel={exportLabel}
           onFileSelected={handleImport}
           onExport={onExport || (canDownloadTemplate ? downloadTemplate : undefined)}
-        />
+        >
+          {canDownloadTemplate && onExport ? (
+            <button type="button" className="rt-toolbar-btn" onClick={downloadTemplate} disabled={disabled || busy}>
+              CSV template
+            </button>
+          ) : null}
+        </ImportExportActions>
         {busy ? <Loader2 size={16} className="animate-spin text-[rgb(var(--muted))]" /> : null}
-        {canDownloadTemplate ? (
-          <button type="button" className="rt-btn-soft text-xs" onClick={downloadTemplate}>
-            CSV template
-          </button>
-        ) : null}
       </div>
 
       <ConfirmDialog

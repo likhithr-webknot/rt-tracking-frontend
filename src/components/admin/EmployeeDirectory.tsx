@@ -13,9 +13,18 @@ import {
 } from "lucide-react";
 import Toast from "../shared/Toast";
 import SearchField from "../shared/SearchField";
+import ListPaginationBar from "../shared/ListPaginationBar";
 import CursorPagination from "../shared/CursorPagination";
 import ConfirmDialog from "../shared/ConfirmDialog";
+import { useClientPagination } from "../../hooks/useClientPagination";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
+import { canHrEditEmployee, isSuperAdminPortalUser } from "../../utils/portalAccess";
+import {
+  coercePortalRoleSelectValue,
+  getPortalRoleSelectOptions,
+  isAdminPortalRole,
+  resolvePortalRoleLabel,
+} from "../../utils/portalRole";
 import ModalOverlay from "../shared/ModalOverlay";
 import EntityCsvToolbar from "../shared/EntityCsvToolbar";
 import { exportEmployeesCsv } from "../../utils/entityCsvExport";
@@ -42,8 +51,8 @@ import {
 import { designationLabelFromRow, fetchDesignations } from "../../api/designations";
 import { isWebknotWorkEmail, WEBKNOT_WORK_EMAIL_SUFFIX } from "../../utils/webknotEmail";
 import { resolveEmployeeApiId } from "../../utils/employeeId";
-import { getAuthHeader } from "../../api/auth";
-import { buildApiUrl, friendlyProxyUnreachableMessage, parseResponse } from "../../api/http";
+import { resolveStreamSelectValue } from "../../utils/departmentStorage";
+import { friendlyProxyUnreachableMessage } from "../../api/http";
 import {
   getPromotionPreview,
   normalizePromotionErrorMessage,
@@ -51,21 +60,88 @@ import {
   NON_TECH_MAX_BAND,
 } from "../../utils/careerPromotion";
 
+function portalRoleBadgeClass(role) {
+  const r = String(role ?? "Employee").trim() || "Employee";
+  if (r === "Super Admin" || r === "Admin") {
+    return "bg-amber-500/10 text-amber-800 dark:text-amber-200 border-amber-500/25";
+  }
+  if (r === "HR") {
+    return "bg-violet-500/10 text-violet-800 dark:text-violet-200 border-violet-500/25";
+  }
+  if (r === "Finance") {
+    return "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 border-emerald-500/25";
+  }
+  if (r === "Manager") {
+    return "bg-blue-500/10 text-blue-800 dark:text-blue-200 border-blue-500/25";
+  }
+  return "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]";
+}
+
 /** Small label when account status is not active (so admins see inactive users in the list). */
 function RoleBadge({ role }) {
   const r = String(role ?? "Employee").trim() || "Employee";
-  const styles =
-    r === "Admin"
-      ? "bg-amber-500/10 text-amber-800 dark:text-amber-200 border-amber-500/25"
-      : r === "Manager"
-        ? "bg-blue-500/10 text-blue-800 dark:text-blue-200 border-blue-500/25"
-        : "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]";
   return (
     <span
-      className={`inline-flex max-w-full items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold border truncate ${styles}`}
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold whitespace-nowrap ${portalRoleBadgeClass(r)}`}
     >
       {r}
     </span>
+  );
+}
+
+function DirectoryActionButton({ onClick, disabled, title, ariaLabel, variant = "default", children }) {
+  const variants = {
+    default: "text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10",
+    promote: "text-blue-600 dark:text-blue-300 hover:bg-blue-500/10",
+    danger: "text-[rgb(var(--danger))] hover:bg-[rgb(var(--danger))]/10",
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={ariaLabel}
+      className={[
+        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors",
+        "disabled:cursor-not-allowed disabled:opacity-40",
+        variants[variant] || variants.default,
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PortalRoleCell({
+  emp,
+  canEdit,
+  portalRoleOptions,
+  saving,
+  onChange,
+}) {
+  const roleLabel = resolvePortalRoleLabel(emp?.empRole, emp?.portalRole, emp?.role);
+  if (!canEdit) {
+    return <RoleBadge role={roleLabel} />;
+  }
+  return (
+    <select
+      value={coercePortalRoleSelectValue(roleLabel, portalRoleOptions)}
+      disabled={saving}
+      onChange={(e) => onChange(emp, e.target.value)}
+      className={[
+        "h-7 min-w-[8.75rem] shrink-0 cursor-pointer rounded-full border px-2.5 pr-7 text-[11px] font-semibold outline-none transition",
+        "focus:ring-2 focus:ring-[rgb(var(--accent))]/20 disabled:cursor-not-allowed disabled:opacity-60",
+        portalRoleBadgeClass(roleLabel),
+      ].join(" ")}
+      aria-label={`Portal role for ${emp?.name || emp?.id || "employee"}`}
+    >
+      {portalRoleOptions.map((role) => (
+        <option key={`portal-role:${emp?.id}:${role}`} value={role}>
+          {role}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -105,18 +181,6 @@ function DirectoryStatusBadge({ status }) {
       {label}
     </span>
   );
-}
-
-function normalizeAllocationRoleRow(raw) {
-  if (typeof raw === "string") {
-    const v = raw.trim();
-    return v ? { value: v, label: v } : null;
-  }
-  if (!raw || typeof raw !== "object") return null;
-  const value = String(raw.code ?? raw.roleCode ?? raw.key ?? raw.name ?? raw.role ?? raw.id ?? "").trim();
-  if (!value) return null;
-  const label = String(raw.displayName ?? raw.label ?? raw.description ?? raw.name ?? value).trim();
-  return { value, label: label || value };
 }
 
 async function fetchDesignationHintForBandStream({ band, stream, bandId, signal }) {
@@ -211,6 +275,7 @@ function AddFormSection({ title, subtitle = null, children }) {
 }
 
 export default function EmployeeDirectory({
+  auth = null,
   employees,
   allEmployees = null,
   allEmployeesLoading = false,
@@ -235,6 +300,7 @@ export default function EmployeeDirectory({
   const toastTimerRef = useRef(null);
 
   const [mutating, setMutating] = useState(false);
+  const [portalRoleSavingId, setPortalRoleSavingId] = useState(null);
   const [promotingId, setPromotingId] = useState(null);
   const [windowUpdatingId, setWindowUpdatingId] = useState(null);
   const [pendingDeleteEmployee, setPendingDeleteEmployee] = useState(null);
@@ -249,6 +315,11 @@ export default function EmployeeDirectory({
   );
 
   const promoteConfirmDisabled = promoteDialogPreview.isMaxBand;
+  const isSuperAdminViewer = useMemo(() => isSuperAdminPortalUser(auth), [auth]);
+  const canModifyEmployee = useCallback(
+    (emp) => canHrEditEmployee(auth, emp),
+    [auth],
+  );
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [addDraft, setAddDraft] = useState({
@@ -267,7 +338,6 @@ export default function EmployeeDirectory({
   const [addDesignationLoading, setAddDesignationLoading] = useState(false);
   const [directoryBands, setDirectoryBands] = useState([]);
   const [directoryStreams, setDirectoryStreams] = useState([]);
-  const [allocationRoleOptions, setAllocationRoleOptions] = useState([]);
 
   const searchUniverse = useMemo(() => {
     if (query.trim() && Array.isArray(allEmployees) && allEmployees.length) return allEmployees;
@@ -391,7 +461,13 @@ export default function EmployeeDirectory({
     [currentEmployeeId]
   );
 
-  const visibleEmployees = filtered;
+  const filterResetKey = `${query}|${roleFilter}|${designationFilter}|${bandFilter}`;
+  const listPagination = useClientPagination(filtered, {
+    pageSize: 25,
+    pageSizeOptions: [25, 50, 100],
+    resetKey: filterResetKey,
+  });
+  const visibleEmployees = listPagination.slice;
 
   const roleOptions = useMemo(() => buildOptionStats(searchUniverse, "role"), [searchUniverse]);
   const designationOptions = useMemo(
@@ -505,7 +581,11 @@ export default function EmployeeDirectory({
     () => streamSelectOptions[0]?.value || "",
     [streamSelectOptions]
   );
-  const addRoleIsAdmin = String(addDraft.empRole || "").trim().toLowerCase() === "admin";
+  const portalRoleOptions = useMemo(
+    () => getPortalRoleSelectOptions({ includeSuperAdmin: isSuperAdminViewer }),
+    [isSuperAdminViewer],
+  );
+  const addRoleIsAdmin = isAdminPortalRole(addDraft.empRole);
   const addFormCanSubmit = useMemo(() => {
     if (employeesLoading || mutating) return false;
     if (!addDraft.employeeName.trim() || !addDraft.email.trim() || !isWebknotWorkEmail(addDraft.email)) {
@@ -527,7 +607,7 @@ export default function EmployeeDirectory({
     employeesLoading,
     mutating,
   ]);
-  const editRoleIsAdmin = String(draft.role || "").trim().toLowerCase() === "admin";
+  const editRoleIsAdmin = isAdminPortalRole(draft.role);
   const managerCount = useMemo(
     () => {
       const value = directoryTotals?.managerCount;
@@ -605,38 +685,6 @@ export default function EmployeeDirectory({
       controller.abort();
     };
   }, []);
-
-  useEffect(() => {
-    if (!showAddModal) return undefined;
-    let cancelled = false;
-    const auth = getAuthHeader();
-    (async () => {
-      try {
-        const res = await fetch(buildApiUrl("/api/v1/allocation/roles"), {
-          credentials: "include",
-          headers: auth ? { Authorization: auth } : undefined,
-        });
-        if (!res.ok || cancelled) return;
-        const raw = await parseResponse(res, {});
-        const list = Array.isArray(raw) ? raw : raw?.data ?? raw?.roles ?? raw?.content ?? [];
-        const opts = list.map(normalizeAllocationRoleRow).filter(Boolean);
-        const dedup = [];
-        const seen = new Set();
-        for (const o of opts) {
-          const k = o.value.toLowerCase();
-          if (seen.has(k)) continue;
-          seen.add(k);
-          dedup.push(o);
-        }
-        if (!cancelled) setAllocationRoleOptions(dedup.slice(0, 100));
-      } catch {
-        if (!cancelled) setAllocationRoleOptions([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [showAddModal]);
 
   // Auto-fetch designation options for add modal based on selected band/department
   useEffect(() => {
@@ -756,8 +804,55 @@ export default function EmployeeDirectory({
     }
   }
 
+  function guardHrEdit(emp, actionLabel = "modify") {
+    if (canModifyEmployee(emp)) return true;
+    showToast({
+      title: "Not allowed",
+      message: `HR cannot ${actionLabel} Super Admin accounts.`,
+      tone: "error",
+    });
+    return false;
+  }
+
+  async function handleInlinePortalRoleChange(emp, nextRole) {
+    if (!isSuperAdminViewer || !emp?.id) return;
+    const resolved = resolvePortalRoleLabel(nextRole);
+    const current = resolvePortalRoleLabel(emp.empRole, emp.portalRole, emp.role);
+    if (resolved === current) return;
+
+    const empKey = String(emp.id);
+    setPortalRoleSavingId(empKey);
+    try {
+      const apiEmpId = await resolveEmployeeEmpId(emp);
+      await updateEmployee(apiEmpId, { portalRole: resolved, empRole: resolved });
+      const reloaded = await refreshDirectoryAfterMutation();
+      if (!reloaded) {
+        setEmployees((prev) =>
+          prev.map((row) =>
+            String(row.id) === empKey
+              ? { ...row, role: resolved, empRole: resolved, portalRole: resolved }
+              : row,
+          ),
+        );
+      }
+      showToast({
+        title: "Portal role updated",
+        message: `${emp.name || empKey} is now ${resolved}.`,
+      });
+    } catch (err) {
+      showToast({
+        title: "Portal role update failed",
+        message: err?.message || "Please try again.",
+        tone: "error",
+      });
+    } finally {
+      setPortalRoleSavingId(null);
+    }
+  }
+
   async function requestPromoteEmployee(emp) {
     if (!emp?.id) return;
+    if (!guardHrEdit(emp, "promote")) return;
     setPromoteBandType("BOTH");
     setPendingPromoteEmployee({
       id: String(emp.id),
@@ -810,6 +905,7 @@ export default function EmployeeDirectory({
   }
 
   function requestRemoveEmployee(emp) {
+    if (!guardHrEdit(emp, "deactivate")) return;
     const employeeId = String(emp?.id || "").trim();
     if (!employeeId) return;
     if (/^EMP_\d+$/i.test(employeeId)) {
@@ -868,14 +964,10 @@ export default function EmployeeDirectory({
   }
 
   function openEdit(emp) {
+    if (!guardHrEdit(emp, "edit")) return;
     const bandCode = resolveBandCodeFromDisplay(emp.band, bandSelectOptions) || defaultAddBand;
     const streamValue =
-      streamSelectOptions.find(
-        (opt) =>
-          opt.value === emp.stream ||
-          opt.label === emp.stream ||
-          opt.code === emp.stream,
-      )?.value || emp.stream || defaultAddStream;
+      resolveStreamSelectValue(emp.stream, streamSelectOptions) || defaultAddStream;
 
     setEditDesignationOptions([]);
     setEditDesignation(null);
@@ -883,7 +975,10 @@ export default function EmployeeDirectory({
     setDraft({
       name: emp.name ?? "",
       email: emp.email ?? "",
-      role: emp.empRole ?? emp.role ?? "Employee",
+      role: coercePortalRoleSelectValue(
+        resolvePortalRoleLabel(emp.empRole, emp.portalRole, emp.role),
+        portalRoleOptions,
+      ),
       designation: emp.designation ?? "",
       band: bandCode,
       stream: streamValue,
@@ -971,8 +1066,7 @@ export default function EmployeeDirectory({
       showToast({ title: "Update failed", message: "Employee not found." });
       return null;
     }
-    const roleKey = String(draft.role || "").trim().toLowerCase();
-    const isAdminRole = roleKey === "admin";
+    const isAdminRole = isAdminPortalRole(draft.role);
     const bandCode = String(draft.band || "").trim();
     const department = String(draft.stream ?? current.stream ?? "").trim();
     const bandRow = isAdminRole
@@ -1004,6 +1098,20 @@ export default function EmployeeDirectory({
   function requestSaveEdit(e) {
     e.preventDefault();
     if (!editingEmployeeId) return;
+    const current = getEditingEmployeeRow();
+    if (
+      current &&
+      !isSuperAdminViewer &&
+      isAdminPortalRole(current.empRole ?? current.role) &&
+      resolvePortalRoleLabel(draft.role) !== resolvePortalRoleLabel(current.empRole ?? current.role)
+    ) {
+      showToast({
+        title: "Not allowed",
+        message: "HR cannot change Super Admin portal roles.",
+        tone: "error",
+      });
+      return;
+    }
     if (!validateEditDraft()) return;
     setPendingSaveEdit(true);
   }
@@ -1017,8 +1125,8 @@ export default function EmployeeDirectory({
     const payload = {
       name: draft.name.trim(),
       email: String(draft.email ?? current.email ?? "").trim(),
-      portalRole: draft.role,
-      empRole: draft.role,
+      portalRole: resolvePortalRoleLabel(draft.role),
+      empRole: resolvePortalRoleLabel(draft.role),
       designation: String(draft.designation ?? "").trim(),
       department: isAdminRole ? department || null : department || null,
       bandId: isAdminRole ? null : bandId,
@@ -1098,9 +1206,8 @@ export default function EmployeeDirectory({
 
     const employeeName = addDraft.employeeName.trim();
     const email = addDraft.email.trim().toLowerCase();
-    const empRole = addDraft.empRole.trim() || "Employee";
-    const roleKey = empRole.toLowerCase();
-    const isAdminRole = roleKey === "admin";
+    const empRole = resolvePortalRoleLabel(addDraft.empRole);
+    const isAdminRole = isAdminPortalRole(empRole);
     const bandCode = String(addDraft.band || "").trim();
     const stream = String(addDraft.stream || "").trim();
 
@@ -1219,6 +1326,9 @@ export default function EmployeeDirectory({
       ) {
         message =
           "Employee create failed on the server. Confirm Webtrak is running and POST /api/v1/employees accepts your payload (band id, department, salary placeholders).";
+      } else if (lower.includes("users_department_check") || lower.includes("department_check")) {
+        message =
+          "That department could not be saved on the employee profile. Choose a department from the directory list (e.g. Human Resources, Developer) and ensure it matches the designation lookup for the selected band.";
       } else if (
         lower.includes("designation") ||
         lower.includes("band") ||
@@ -1240,25 +1350,23 @@ export default function EmployeeDirectory({
         title="Employees"
         subtitle="Search people, edit profiles, promote bands, and open or close one person's review window. Import replaces the roster from CSV."
       >
-        <div className="flex flex-wrap items-center gap-2">
-          <EntityCsvToolbar
-            entityKey="employees"
-            onImportComplete={() => reloadEmployees?.()}
-            onExport={() => exportEmployeesCsv(employees)}
-            confirmImportMessage="Import the full employee roster from CSV? Anyone not listed will be marked inactive (admins are kept)."
-            showToast={showToast}
-          />
-          <button type="button" onClick={openAdd} className="rt-btn-primary text-sm" title="Add employee">
-            <Plus size={15} /> Add Employee
-          </button>
-        </div>
+        <button type="button" onClick={openAdd} className="rt-btn-primary shrink-0 whitespace-nowrap text-sm" title="Add employee">
+          <Plus size={15} /> Add Employee
+        </button>
+        <EntityCsvToolbar
+          entityKey="employees"
+          onImportComplete={() => reloadEmployees?.()}
+          onExport={() => exportEmployeesCsv(employees)}
+          confirmImportMessage="Import the full employee roster from CSV? Anyone not listed will be marked inactive (admins are kept)."
+          showToast={showToast}
+        />
       </AdminPageHeader>
 
       <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
           { label: "Total", value: totalEmployeesDisplay },
           { label: "Managers", value: managerCount },
-          { label: "Showing", value: visibleEmployees.length, accent: true },
+          { label: "Showing", value: filtered.length, accent: true },
           { label: "Bands", value: bandCount },
           { label: "Admins", value: adminCount },
           { label: "Employees", value: employeeCount },
@@ -1303,11 +1411,11 @@ export default function EmployeeDirectory({
             onClear={() => setQuery("")}
             placeholder="Name, email, or employee ID"
           />
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 lg:flex lg:shrink-0">
+          <div className="flex flex-wrap gap-2 lg:shrink-0">
             <select
               value={roleFilter}
               onChange={(e) => setRoleFilter(e.target.value)}
-              className="rt-input h-10 min-w-[8.5rem] text-sm"
+              className="rt-input h-10 min-h-0 w-full min-w-[9rem] sm:w-auto text-sm"
               aria-label="Filter by role"
             >
               <option value="all">All roles</option>
@@ -1320,7 +1428,7 @@ export default function EmployeeDirectory({
             <select
               value={designationFilter}
               onChange={(e) => setDesignationFilter(e.target.value)}
-              className="rt-input h-10 min-w-[9.5rem] text-sm"
+              className="rt-input h-10 min-h-0 w-full min-w-[10rem] sm:w-auto text-sm"
               aria-label="Filter by designation"
             >
               <option value="all">All designations</option>
@@ -1333,7 +1441,7 @@ export default function EmployeeDirectory({
             <select
               value={bandFilter}
               onChange={(e) => setBandFilter(e.target.value)}
-              className="rt-input h-10 min-w-[8rem] text-sm"
+              className="rt-input h-10 min-h-0 w-full min-w-[9rem] sm:w-auto text-sm"
               aria-label="Filter by band"
             >
               <option value="all">All bands</option>
@@ -1348,7 +1456,7 @@ export default function EmployeeDirectory({
         {(query || roleFilter !== "all" || designationFilter !== "all" || bandFilter !== "all") && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-[rgb(var(--muted))]">
             <span>
-              {visibleEmployees.length} of {searchUniverse.length} in view
+              {filtered.length} of {searchUniverse.length} in view
             </span>
             <button
               type="button"
@@ -1382,23 +1490,20 @@ export default function EmployeeDirectory({
         </div>
       ) : null}
 
-      {/* ── Desktop roster (scroll inside panel) ── */}
-      <div className="rt-panel hidden lg:flex flex-col max-h-[min(72vh,720px)] overflow-hidden">
-        <div className="shrink-0 px-4 py-3 border-b border-[rgb(var(--border))]">
+      {/* ── Desktop roster ── */}
+      <div className="pulse-surface hidden lg:block overflow-hidden">
+        <div className="border-b border-[rgb(var(--border))] px-4 py-3 sm:px-5">
           <h2 className="text-sm font-semibold text-[rgb(var(--text))]">Employee roster</h2>
-          <p className="rt-section-subtitle mt-0.5">
-            {visibleEmployees.length} in view
-            {searchUniverse.length !== visibleEmployees.length
-              ? ` (filtered from ${searchUniverse.length})`
-              : ""}
-            {" "}
-            · {totalEmployeesDisplay} total in directory · scroll inside this panel
+          <p className="pulse-section-subtitle mt-0.5">
+            {listPagination.rangeLabel}
+            {searchUniverse.length !== filtered.length ? ` (filtered from ${searchUniverse.length})` : ""}
+            {" · "}
+            {totalEmployeesDisplay} total in directory
           </p>
         </div>
-        <div className="min-w-0 flex-1 overflow-auto custom-scrollbar">
-          <div className="overflow-x-auto min-h-0">
-          <table className="w-full text-left table-fixed min-w-[1100px]">
-            <thead className="sticky top-0 z-10 bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full min-w-[1180px] text-left">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
               <tr>
                 <th className="w-10 px-3 py-3">
                   <input
@@ -1412,15 +1517,15 @@ export default function EmployeeDirectory({
                     aria-label="Select all visible employees"
                   />
                 </th>
-                <th className="w-[5.5rem] px-4 py-3 font-semibold">Emp ID</th>
-                <th className="w-[10rem] px-4 py-3 font-semibold">Name</th>
-                <th className="w-[12rem] px-4 py-3 font-semibold">Email</th>
-                <th className="w-[6.5rem] px-4 py-3 font-semibold">Role</th>
-                <th className="w-[9rem] px-4 py-3 font-semibold">Designation</th>
-                <th className="w-[5.5rem] px-4 py-3 font-semibold">Band</th>
-                <th className="w-[8rem] px-4 py-3 font-semibold">Department</th>
-                <th className="w-[5.5rem] px-4 py-3 font-semibold text-center">Last promo</th>
-                <th className="w-[7.5rem] px-4 py-3 text-right font-semibold">Actions</th>
+                <th className="whitespace-nowrap px-4 py-3 font-semibold">Emp ID</th>
+                <th className="min-w-[9rem] whitespace-nowrap px-4 py-3 font-semibold">Name</th>
+                <th className="min-w-[11rem] whitespace-nowrap px-4 py-3 font-semibold">Email</th>
+                <th className="min-w-[9.5rem] whitespace-nowrap px-4 py-3 font-semibold">Portal role</th>
+                <th className="min-w-[10rem] whitespace-nowrap px-4 py-3 font-semibold">Designation</th>
+                <th className="w-[5.5rem] whitespace-nowrap px-4 py-3 font-semibold">Band</th>
+                <th className="min-w-[9rem] whitespace-nowrap px-4 py-3 font-semibold">Department</th>
+                <th className="w-[6rem] whitespace-nowrap px-4 py-3 text-center font-semibold">Last promo</th>
+                <th className="w-[8.5rem] whitespace-nowrap px-4 py-3 text-right font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
@@ -1453,7 +1558,13 @@ export default function EmployeeDirectory({
                     <DirectoryCell title={emp.email}>{emp.email || "—"}</DirectoryCell>
                   </td>
                   <td className="px-4 py-2 align-middle">
-                    <RoleBadge role={emp.role} />
+                    <PortalRoleCell
+                      emp={emp}
+                      canEdit={isSuperAdminViewer}
+                      portalRoleOptions={portalRoleOptions}
+                      saving={portalRoleSavingId === String(emp.id)}
+                      onChange={handleInlinePortalRoleChange}
+                    />
                   </td>
                   <td className="px-4 py-2 align-middle">
                     <DirectoryCell title={employeeDesignation(emp)}>{employeeDesignation(emp)}</DirectoryCell>
@@ -1486,42 +1597,45 @@ export default function EmployeeDirectory({
                      )}
                   </td>
                   <td className="px-4 py-2 align-middle text-right">
-                    <div className="inline-flex items-center gap-0.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-0.5">
-                      <button
-                        type="button"
+                    <div className="inline-flex items-center justify-end gap-0.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-0.5">
+                      <DirectoryActionButton
                         onClick={() => openEdit(emp)}
-                        className="p-1.5 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-colors"
-                        title="Edit employee"
-                        aria-label={`Edit ${emp.name}`}
+                        disabled={!canModifyEmployee(emp)}
+                        title={canModifyEmployee(emp) ? "Edit employee" : "HR cannot edit Super Admin accounts"}
+                        ariaLabel={`Edit ${emp.name}`}
                       >
-                        <Edit3 size={15} />
-                      </button>
+                        <Edit3 size={16} strokeWidth={2} />
+                      </DirectoryActionButton>
 
-                      <button
-                        type="button"
+                      <DirectoryActionButton
                         onClick={() => requestPromoteEmployee(emp)}
-                        disabled={promotingId === emp.id || promoteGate.isMaxBand}
-                        className="p-1.5 rounded-md text-blue-600 dark:text-blue-300 hover:bg-blue-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        disabled={!canModifyEmployee(emp) || promotingId === emp.id || promoteGate.isMaxBand}
+                        variant="promote"
                         title={
-                          promoteGate.isMaxBand
-                            ? promoteGate.reasonIfBlocked || "Already at highest band on default track"
-                            : "Promote to next band"
+                          !canModifyEmployee(emp)
+                            ? "HR cannot promote Super Admin accounts"
+                            : promoteGate.isMaxBand
+                              ? promoteGate.reasonIfBlocked || "Already at highest band on default track"
+                              : "Promote to next band"
                         }
-                        aria-label={`Promote ${emp.name}`}
+                        ariaLabel={`Promote ${emp.name}`}
                       >
-                        <ArrowUpCircle size={15} />
-                      </button>
+                        <ArrowUpCircle size={16} strokeWidth={2} />
+                      </DirectoryActionButton>
 
-                      <button
-                        type="button"
+                      <DirectoryActionButton
                         onClick={() => requestRemoveEmployee(emp)}
-                        disabled={isSelf(emp)}
-                        className="p-1.5 rounded-md text-[rgb(var(--danger))] hover:bg-[rgb(var(--danger))]/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        title="Remove employee"
-                        aria-label={`Remove ${emp.name}`}
+                        disabled={isSelf(emp) || !canModifyEmployee(emp)}
+                        variant="danger"
+                        title={
+                          !canModifyEmployee(emp)
+                            ? "HR cannot deactivate Super Admin accounts"
+                            : "Remove employee"
+                        }
+                        ariaLabel={`Remove ${emp.name}`}
                       >
-                        <Trash2 size={15} />
-                      </button>
+                        <Trash2 size={16} strokeWidth={2} />
+                      </DirectoryActionButton>
                     </div>
                   </td>
                 </tr>
@@ -1530,7 +1644,7 @@ export default function EmployeeDirectory({
 
               {!employeesLoading && filtered.length === 0 ? (
                 <tr>
-                  <td className="py-16 text-center" colSpan={9}>
+                  <td className="py-16 text-center" colSpan={10}>
                     <div className="flex flex-col items-center gap-3">
                       <Search size={32} className="text-[rgb(var(--muted))]/40" />
                       <p className="text-[rgb(var(--muted))] text-sm">No employees match your filters.</p>
@@ -1540,17 +1654,28 @@ export default function EmployeeDirectory({
               ) : null}
             </tbody>
           </table>
-          </div>
         </div>
+        {listPagination.show ? (
+          <ListPaginationBar
+            rangeLabel={listPagination.rangeLabel}
+            page={listPagination.page}
+            maxPage={listPagination.maxPage}
+            pageSize={listPagination.pageSize}
+            pageSizeOptions={listPagination.pageSizeOptions}
+            loading={employeesLoading}
+            onPageChange={listPagination.setPage}
+            onPageSizeChange={listPagination.setPageSize}
+          />
+        ) : null}
       </div>
 
-      {/* ── Mobile roster (scroll inside panel) ── */}
-      <div className="rt-panel lg:hidden flex flex-col max-h-[min(72vh,640px)] overflow-hidden">
-        <div className="shrink-0 px-4 py-3 border-b border-[rgb(var(--border))]">
+      {/* ── Mobile roster ── */}
+      <div className="pulse-surface lg:hidden overflow-hidden">
+        <div className="border-b border-[rgb(var(--border))] px-4 py-3">
           <h2 className="text-sm font-semibold">Employee roster</h2>
-          <p className="rt-section-subtitle mt-0.5">{visibleEmployees.length} in view</p>
+          <p className="pulse-section-subtitle mt-0.5">{listPagination.rangeLabel}</p>
         </div>
-        <div className="flex-1 overflow-auto custom-scrollbar p-4 space-y-3">
+        <div className="space-y-3 p-4">
         {visibleEmployees.map((emp) => {
           const promoteGate = getPromotionPreview(emp.band, "BOTH");
           return (
@@ -1563,7 +1688,13 @@ export default function EmployeeDirectory({
                 </div>
                 <div className="text-[11px] text-[rgb(var(--muted))] truncate">{emp.email || "—"}</div>
               </div>
-              <RoleBadge role={emp.role} />
+              <PortalRoleCell
+                emp={emp}
+                canEdit={isSuperAdminViewer}
+                portalRoleOptions={portalRoleOptions}
+                saving={portalRoleSavingId === String(emp.id)}
+                onChange={handleInlinePortalRoleChange}
+              />
             </div>
 
             <div className="grid grid-cols-3 gap-2 text-[11px]">
@@ -1600,34 +1731,39 @@ export default function EmployeeDirectory({
                   <Square size={9} /> Close
                 </button>
               </div>
-              <div className="flex items-center gap-1.5">
-                <button
+              <div className="inline-flex items-center gap-0.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-0.5">
+                <DirectoryActionButton
                   onClick={() => openEdit(emp)}
-                  className="p-1.5 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500 hover:text-white rounded-md transition-all border border-blue-500/20"
-                  title="Edit"
+                  disabled={!canModifyEmployee(emp)}
+                  title={canModifyEmployee(emp) ? "Edit" : "HR cannot edit Super Admin accounts"}
+                  ariaLabel={`Edit ${emp.name}`}
                 >
-                  <Edit3 size={14} />
-                </button>
-                <button
+                  <Edit3 size={16} strokeWidth={2} />
+                </DirectoryActionButton>
+                <DirectoryActionButton
                   onClick={() => requestPromoteEmployee(emp)}
-                  disabled={promotingId === emp.id || promoteGate.isMaxBand}
-                  className="p-1.5 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500 hover:text-white rounded-md transition-all border border-blue-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                  disabled={!canModifyEmployee(emp) || promotingId === emp.id || promoteGate.isMaxBand}
+                  variant="promote"
                   title={
-                    promoteGate.isMaxBand
-                      ? promoteGate.reasonIfBlocked || "Already at highest band on default track"
-                      : "Promote to next band"
+                    !canModifyEmployee(emp)
+                      ? "HR cannot promote Super Admin accounts"
+                      : promoteGate.isMaxBand
+                        ? promoteGate.reasonIfBlocked || "Already at highest band on default track"
+                        : "Promote to next band"
                   }
+                  ariaLabel={`Promote ${emp.name}`}
                 >
-                  <ArrowUpCircle size={14} />
-                </button>
-                <button
+                  <ArrowUpCircle size={16} strokeWidth={2} />
+                </DirectoryActionButton>
+                <DirectoryActionButton
                   onClick={() => requestRemoveEmployee(emp)}
-                  disabled={isSelf(emp)}
-                  className="p-1.5 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500 hover:text-white rounded-md transition-all border border-red-500/20"
-                  title="Remove"
+                  disabled={isSelf(emp) || !canModifyEmployee(emp)}
+                  variant="danger"
+                  title={canModifyEmployee(emp) ? "Remove" : "HR cannot deactivate Super Admin accounts"}
+                  ariaLabel={`Remove ${emp.name}`}
                 >
-                  <Trash2 size={14} />
-                </button>
+                  <Trash2 size={16} strokeWidth={2} />
+                </DirectoryActionButton>
               </div>
             </div>
           </div>
@@ -1640,23 +1776,35 @@ export default function EmployeeDirectory({
             <p className="text-[rgb(var(--muted))] text-sm">No employees match your filters.</p>
           </div>
         ) : null}
+        {listPagination.show ? (
+          <ListPaginationBar
+            rangeLabel={listPagination.rangeLabel}
+            page={listPagination.page}
+            maxPage={listPagination.maxPage}
+            pageSize={listPagination.pageSize}
+            pageSizeOptions={listPagination.pageSizeOptions}
+            loading={employeesLoading}
+            onPageChange={listPagination.setPage}
+            onPageSizeChange={listPagination.setPageSize}
+          />
+        ) : null}
         </div>
       </div>
 
       {pager ? (
-        <div className="pt-2">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="pulse-surface px-4 py-3 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <button
               type="button"
               onClick={pager.onReset}
               disabled={Boolean(pager.loading) || !pager.onReset}
               className={[
-                "rt-btn-ghost transition-all text-sm",
+                "rt-btn-ghost h-9 px-3 text-xs font-semibold",
                 Boolean(pager.loading) || !pager.onReset ? "opacity-50 cursor-not-allowed" : "",
               ].join(" ")}
               title="First page"
             >
-              First Page
+              First page
             </button>
             <CursorPagination
               canPrev={Boolean(pager.canPrev)}
@@ -1835,15 +1983,12 @@ export default function EmployeeDirectory({
               <AddFormField label="Portal role" required>
                 <select
                   className="rt-input w-full text-sm"
-                  value={addDraft.empRole}
+                  value={coercePortalRoleSelectValue(addDraft.empRole, portalRoleOptions)}
                   onChange={(e) => setAddDraft((d) => ({ ...d, empRole: e.target.value }))}
                 >
-                  <option value="Employee">Employee</option>
-                  <option value="Manager">Manager</option>
-                  <option value="Admin">Admin</option>
-                  {allocationRoleOptions.map((o) => (
-                    <option key={`alloc-role:${o.value}`} value={o.value}>
-                      {o.label}
+                  {portalRoleOptions.map((role) => (
+                    <option key={`add-portal-role:${role}`} value={role}>
+                      {role}
                     </option>
                   ))}
                 </select>
@@ -2046,16 +2191,22 @@ export default function EmployeeDirectory({
             >
               <AddFormField label="Portal role" required>
                 <select
-                  value={draft.role}
+                  value={coercePortalRoleSelectValue(draft.role, portalRoleOptions)}
                   onChange={(e) => setDraft((d) => ({ ...d, role: e.target.value }))}
                   className="rt-input w-full text-sm"
+                  disabled={!isSuperAdminViewer && isAdminPortalRole(editingEmployee?.empRole ?? editingEmployee?.role)}
                 >
-                  <option value="Employee">Employee</option>
-                  <option value="Manager">Manager</option>
-                  <option value="HR">HR</option>
-                  <option value="Finance">Finance</option>
-                  <option value="Admin">Admin</option>
+                  {portalRoleOptions.map((role) => (
+                    <option key={`edit-portal-role:${role}`} value={role}>
+                      {role}
+                    </option>
+                  ))}
                 </select>
+                {!isSuperAdminViewer && isAdminPortalRole(editingEmployee?.empRole ?? editingEmployee?.role) ? (
+                  <p className="mt-1.5 text-[10px] text-[rgb(var(--muted))]">
+                    HR cannot change Super Admin portal roles.
+                  </p>
+                ) : null}
               </AddFormField>
               {editRoleIsAdmin ? (
                 <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2.5 text-[11px] text-[rgb(var(--muted))] leading-relaxed">

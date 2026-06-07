@@ -1,20 +1,21 @@
 // @ts-nocheck
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  FolderKanban,
   Plus,
   Search,
   Edit3,
-  RefreshCw,
   ToggleLeft,
   ToggleRight,
   CalendarOff,
+  Trash2,
 } from "lucide-react";
 import ImportExportActions from "../shared/ImportExportActions";
 import CursorPagination from "../shared/CursorPagination";
-import { fetchProjects, normalizeProjects } from "../../api/projects";
+import ConfirmDialog from "../shared/ConfirmDialog";
+import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
+import { addProject, deleteProject, fetchProjects, normalizeProjects, updateProject } from "../../api/projects";
 import { fetchEmployees, normalizeEmployees } from "../../api/employees";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "../../hooks/queries";
 import ModalOverlay from "../shared/ModalOverlay";
 import Toast from "../shared/Toast";
@@ -31,8 +32,26 @@ import {
   validateProjectDates,
 } from "../../utils/projectsCatalog";
 
-const SEED_CSV_URL = "/sample-csv/projects-directory.csv";
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
+
+function isBackendProjectId(id) {
+  return /^\d+$/.test(String(id ?? "").trim());
+}
+
+function resolveBackendProjectId(project, apiProjects) {
+  const direct = String(project?.id ?? "").trim();
+  if (isBackendProjectId(direct)) return direct;
+  const name = String(project?.name ?? "").trim().toLowerCase();
+  if (!name) return null;
+  const match = (apiProjects || []).find((p) => String(p?.name ?? "").trim().toLowerCase() === name);
+  const matchId = String(match?.id ?? "").trim();
+  return isBackendProjectId(matchId) ? matchId : null;
+}
+
+function isProtectedProjectCode(code) {
+  const normalized = String(code ?? "").trim().toUpperCase();
+  return normalized === "GLOBAL" || normalized === "BENCH";
+}
 
 function rowFromApiProject(p) {
   const desc = String(p?.description || "");
@@ -82,12 +101,12 @@ function matchPersonToOption(raw, options) {
 }
 
 export default function ProjectsDirectory({ employees: employeesProp, employeesLoading: employeesLoadingProp }) {
+  const queryClient = useQueryClient();
   const [catalog, setCatalog] = useState(() => loadProjectsCatalog());
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [seeded, setSeeded] = useState(false);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingRow, setEditingRow] = useState(null);
@@ -99,6 +118,9 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
   const [formActive, setFormActive] = useState(true);
   const [formBusy, setFormBusy] = useState(false);
   const [formError, setFormError] = useState("");
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [toggleBusyId, setToggleBusyId] = useState("");
 
   const [toast, setToast] = useState(null);
   const showToast = useCallback((t) => setToast(t), []);
@@ -114,35 +136,17 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
   );
 
   const projectsQuery = useQuery({
-    queryKey: queryKeys.projects.list({ all: true }),
-    queryFn: async ({ signal }) => normalizeProjects(await fetchProjects({ signal })),
+    queryKey: queryKeys.projects.list({ all: true, includeInactive: true }),
+    queryFn: async ({ signal }) => normalizeProjects(await fetchProjects({ signal, includeInactive: true })),
     staleTime: 60_000,
   });
   const apiProjects = projectsQuery.data ?? [];
   const apiLoading = projectsQuery.isLoading || projectsQuery.isFetching;
 
-  useEffect(() => {
-    if (seeded || catalog.length) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(SEED_CSV_URL);
-        if (!res.ok) return;
-        const text = await res.text();
-        const rows = parseProjectsCsv(text);
-        if (!rows.length || cancelled) return;
-        const merged = mergeProjectCatalogRows([], rows);
-        setCatalog(merged);
-        saveProjectsCatalog(merged);
-        setSeeded(true);
-      } catch {
-        /* optional seed */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [catalog.length, seeded]);
+  async function refetchProjects() {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.projects.all });
+    await projectsQuery.refetch();
+  }
 
   const projects = useMemo(() => {
     const fromApi = apiProjects.map(rowFromApiProject);
@@ -282,21 +286,45 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
       active,
       updatedAt: new Date().toISOString(),
     };
-    const next = editingRow
-      ? catalog.map((r) => (r.id === editingRow.id || r.name === editingRow.name ? { ...r, ...row } : r))
-      : mergeProjectCatalogRows(catalog, [row]);
-    persistCatalog(next);
-    showToast({
-      title: editingRow ? "Project updated" : "Project added",
-      message: `${name} saved to the directory.`,
-    });
-    closeForm();
-    setFormBusy(false);
+
+    (async () => {
+      try {
+        const backendId = editingRow ? resolveBackendProjectId(editingRow, apiProjects) : null;
+        if (editingRow && backendId) {
+          await updateProject(backendId, { name, active });
+        } else if (!editingRow) {
+          const created = await addProject({
+            code: row.id,
+            name,
+            description: [row.pm && `PM: ${row.pm}`, row.am && `AM: ${row.am}`].filter(Boolean).join(" · "),
+            active,
+          });
+          const createdId = String(created?.data?.id ?? created?.data?.projectId ?? created?.id ?? "").trim();
+          if (isBackendProjectId(createdId)) row.id = createdId;
+        }
+
+        const next = editingRow
+          ? catalog.map((r) => (r.id === editingRow.id || r.name === editingRow.name ? { ...r, ...row } : r))
+          : mergeProjectCatalogRows(catalog, [row]);
+        persistCatalog(next);
+        await refetchProjects();
+        showToast({
+          title: editingRow ? "Project updated" : "Project added",
+          message: `${name} saved.`,
+        });
+        closeForm();
+      } catch (err) {
+        setFormError(err?.message || "Could not save project.");
+      } finally {
+        setFormBusy(false);
+      }
+    })();
   }
 
   function handleToggleActive(project) {
     const listedActive = project.listedActive ?? isProjectListedActive(project);
     const nextActive = !listedActive;
+    const backendId = resolveBackendProjectId(project, apiProjects);
     const todayIso = new Date().toISOString().slice(0, 10);
     const todayStart = new Date(todayIso);
     todayStart.setHours(0, 0, 0, 0);
@@ -319,34 +347,90 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
       }
     }
 
-    const next = catalog.map((r) => {
-      if (r.id !== project.id && r.name !== project.name) return r;
-      return {
-        ...r,
-        active,
-        endDate: endDate ?? r.endDate,
-        updatedAt: new Date().toISOString(),
-      };
-    });
-    if (!catalog.find((r) => r.id === project.id || r.name === project.name)) {
-      next.push({
-        id: project.id,
-        name: project.name,
-        startDate: project.startDate,
-        endDate: endDate ?? project.endDate,
-        pm: project.pm,
-        am: project.am,
-        active,
-        updatedAt: new Date().toISOString(),
+    const applyLocal = () => {
+      const next = catalog.map((r) => {
+        if (r.id !== project.id && r.name !== project.name) return r;
+        return {
+          ...r,
+          active,
+          endDate: endDate ?? r.endDate,
+          updatedAt: new Date().toISOString(),
+        };
       });
+      if (!catalog.find((r) => r.id === project.id || r.name === project.name)) {
+        next.push({
+          id: project.id,
+          name: project.name,
+          startDate: project.startDate,
+          endDate: endDate ?? project.endDate,
+          pm: project.pm,
+          am: project.am,
+          active,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      persistCatalog(next);
+    };
+
+    if (isProtectedProjectCode(project.code || project.id)) {
+      showToast({ title: "Cannot change status", message: "System projects cannot be modified.", tone: "error" });
+      return;
     }
-    persistCatalog(next);
-    showToast({
-      title: "Status updated",
-      message: nextActive
-        ? `${project.name} is active.`
-        : `${project.name} is inactive${endDate ? ` (end date ${formatProjectDate(endDate)})` : ""}.`,
-    });
+
+    setToggleBusyId(String(project.id));
+    (async () => {
+      try {
+        if (backendId) {
+          await updateProject(backendId, { active: nextActive });
+        }
+        applyLocal();
+        await refetchProjects();
+        showToast({
+          title: "Status updated",
+          message: nextActive
+            ? `${project.name} is active.`
+            : `${project.name} is inactive${endDate ? ` (end date ${formatProjectDate(endDate)})` : ""}.`,
+        });
+      } catch (err) {
+        showToast({ title: "Status update failed", message: err?.message || "Please try again.", tone: "error" });
+      } finally {
+        setToggleBusyId("");
+      }
+    })();
+  }
+
+  function handleDeleteClick(project) {
+    if (isProtectedProjectCode(project.code || project.id)) {
+      showToast({ title: "Cannot delete", message: "System projects cannot be removed.", tone: "error" });
+      return;
+    }
+    setPendingDelete(project);
+  }
+
+  async function confirmDeleteProject() {
+    const project = pendingDelete;
+    if (!project) return;
+    setDeleteBusy(true);
+    try {
+      const backendId = resolveBackendProjectId(project, apiProjects);
+      if (backendId) {
+        await deleteProject(backendId);
+      }
+      const next = catalog.filter((r) => r.id !== project.id && r.name !== project.name);
+      persistCatalog(next);
+      await refetchProjects();
+      showToast({
+        title: "Project removed",
+        message: backendId
+          ? `${project.name} was deactivated on the server.`
+          : `${project.name} was removed from the local directory.`,
+      });
+      setPendingDelete(null);
+    } catch (err) {
+      showToast({ title: "Delete failed", message: err?.message || "Please try again.", tone: "error" });
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   function handleEndProject() {
@@ -412,91 +496,73 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="rt-panel p-6 sm:p-8">
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-5">
-          <div>
-            <div className="flex items-center gap-3 mb-2">
-              <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-lg)] bg-[rgb(var(--accent-soft))] text-[rgb(var(--accent))]">
-                <FolderKanban size={18} strokeWidth={1.8} />
-              </div>
-              <span className="rt-kicker">Portfolio</span>
-            </div>
-            <h2 className="rt-page-title">Projects Directory</h2>
-            <p className="text-sm text-[rgb(var(--muted))] mt-1 max-w-2xl">
-              Project portfolio with start/end dates and PM / AM ownership — aligned to your operations sheet.
-              Import CSV to update the portfolio; edits are stored locally and merged with API data when available.
-            </p>
+    <AdminPageShell className="space-y-6">
+      <AdminPageHeader
+        title="Projects"
+        subtitle="Project portfolio with start/end dates and PM / AM ownership. Edits sync to the server when a project exists in Webtrak; PM, AM, and dates are kept in the local portfolio overlay."
+      >
+        <ImportExportActions
+          onExport={exportCsv}
+          onFileSelected={handleImportFile}
+          importLabel="Import"
+          exportLabel="Export"
+        />
+        <button type="button" onClick={openAddForm} className="rt-btn-primary">
+          <Plus size={16} /> Add project
+        </button>
+      </AdminPageHeader>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[
+          { label: "Total", value: stats.total },
+          { label: "Active", value: stats.active },
+          { label: "Inactive", value: stats.inactive },
+          { label: "With PM", value: stats.withPm },
+        ].map((s) => (
+          <div key={s.label} className="rt-stat">
+            <div className="rt-field-label">{s.label}</div>
+            <div className="mt-2 text-xl font-bold tabular-nums text-[rgb(var(--text))]">{s.value}</div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={() => projectsQuery.refetch()} className="rt-btn-secondary" title="Refresh API">
-              <RefreshCw size={16} className={apiLoading ? "animate-spin" : ""} />
-            </button>
-            <ImportExportActions
-              onExport={exportCsv}
-              onFileSelected={handleImportFile}
-              importLabel="Import"
-              exportLabel="Export"
+        ))}
+      </div>
+
+      <div className="rt-toolbar-panel">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search project, PM, or AM…"
+              className="rt-input w-full pl-10"
             />
-            <button type="button" onClick={openAddForm} className="rt-btn-primary">
-              <Plus size={16} /> Add project
-            </button>
           </div>
-        </div>
-
-        <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            { label: "Total", value: stats.total },
-            { label: "Active", value: stats.active },
-            { label: "Inactive", value: stats.inactive },
-            { label: "With PM", value: stats.withPm },
-          ].map((s) => (
-            <div key={s.label} className="rt-stat">
-              <div className="rt-field-label">{s.label}</div>
-              <div className="mt-2 text-xl font-bold tabular-nums text-[rgb(var(--text))]">{s.value}</div>
-            </div>
-          ))}
-        </div>
-      </header>
-
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search project, PM, or AM…"
-            className="rt-input pl-10 w-full"
-          />
-        </div>
-        <div className="rt-segmented">
-          {["all", "active", "inactive"].map((f) => (
-            <button
-              key={f}
-              type="button"
-              onClick={() => setStatusFilter(f)}
-              className={[
-                "rt-segmented-item capitalize",
-                statusFilter === f ? "rt-segmented-item--active" : "",
-              ].join(" ")}
-            >
-              {f}
-            </button>
-          ))}
+          <div className="rt-segmented shrink-0">
+            {["all", "active", "inactive"].map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setStatusFilter(f)}
+                className={[
+                  "rt-segmented-item capitalize",
+                  statusFilter === f ? "rt-segmented-item--active" : "",
+                ].join(" ")}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       <div className="rt-panel overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto custom-scrollbar">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-[rgb(var(--border))] bg-[rgb(var(--surface-2))]">
+              <tr className="rt-table-head">
                 {["Project", "Start", "End", "PM", "AM", "Status", ""].map((h) => (
-                  <th
-                    key={h || "actions"}
-                    className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]"
-                  >
+                  <th key={h || "actions"} className="rt-table-head-cell">
                     {h}
                   </th>
                 ))}
@@ -504,7 +570,7 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
             </thead>
             <tbody>
               {paginated.map((p) => (
-                <tr key={p.id} className="border-b border-[rgb(var(--border))] hover:bg-[rgb(var(--surface-2)/.5)]">
+                <tr key={p.id} className="rt-table-row-interactive">
                   <td className="px-4 py-3 font-medium text-[rgb(var(--text))]">{p.name}</td>
                   <td className="px-4 py-3 text-[rgb(var(--muted))]">{formatProjectDate(p.startDate)}</td>
                   <td className="px-4 py-3 text-[rgb(var(--muted))]">{formatProjectDate(p.endDate)}</td>
@@ -535,9 +601,20 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
                         onClick={() => handleToggleActive(p)}
                         className="rt-btn-ghost p-2"
                         title={p.listedActive ? "Set inactive" : "Set active"}
+                        disabled={toggleBusyId === String(p.id)}
                       >
                         {p.listedActive ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
                       </button>
+                      {!isProtectedProjectCode(p.code || p.id) ? (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteClick(p)}
+                          className="rt-btn-ghost p-2 text-red-600"
+                          title="Delete project"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -706,6 +783,20 @@ export default function ProjectsDirectory({ employees: employeesProp, employeesL
       </ModalOverlay>
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-    </div>
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="Delete project?"
+        message={
+          pendingDelete
+            ? `Remove "${pendingDelete.name}" from the directory? Projects with allocations are deactivated instead of permanently deleted.`
+            : ""
+        }
+        confirmText="Delete"
+        busy={deleteBusy}
+        onCancel={() => (deleteBusy ? undefined : setPendingDelete(null))}
+        onConfirm={confirmDeleteProject}
+      />
+    </AdminPageShell>
   );
 }

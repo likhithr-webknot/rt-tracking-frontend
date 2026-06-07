@@ -1,6 +1,7 @@
 // @ts-nocheck
 
-import { KPI_DEFINITIONS_CSV_HEADER } from "./csvImportNormalize";
+import { KPI_DEFINITIONS_CSV_HEADER, RATINGS_HISTORY_CSV_HEADER, WEBKNOT_VALUES_CSV_HEADER } from "./csvImportNormalize";
+import { buildRatingsHistoryExportRows } from "./ratingsHistoryCsv";
 
 /** Canonical department label → short code used on WebTrack KPI sheets. */
 const STREAM_EXPORT_SHORT = {
@@ -122,11 +123,25 @@ export function exportPromotionsCsv(employees) {
 }
 
 export function exportCompanyValuesCsv(values) {
-  const header = ["title", "evaluation_criteria"];
-  const rows = (values || []).map((v) => [
-    v.name || v.title || "",
-    v.evaluationCriteria || v.pillar || "",
-  ]);
+  const header = WEBKNOT_VALUES_CSV_HEADER.split(",");
+  const sorted = [...(values || [])].sort((a, b) => {
+    const ca = String(a.evaluationCriteria ?? a.pillar ?? "").trim();
+    const cb = String(b.evaluationCriteria ?? b.pillar ?? "").trim();
+    if (ca !== cb) return ca.localeCompare(cb, undefined, { sensitivity: "base" });
+    const da = String(a.name ?? a.title ?? a.description ?? "").trim();
+    const db = String(b.name ?? b.title ?? b.description ?? "").trim();
+    return da.localeCompare(db, undefined, { sensitivity: "base" });
+  });
+
+  const rows = [];
+  let lastCriteria = null;
+  for (const v of sorted) {
+    const criteria = String(v.evaluationCriteria ?? v.pillar ?? "").trim();
+    const detail = String(v.name ?? v.title ?? v.description ?? "").trim();
+    if (!detail) continue;
+    rows.push([criteria !== lastCriteria ? criteria : "", detail]);
+    lastCriteria = criteria;
+  }
   downloadCsv("webknot-values.csv", header, rows);
 }
 
@@ -156,4 +171,10 @@ export function exportDepartmentsCsv(streams) {
   const header = ["code"];
   const rows = (streams || []).map((s) => [s.code || s.label || s.name || ""]);
   downloadCsv("streams.csv", header, rows);
+}
+
+export function exportRatingsHistoryCsv(employees, submissions) {
+  const header = RATINGS_HISTORY_CSV_HEADER.split(",");
+  const rows = buildRatingsHistoryExportRows(employees, submissions);
+  downloadCsv("ratings-history.csv", header, rows);
 }

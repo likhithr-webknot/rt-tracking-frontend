@@ -5,7 +5,7 @@
  *
  * Usage:
  *   SEED_API_BASE_URL=http://localhost:8080 \
- *   SEED_ADMIN_EMAIL=admin@webknot.in \
+ *   SEED_ADMIN_EMAIL=your-super-admin@webknot.in \
  *   SEED_ADMIN_PASSWORD='your-password' \
  *   node scripts/seed-huge-data.mjs
  */
@@ -526,7 +526,7 @@ async function main() {
   if (!config.adminEmail || !config.adminPassword) {
     console.error("Missing SEED_ADMIN_EMAIL or SEED_ADMIN_PASSWORD.");
     console.error("Example:");
-    console.error("  SEED_API_BASE_URL=http://localhost:8080 SEED_ADMIN_EMAIL=admin@webknot.in SEED_ADMIN_PASSWORD='***' node scripts/seed-huge-data.mjs");
+    console.error("  SEED_API_BASE_URL=http://localhost:8080 SEED_ADMIN_EMAIL=your-super-admin@webknot.in SEED_ADMIN_PASSWORD='***' node scripts/seed-huge-data.mjs");
     process.exit(1);
   }
 

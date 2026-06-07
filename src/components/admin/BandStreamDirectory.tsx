@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Edit3, Eye, EyeOff, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Edit3, Plus, Trash2 } from "lucide-react";
 import SearchField from "../shared/SearchField";
 import { STANDARD_BAND_CODES } from "../../utils/directoryCatalog";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
@@ -12,11 +12,12 @@ import ModalOverlay, { DialogFooter } from "../shared/ModalOverlay";
 import {
   addBand,
   addStream,
-  deleteBandOrDeactivate,
+  deleteBand,
   deleteStream,
   fetchBands,
   fetchStreams,
   normalizeDirectoryPage,
+  resolveBandNumericId,
   updateBand,
   updateStream,
 } from "../../api/band-stream-directory";
@@ -71,7 +72,11 @@ function messageFromUnknown(reason: unknown): string {
 }
 
 function titleFor(type: RowKind) {
-  return type === "band" ? "Band" : "Stream";
+  return type === "band" ? "Band" : "Department";
+}
+
+function rowDisplayName(row: DirectoryRow) {
+  return String(row.label || row.code || "").trim() || "—";
 }
 
 function fallbackLabel(type: RowKind, code: string) {
@@ -200,31 +205,35 @@ export default function BandStreamDirectory() {
     return BAND_CODES.filter((code) => !existing.has(code));
   }, [bands]);
 
-  const streamCodeOptions = useMemo(() => {
-    const seen = new Set<string>();
-    const options: string[] = [];
-    for (const row of streams) {
-      const code = String(row.code || "").trim();
-      if (!code || seen.has(code)) continue;
-      seen.add(code);
-      options.push(code);
-    }
-    return options.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  }, [streams]);
-
   function openAdd(type: RowKind) {
-    const options = type === "band" ? missingBandCodes : streamCodeOptions;
-    const code = options[0] || "";
+    if (type === "band") {
+      const code = missingBandCodes[0] || BAND_CODES[0] || "";
+      setEditor({
+        open: true,
+        mode: "add",
+        type: "band",
+        originalCode: "",
+        originalId: "",
+        originalLabel: "",
+        originalBandType: "BOTH",
+        code,
+        label: fallbackLabel("band", code),
+        active: true,
+        bandType: "BOTH",
+        sortOrder: "",
+      });
+      return;
+    }
     setEditor({
       open: true,
       mode: "add",
-      type,
+      type: "stream",
       originalCode: "",
       originalId: "",
       originalLabel: "",
       originalBandType: "BOTH",
-      code,
-      label: fallbackLabel(type, code),
+      code: "",
+      label: "",
       active: true,
       bandType: "BOTH",
       sortOrder: "",
@@ -267,18 +276,21 @@ export default function BandStreamDirectory() {
   async function submitEditor(e: React.FormEvent) {
     e.preventDefault();
     const type: RowKind = editor.type === "stream" ? "stream" : "band";
-    const code = String(editor.code || "").trim();
     const originalCode = String(editor.originalCode || "").trim();
     const originalId = String(editor.originalId || "").trim();
     const label = String(editor.label || "").trim();
     const sortOrder = String(editor.sortOrder || "").trim();
+    const code =
+      type === "stream"
+        ? String(editor.mode === "edit" ? originalCode || editor.code || label : label).trim()
+        : String(editor.code || "").trim();
 
-    if (!code) {
-      showToast({ title: "Missing code", message: `${titleFor(type)} code is required.`, tone: "error" });
+    if (!label) {
+      showToast({ title: "Missing name", message: `${titleFor(type)} name is required.`, tone: "error" });
       return;
     }
-    if (!label) {
-      showToast({ title: "Missing label", message: `${titleFor(type)} label is required.`, tone: "error" });
+    if (type === "band" && !code) {
+      showToast({ title: "Missing band level", message: "Choose a band level.", tone: "error" });
       return;
     }
     if (editor.mode === "edit") {
@@ -328,8 +340,10 @@ export default function BandStreamDirectory() {
           await updateBand(originalId, {
             id: originalId,
             bandId: originalId,
-            name: label,
+            code: originalCode || code,
+            originalCode: originalCode || code,
             designation: label,
+            label,
             bandType: payload.bandType,
           });
         }
@@ -376,30 +390,6 @@ export default function BandStreamDirectory() {
     }
   }
 
-  async function toggleStreamActive(row: DirectoryRow) {
-    const key = bandRowHasRestId(row) ? String(row.id).trim() : String(row.code || "").trim();
-    if (!key) return;
-    try {
-      await updateStream(key, {
-        active: !row.active,
-        ...(bandRowHasRestId(row)
-          ? {
-              id: String(row.id).trim(),
-              departmentId: String(row.id).trim(),
-              streamId: String(row.id).trim(),
-            }
-          : {}),
-      });
-      await refetchDirectory();
-    } catch (err) {
-      showToast({
-        title: "Update failed",
-        message: err instanceof Error ? err.message : "Please try again.",
-        tone: "error",
-      });
-    }
-  }
-
   function requestDeleteBand(row: DirectoryRow) {
     if (!bandCanDelete(row)) {
       showToast({
@@ -418,36 +408,40 @@ export default function BandStreamDirectory() {
     setDeleting(true);
     try {
       const type: RowKind = target.type === "stream" ? "stream" : "band";
-      const code = String(target.row.code || "").trim();
       if (type === "band") {
         if (!bandCanDelete(target.row)) {
           showToast({
             title: "Cannot delete",
-            message: "Band code is missing.",
+            message: "Band id is missing. Refresh the directory and try again.",
             tone: "error",
           });
           return;
         }
-        const outcome = await deleteBandOrDeactivate(target.row as unknown as Record<string, unknown>);
-        if (outcome.hardDeleted) {
-          showToast({ title: "Band deleted", message: code });
-        } else {
-          showToast({
-            title: "Band deactivated",
-            message: "Employees still reference this band, so it was hidden instead of removed.",
-            tone: "warning",
-          });
-        }
+        const direct = String(target.row.id ?? "").trim();
+        const bandId = /^\d+$/.test(direct)
+          ? direct
+          : await resolveBandNumericId(target.row as unknown as Record<string, unknown>);
+        await deleteBand(bandId);
+        showToast({ title: "Band deleted", message: rowDisplayName(target.row) });
       } else {
         await deleteStream(target.row as unknown as Record<string, unknown>);
-        showToast({ title: "Department deleted", message: code });
+        showToast({ title: "Department deleted", message: rowDisplayName(target.row) });
       }
       await refetchDirectory();
       setPendingDelete(null);
     } catch (err) {
+      const raw = err instanceof Error ? err.message : "Please try again.";
+      const lower = raw.toLowerCase();
+      const inUse =
+        lower.includes("in use") ||
+        lower.includes("cannot be deleted") ||
+        lower.includes("cannot be hard deleted") ||
+        lower.includes("referenced");
       showToast({
         title: "Delete failed",
-        message: err instanceof Error ? err.message : "Please try again.",
+        message: inUse
+          ? `${raw} Remove or reassign employees and designation lookups that use this entry, then try again.`
+          : raw,
         tone: "error",
       });
     } finally {
@@ -455,10 +449,8 @@ export default function BandStreamDirectory() {
     }
   }
 
-  const activeStreams = streams.filter((x) => x.active).length;
-
   return (
-    <AdminPageShell className="space-y-6 animate-in fade-in duration-300">
+    <AdminPageShell className="space-y-6">
       {directoryLoadError ? (
         <div className="rt-panel-subtle px-4 py-3 text-sm text-amber-900 dark:text-amber-100" role="status">
           <div className="font-semibold">Directory could not be loaded</div>
@@ -466,98 +458,46 @@ export default function BandStreamDirectory() {
         </div>
       ) : null}
 
-      <AdminPageHeader
-        title="Bands & Departments"
-        subtitle="Canonical bands and departments for KPIs, employees, and designations."
-      >
-        <div className="flex flex-wrap gap-2">
-          <div className="rt-stat min-w-[7rem]">
-            <div className="rt-field-label">Bands</div>
-            <div className="mt-2 text-xl font-bold tabular-nums">{bands.length}</div>
-          </div>
-          <div className="rt-stat min-w-[7rem]">
-            <div className="rt-field-label">Departments</div>
-            <div className="mt-2 text-xl font-bold tabular-nums">{streams.length}</div>
-            <div className="text-[11px] text-[rgb(var(--muted))]">{activeStreams} active</div>
-          </div>
-        </div>
-      </AdminPageHeader>
+      <AdminPageHeader title="Bands & Departments" />
 
-      <div className="rt-toolbar-panel">
+      <div className="rounded-[var(--radius-xl)] border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-4 py-3">
         <SearchField
-          label="Find a band or department"
+          label=""
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onClear={() => setQuery("")}
-          placeholder="Type a code or name, e.g. B4 or Developer"
-          hint="Matches both tables below. Use Clear to show everything again."
+          placeholder="Search bands and departments…"
         />
-        {query.trim() ? (
-          <div className="flex flex-wrap items-center gap-2 text-sm text-[rgb(var(--muted))]">
-            <span>
-              Showing {filteredBands.length} band{filteredBands.length === 1 ? "" : "s"} and{" "}
-              {filteredStreams.length} department{filteredStreams.length === 1 ? "" : "s"}
-            </span>
-            <button type="button" className="rt-btn-ghost !py-1.5 !px-3 text-sm" onClick={() => setQuery("")}>
-              Clear all
-            </button>
-          </div>
-        ) : null}
-        <div className="rt-toolbar-actions border-t border-[rgb(var(--border))] pt-4">
-          <button
-            type="button"
-            onClick={() => refetchDirectory()}
-            disabled={loading}
-            className="rt-btn-secondary"
-            title="Refresh lists"
-          >
-            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-            Refresh
-          </button>
-          <EntityCsvToolbar
-            entityKey="bands"
-            importLabel="Import bands"
-            exportLabel="Export bands"
-            replaceCatalog
-            onExport={() => exportBandsCsv(bands)}
-            onImportComplete={() => refetchDirectory()}
-            confirmImportMessage="Replace all bands from CSV? Unused bands not assigned to anyone are removed."
-            showToast={showToast}
-          />
-          <EntityCsvToolbar
-            entityKey="streams"
-            importLabel="Import depts"
-            exportLabel="Export depts"
-            replaceCatalog
-            onExport={() => exportDepartmentsCsv(streams)}
-            onImportComplete={() => refetchDirectory()}
-            confirmImportMessage="Replace department list from CSV? Streams not in the file are deactivated."
-            showToast={showToast}
-          />
-          <button onClick={() => openAdd("band")} className="rt-btn-primary" type="button">
-            <Plus size={16} /> Add band
-          </button>
-          <button onClick={() => openAdd("stream")} className="rt-btn-soft" type="button">
-            <Plus size={16} /> Add department
-          </button>
-        </div>
       </div>
 
       <div className="grid w-full min-w-0 grid-cols-1 gap-6 xl:grid-cols-2">
-        <section className="rt-panel min-w-0 flex flex-col max-h-[min(70vh,640px)] overflow-hidden">
-          <div className="shrink-0 border-b border-[rgb(var(--border))] px-5 py-4">
-            <h3 className="rt-section-title">Bands</h3>
-            <p className="rt-section-subtitle">Employee level codes — scroll inside this panel.</p>
+        <section className="rt-data-panel">
+          <div className="rt-data-panel-head">
+            <div className="flex min-w-0 flex-col gap-3">
+              <h3 className="rt-section-title">Bands</h3>
+              <div className="flex min-w-0 w-full flex-wrap items-center gap-2">
+                <EntityCsvToolbar
+                  entityKey="bands"
+                  importLabel="Import"
+                  exportLabel="Export"
+                  replaceCatalog
+                  onExport={() => exportBandsCsv(bands)}
+                  onImportComplete={() => refetchDirectory()}
+                  confirmImportMessage="Replace all bands from CSV? Unused bands not assigned to anyone are removed."
+                  showToast={showToast}
+                />
+                <button onClick={() => openAdd("band")} className="rt-btn-primary shrink-0" type="button">
+                  <Plus size={16} /> Add band
+                </button>
+              </div>
+            </div>
           </div>
-          <div className="min-w-0 flex-1 overflow-auto custom-scrollbar">
+          <div className="rt-data-panel-body">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-[rgb(var(--border))] bg-[rgb(var(--surface-2))]">
-                  {["Code", "Label", "Type", ""].map((h) => (
-                    <th
-                      key={h || "actions"}
-                      className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]"
-                    >
+                <tr className="rt-table-head">
+                  {["Name", "Type", ""].map((h) => (
+                    <th key={h || "actions"} className="rt-table-head-cell">
                       {h}
                     </th>
                   ))}
@@ -566,8 +506,7 @@ export default function BandStreamDirectory() {
               <tbody>
                 {filteredBands.map((row) => (
                   <tr key={`band:${row.id || row.code}`} className="rt-table-row-interactive">
-                    <td className="px-4 py-3 font-mono text-xs font-semibold text-[rgb(var(--text))]">{row.code}</td>
-                    <td className="px-4 py-3 text-[rgb(var(--text))]">{row.label}</td>
+                    <td className="px-4 py-3 font-medium text-[rgb(var(--text))]">{rowDisplayName(row)}</td>
                     <td className="px-4 py-3">
                       <span className="rt-badge rt-badge--primary uppercase">{String(row.bandType || "BOTH")}</span>
                     </td>
@@ -580,7 +519,7 @@ export default function BandStreamDirectory() {
                           type="button"
                           onClick={() => requestDeleteBand(row)}
                           className="rt-btn-ghost p-2 text-red-500"
-                          title="Delete or hide if in use"
+                          title="Delete band"
                           disabled={!bandCanDelete(row)}
                         >
                           <Trash2 size={15} />
@@ -591,7 +530,7 @@ export default function BandStreamDirectory() {
                 ))}
                 {!loading && filteredBands.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-[rgb(var(--muted))]">
+                    <td colSpan={3} className="px-4 py-10 text-center text-[rgb(var(--muted))]">
                       No bands match your search.
                     </td>
                   </tr>
@@ -601,20 +540,33 @@ export default function BandStreamDirectory() {
           </div>
         </section>
 
-        <section className="rt-panel min-w-0 flex flex-col max-h-[min(70vh,640px)] overflow-hidden">
-          <div className="shrink-0 border-b border-[rgb(var(--border))] px-5 py-4">
-            <h3 className="rt-section-title">Departments</h3>
-            <p className="rt-section-subtitle">Department details — scroll inside this panel.</p>
+        <section className="rt-data-panel">
+          <div className="rt-data-panel-head">
+            <div className="flex min-w-0 flex-col gap-3">
+              <h3 className="rt-section-title">Departments</h3>
+              <div className="flex min-w-0 w-full flex-wrap items-center gap-2">
+                <EntityCsvToolbar
+                  entityKey="streams"
+                  importLabel="Import"
+                  exportLabel="Export"
+                  replaceCatalog
+                  onExport={() => exportDepartmentsCsv(streams)}
+                  onImportComplete={() => refetchDirectory()}
+                  confirmImportMessage="Replace department list from CSV? Departments not in the file are removed when unused."
+                  showToast={showToast}
+                />
+                <button onClick={() => openAdd("stream")} className="rt-btn-primary shrink-0" type="button">
+                  <Plus size={16} /> Add department
+                </button>
+              </div>
+            </div>
           </div>
-          <div className="min-w-0 flex-1 overflow-auto custom-scrollbar">
+          <div className="rt-data-panel-body">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-[rgb(var(--border))] bg-[rgb(var(--surface-2))]">
-                  {["Code", "Label", "Status", ""].map((h) => (
-                    <th
-                      key={h || "actions"}
-                      className="px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]"
-                    >
+                <tr className="rt-table-head">
+                  {["Name", ""].map((h) => (
+                    <th key={h || "actions"} className="rt-table-head-cell">
                       {h}
                     </th>
                   ))}
@@ -623,20 +575,11 @@ export default function BandStreamDirectory() {
               <tbody>
                 {filteredStreams.map((row) => (
                   <tr key={`stream:${row.id || row.code}`} className="rt-table-row-interactive">
-                    <td className="px-4 py-3 font-mono text-xs font-semibold">{row.code}</td>
-                    <td className="px-4 py-3">{row.label}</td>
-                    <td className="px-4 py-3">
-                      <span className={row.active ? "rt-badge rt-badge--success uppercase" : "rt-badge rt-badge--neutral uppercase"}>
-                        {row.active ? "Active" : "Inactive"}
-                      </span>
-                    </td>
+                    <td className="px-4 py-3 font-medium text-[rgb(var(--text))]">{rowDisplayName(row)}</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
                         <button type="button" onClick={() => openEdit("stream", row)} className="rt-btn-ghost p-2" title="Edit">
                           <Edit3 size={15} />
-                        </button>
-                        <button type="button" onClick={() => toggleStreamActive(row)} className="rt-btn-ghost p-2" title={row.active ? "Deactivate" : "Activate"}>
-                          {row.active ? <EyeOff size={15} /> : <Eye size={15} />}
                         </button>
                         <button
                           type="button"
@@ -652,7 +595,7 @@ export default function BandStreamDirectory() {
                 ))}
                 {!loading && filteredStreams.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-[rgb(var(--muted))]">
+                    <td colSpan={2} className="px-4 py-10 text-center text-[rgb(var(--muted))]">
                       No departments match your search.
                     </td>
                   </tr>
@@ -684,68 +627,50 @@ export default function BandStreamDirectory() {
         }
       >
             <form id="band-stream-editor-form" onSubmit={submitEditor} className="space-y-4 -mt-1">
-              <div>
-                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-                  {titleFor(editor.type)} Code *
-                </label>
-                {editor.mode === "add" ? (
-                  editor.type === "band" ? (
-                    <select
-                      value={editor.code}
-                      onChange={(e) =>
-                        setEditor((prev) => ({
-                          ...prev,
-                          code: e.target.value,
-                          label: prev.label || fallbackLabel(prev.type, e.target.value),
-                        }))
-                      }
-                      className="mt-2 rt-input text-sm"
-                    >
-                      {(missingBandCodes.length ? missingBandCodes : [...BAND_CODES]).map((code) => (
-                        <option key={`${editor.type}:option:${code}`} value={code}>
-                          {code}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      value={editor.code}
-                      onChange={(e) =>
-                        setEditor((prev) => ({
-                          ...prev,
-                          code: e.target.value,
-                          label: prev.label || fallbackLabel(prev.type, e.target.value),
-                        }))
-                      }
-                      className="mt-2 rt-input text-sm"
-                      placeholder="e.g., Engineering"
-                    />
-                  )
-                ) : (
-                  <input
+              {editor.mode === "add" && editor.type === "band" ? (
+                <div>
+                  <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Band level *
+                  </label>
+                  <select
                     value={editor.code}
-                    readOnly={editor.type === "band"}
                     onChange={(e) =>
-                      editor.type === "band"
-                        ? void 0
-                        : setEditor((prev) => ({ ...prev, code: e.target.value }))
+                      setEditor((prev) => ({
+                        ...prev,
+                        code: e.target.value,
+                        label: prev.label || fallbackLabel(prev.type, e.target.value),
+                      }))
                     }
-                    className={[
-                      "mt-2 rt-input text-sm",
-                      editor.type === "band" ? "opacity-70 cursor-not-allowed" : "",
-                    ].join(" ")}
-                    title={editor.type === "band" ? "Band code is fixed after creation" : undefined}
-                  />
-                )}
-              </div>
+                    className="mt-2 rt-input text-sm"
+                  >
+                    {(missingBandCodes.length ? missingBandCodes : [...BAND_CODES]).map((code) => (
+                      <option key={`${editor.type}:option:${code}`} value={code}>
+                        {code}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
 
               <div>
-                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Label *</label>
+                <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                  Name *
+                </label>
                 <input
                   value={editor.label}
-                  onChange={(e) => setEditor((prev) => ({ ...prev, label: e.target.value }))}
+                  onChange={(e) =>
+                    setEditor((prev) => ({
+                      ...prev,
+                      label: e.target.value,
+                      ...(prev.type === "stream" ? { code: e.target.value } : {}),
+                    }))
+                  }
                   className="mt-2 rt-input text-sm"
-                  placeholder={fallbackLabel(editor.type, editor.code)}
+                  placeholder={
+                    editor.type === "band"
+                      ? fallbackLabel("band", editor.code)
+                      : "e.g. Human Resources"
+                  }
                 />
               </div>
 
@@ -779,19 +704,6 @@ export default function BandStreamDirectory() {
                     </select>
                   </div>
                 ) : null}
-                {editor.type === "stream" ? (
-                  <div className="flex items-end">
-                    <label className="inline-flex items-center gap-3 mt-2 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2.5">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(editor.active)}
-                        onChange={(e) => setEditor((prev) => ({ ...prev, active: e.target.checked }))}
-                        className="h-4 w-4 accent-blue-600"
-                      />
-                      <span className="text-sm text-[rgb(var(--text))]">Active</span>
-                    </label>
-                  </div>
-                ) : null}
               </div>
 
             </form>
@@ -803,8 +715,8 @@ export default function BandStreamDirectory() {
           title={`Delete ${titleFor(pendingDelete.type)}`}
           message={
             pendingDelete.type === "band"
-              ? `Remove ${pendingDelete.row.code || "this band"} from the directory. If employees still use this band, the server will hide it instead of deleting the row.`
-              : `This will remove ${pendingDelete.row.code || "this row"} from the directory.`
+              ? `Permanently delete "${rowDisplayName(pendingDelete.row)}"? This cannot be undone. If employees or designations still reference this band, deletion will be blocked.`
+              : `Permanently delete "${rowDisplayName(pendingDelete.row)}"? This cannot be undone. If employees or designations still reference this department, deletion will be blocked.`
           }
           confirmText={deleting ? "Deleting..." : "Delete"}
           cancelText="Cancel"

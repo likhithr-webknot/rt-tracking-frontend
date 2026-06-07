@@ -1,7 +1,7 @@
 # API smoke report
 
 Backend: `http://localhost:8080`
-Admin login: `likhith.r@webknot.in`
+Admin login: `(set ADMIN_EMAIL env)`
 Generated: 2026-05-21T13:37:29.245Z
 
 **Totals:** PASS 30 · WARN 13 · FAIL 0 · total 43
@@ -11,7 +11,7 @@ Generated: 2026-05-21T13:37:29.245Z
 | status | code | method | path | note |
 | --- | --- | --- | --- | --- |
 | WARN | 401 | GET | `/api/v1/user/role` | {"message":"unauthorized","data":null} |
-| PASS | 200 | GET | `/api/v1/profile` | {"message":"Profile fetched successfully","data":{"name":"Likhith R","email":"li… |
+| PASS | 200 | GET | `/api/v1/profile` | {"message":"Profile fetched successfully","data":{"name":"[Admin User]","email":"[user]@webknot.in"… |
 | PASS | 302 | GET | `/api/v1/google-signin` |  |
 
 ## users
@@ -20,7 +20,7 @@ Generated: 2026-05-21T13:37:29.245Z
 | --- | --- | --- | --- | --- |
 | PASS | 200 | GET | `/api/v1/user/onboard` | {"message":"all onboarded users fetched successfully","data":{"totalElement":5,"… |
 | PASS | 200 | GET | `/api/v1/employees` | {"message":"Employee profiles fetched successfully","data":{"totalElement":4,"to… |
-| PASS | 200 | GET | `/api/v1/user/get-email-name` | {"message":"success","data":[{"name":"Likhith R","email":"likhith.r@webknot.in"}… |
+| PASS | 200 | GET | `/api/v1/user/get-email-name` | {"message":"success","data":[{"name":"[Admin User]","email":"[user]@webknot.in"}… |
 | PASS | 200 | GET | `/api/v1/client-proj-status` | {"message":"success","data":{"status":false}} |
 
 ## designations

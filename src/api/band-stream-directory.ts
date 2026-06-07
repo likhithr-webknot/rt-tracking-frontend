@@ -202,10 +202,11 @@ function normalizeDirectoryRows(data: unknown): DirectoryRow[] {
         const display = String(obj.band).trim();
         const first = display.split(/\s*-\s*/)[0]?.trim() || display;
         const code = /^B\d+[A-Z]?$/i.test(first) ? first.toUpperCase() : first || display;
+        const designation = String(obj.designation ?? "").trim();
         return {
           id: String(obj.id),
           code,
-          label: collapseRepeatedSegments(display),
+          label: collapseRepeatedSegments(designation || code),
           bandType: String(obj.bandType ?? obj.type ?? "BOTH").trim().toUpperCase() || "BOTH",
           active: true,
           sortOrder: Number.isFinite(Number(obj.sortOrder)) ? Number(obj.sortOrder) : null,
@@ -701,14 +702,17 @@ export async function updateBand(
     );
   }
 
-  const displayName = String(p.name ?? p.label ?? "").trim();
-  const designationVal = String(p.designation ?? p.label ?? p.name ?? "").trim() || displayName;
-  if (!displayName) throw new Error("Band name is required.");
+  const bandCode = String(
+    p.code ?? p.bandCode ?? p.originalCode ?? p.level ?? "",
+  ).trim();
+  const label = String(p.designation ?? p.label ?? "").trim();
+  if (!label) throw new Error("Band label is required.");
+  if (!bandCode) throw new Error("Band code is required.");
   const bandTypeVal = String(p.bandType ?? "BOTH").trim().toUpperCase() || "BOTH";
 
   const bodyObj: Record<string, unknown> = {
-    name: displayName,
-    designation: designationVal || displayName,
+    name: bandCode,
+    designation: label,
     bandType: bandTypeVal,
     type: bandTypeVal,
     band_type: bandTypeVal,
@@ -1319,14 +1323,12 @@ export async function deleteStream(target: string | Record<string, unknown>, opt
   const headers = withCsrfHeaders(auth ? { Authorization: auth } : undefined);
 
   const endpoints = [
+    `/api/v1/department/${safeId}?hardDelete=true`,
+    `/api/v1/departments/${safeId}?hardDelete=true`,
     `/api/v1/department/${safeId}`,
     `/api/v1/departments/${safeId}`,
     `/api/v1/streams/${safeId}`,
     `/api/v1/stream/${safeId}`,
-    `/api/v1/department/${safeId}?hardDelete=false`,
-    `/api/v1/departments/${safeId}?hardDelete=false`,
-    `/api/v1/department/${safeId}?hardDelete=true`,
-    `/api/v1/departments/${safeId}?hardDelete=true`,
     `/streams/delete/${safeId}`,
   ];
 

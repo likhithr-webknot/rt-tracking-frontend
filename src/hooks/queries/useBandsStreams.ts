@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addBand,
   addStream,
-  deleteBandOrDeactivate,
+  deleteBand,
   deleteStream,
   fetchBands,
   fetchStreams,
   normalizeDirectoryPage,
+  resolveBandNumericId,
   updateBand,
   updateBandType,
   updateStream,
@@ -78,7 +79,13 @@ export function useUpdateBandTypeMutation() {
 export function useDeleteBandMutation() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (row: DirectoryRow) => deleteBandOrDeactivate(row as unknown as Record<string, unknown>),
+    mutationFn: async (row: DirectoryRow) => {
+      const direct = String(row?.id ?? "").trim();
+      const bandId = /^\d+$/.test(direct)
+        ? direct
+        : await resolveBandNumericId(row as unknown as Record<string, unknown>);
+      return deleteBand(bandId);
+    },
     onSuccess: () => invalidateDirectory(qc),
   });
 }

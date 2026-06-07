@@ -7,12 +7,12 @@ import {
   Cloud,
   FileBarChart2,
   FolderKanban,
+  History,
   Layers3,
   LayoutDashboard,
   Sparkles,
   StickyNote,
   Target,
-  TrendingUp,
   UserCircle2,
   Users,
 } from "lucide-react";
@@ -46,7 +46,7 @@ export const ADMIN_NAV_GROUPS = [
       {
         id: "dashboard",
         icon: <LayoutDashboard size={20} />,
-        label: "Home",
+        label: "Dashboard",
         description: "Overview, alerts, and quick links",
       },
     ],
@@ -67,10 +67,10 @@ export const ADMIN_NAV_GROUPS = [
         description: "Approve or send back submissions",
       },
       {
-        id: "performance",
-        icon: <TrendingUp size={20} />,
-        label: "Performance scores",
-        description: "All-time review score averages",
+        id: "ratings-history",
+        icon: <History size={20} />,
+        label: "Ratings history",
+        description: "All cycles and months — Super Admin only",
       },
     ],
   },
@@ -194,6 +194,12 @@ export const EMPLOYEE_NAV_GROUPS = [
     title: "Just for you",
     items: [
       {
+        id: "performance",
+        icon: <History size={20} />,
+        label: "My ratings",
+        description: "All-time scores by month and cycle",
+      },
+      {
         id: "notes",
         icon: <StickyNote size={20} />,
         label: "Private notes",
@@ -264,6 +270,10 @@ export const EMPLOYEE_TAB_COPY = {
     title: "Review & submit",
     subtitle: "Step 7 — read everything once more, then submit to lock this month.",
   },
+  performance: {
+    title: "My ratings",
+    subtitle: "Your all-time performance — month-by-month and grouped by review cycle.",
+  },
   notes: { title: "Private notes", subtitle: "Personal notebooks — not shared with HR or your manager." },
   drive: { title: "My files", subtitle: "Store files here. Only you can open them." },
 };
@@ -303,9 +313,9 @@ export const ADMIN_TAB_COPY = {
     subtitle: "View and update employee profiles, bands, and reporting lines.",
     sectionLabel: "People & reviews",
   },
-  performance: {
-    title: "Performance scores",
-    subtitle: "All-time average scores from completed monthly manager reviews.",
+  "ratings-history": {
+    title: "Ratings history",
+    subtitle: "Full timeline of monthly review scores — every employee, cycle, and month.",
     sectionLabel: "People & reviews",
   },
   projects: {

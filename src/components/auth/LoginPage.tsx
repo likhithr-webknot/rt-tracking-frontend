@@ -16,6 +16,7 @@ import {
   seedDevQaUsers,
 } from "../../api/auth";
 import { WEBKNOT_WORK_EMAIL_SUFFIX, webknotEmailHint } from "../../utils/webknotEmail";
+import { QA_DEV_ACCOUNTS, normalizeQaSeedResponse } from "../../utils/qaDevAccounts";
 import CompanyLogo from "../shared/CompanyLogo";
 
 function GoogleIcon() {
@@ -30,12 +31,10 @@ function GoogleIcon() {
 }
 
 const FEATURES = [
-  { icon: Target, label: "Monthly goals & reviews in one place" },
-  { icon: Sparkles, label: "Company values — simple scoring" },
-  { icon: Users, label: "Separate spaces for you, your manager, and HR" },
+  { icon: Target, label: "Monthly goals and reviews in one place" },
+  { icon: Sparkles, label: "Company values with simple scoring" },
+  { icon: Users, label: "Separate spaces for employees, managers, and HR" },
 ];
-
-const QA_HINT = "WebknotQA#Test1";
 
 export default function LoginPage() {
   const googleSignInUrl = getGoogleSignInUrl() || "/api/v1/google-signin";
@@ -46,6 +45,7 @@ export default function LoginPage() {
   const [formError, setFormError] = useState("");
   const [seedBusy, setSeedBusy] = useState(false);
   const [seedMessage, setSeedMessage] = useState("");
+  const [seededAccounts, setSeededAccounts] = useState(QA_DEV_ACCOUNTS);
 
   const authErrorKey =
     typeof window === "undefined"
@@ -88,8 +88,9 @@ export default function LoginPage() {
     setSeedBusy(true);
     try {
       const res = await seedDevQaUsers();
-      const pw = res?.password || res?.data?.password || QA_HINT;
-      setSeedMessage(`QA users ready. Password for qa.* accounts: ${pw}`);
+      const accounts = normalizeQaSeedResponse(res);
+      if (accounts.length) setSeededAccounts(accounts);
+      setSeedMessage("QA test users seeded (qa.* only). Super Admin accounts are not modified by this app.");
     } catch (err) {
       setSeedMessage(err?.message || "Could not seed QA users. Is Webtrak running with SPRING_PROFILES_ACTIVE=dev?");
     } finally {
@@ -100,77 +101,61 @@ export default function LoginPage() {
   const displayError = formError || authErrorMessage;
 
   return (
-    <div className="rt-login-page relative min-h-[100dvh] overflow-hidden">
-      <div className="rt-login-bg" aria-hidden />
-      <div className="rt-login-grid" aria-hidden />
-      <div className="rt-login-orb rt-login-orb--1" aria-hidden />
-      <div className="rt-login-orb rt-login-orb--2" aria-hidden />
-
-      <div className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-6xl flex-col lg:flex-row lg:items-stretch">
-        <section className="flex flex-1 flex-col justify-between px-6 py-10 sm:px-10 lg:px-12 lg:py-14">
-          <div>
-            <div className="flex items-center gap-3">
-              <CompanyLogo size={44} alt="Webknot" className="h-11 w-11" />
-              <div>
-                <p className="text-base font-bold tracking-tight text-[rgb(var(--text))]">Webknot Pulse</p>
-                <p className="text-sm text-[rgb(var(--muted))]">Reviews, goals & team growth</p>
-              </div>
+    <div className="pulse-login">
+      <div className="pulse-login-shell">
+        <section className="pulse-login-intro">
+          <div className="flex items-center gap-3">
+            <CompanyLogo size={44} alt="Webknot" className="h-11 w-11" />
+            <div>
+              <p className="text-base font-bold tracking-tight text-[rgb(var(--text))]">Webknot Pulse</p>
+              <p className="text-sm text-[rgb(var(--muted))]">Reviews, goals, and team growth</p>
             </div>
-
-            <h1 className="mt-10 max-w-lg text-3xl sm:text-4xl lg:text-[2.65rem] font-bold tracking-tight text-[rgb(var(--text))] leading-[1.12]">
-              Simple monthly reviews — no spreadsheets.
-            </h1>
-            <p className="mt-4 max-w-lg text-base text-[rgb(var(--muted))] leading-relaxed">
-              Employees fill in their review. Managers score their team. HR oversees the cycle — all in one
-              friendly app.
-            </p>
-
-            <ul className="mt-8 flex flex-col gap-3">
-              {FEATURES.map(({ icon: Icon, label }) => (
-                <li
-                  key={label}
-                  className="flex items-center gap-3 rounded-xl border border-[rgb(var(--border))]/80 bg-[rgb(var(--surface))]/80 px-4 py-3.5 text-[15px] font-medium text-[rgb(var(--text))]"
-                >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[rgb(var(--accent))]/12 text-[rgb(var(--accent))]">
-                    <Icon size={20} />
-                  </span>
-                  {label}
-                </li>
-              ))}
-            </ul>
           </div>
 
-          <p className="mt-10 hidden lg:block text-sm text-[rgb(var(--muted))]">
+          <div className="mt-10 space-y-4">
+            <p className="pulse-eyebrow">Welcome</p>
+            <h1 className="pulse-title max-w-lg">Simple monthly reviews — no spreadsheets.</h1>
+            <p className="pulse-lead max-w-lg">
+              Employees submit reviews. Managers score their teams. HR oversees the cycle — all in one
+              place.
+            </p>
+          </div>
+
+          <ul className="mt-8 space-y-3">
+            {FEATURES.map(({ icon: Icon, label }) => (
+              <li key={label} className="pulse-login-feature">
+                <span className="pulse-section-icon bg-[rgb(var(--accent-soft))] text-[rgb(var(--accent))]">
+                  <Icon size={18} />
+                </span>
+                <span className="text-[15px] font-medium text-[rgb(var(--text))]">{label}</span>
+              </li>
+            ))}
+          </ul>
+
+          <p className="mt-auto hidden pt-10 text-sm text-[rgb(var(--muted))] lg:block">
             &copy; {new Date().getFullYear()} Webknot Technologies
           </p>
         </section>
 
-        <section className="flex flex-1 items-center justify-center px-6 pb-10 pt-4 lg:px-10 lg:py-14">
-          <div className="rt-login-card w-full max-w-[440px]">
-            <div className="lg:hidden flex justify-center mb-6">
+        <section className="pulse-login-panel-wrap">
+          <div className="pulse-surface pulse-login-card">
+            <div className="lg:hidden mb-6 flex justify-center">
               <CompanyLogo size={56} alt="Webknot" className="h-14 w-14" />
             </div>
 
-            <p className="rt-kicker text-center lg:text-left">Sign in</p>
-            <h2 className="mt-2 text-2xl font-bold tracking-tight text-[rgb(var(--text))] text-center lg:text-left">
-              Google or email & password
-            </h2>
-            <p className="mt-3 text-[15px] text-[rgb(var(--muted))] text-center lg:text-left leading-relaxed">
-              {webknotEmailHint()}
-            </p>
+            <p className="pulse-eyebrow">Sign in</p>
+            <h2 className="mt-2 pulse-title text-[1.65rem] sm:text-[1.85rem]">Continue to Pulse</h2>
+            <p className="mt-2 pulse-lead">{webknotEmailHint()}</p>
 
             {displayError ? (
-              <div
-                role="alert"
-                className="mt-6 rounded-[var(--radius-lg)] border border-[rgb(var(--danger))]/35 bg-[rgb(var(--danger-soft))] px-4 py-3.5 text-[15px] font-medium text-[rgb(var(--danger))] leading-relaxed"
-              >
+              <div role="alert" className="pulse-callout pulse-callout--warn mt-6">
                 {displayError}
               </div>
             ) : null}
 
             <form className="mt-6 space-y-4" onSubmit={onPasswordSubmit}>
               <label className="block">
-                <span className="text-sm font-medium text-[rgb(var(--text))]">Work email</span>
+                <span className="text-sm font-semibold text-[rgb(var(--text))]">Work email</span>
                 <input
                   type="email"
                   autoComplete="username"
@@ -182,7 +167,7 @@ export default function LoginPage() {
                 />
               </label>
               <label className="block">
-                <span className="text-sm font-medium text-[rgb(var(--text))]">Password</span>
+                <span className="text-sm font-semibold text-[rgb(var(--text))]">Password</span>
                 <input
                   type="password"
                   autoComplete="current-password"
@@ -193,17 +178,14 @@ export default function LoginPage() {
                 />
               </label>
               <div className="flex items-center justify-between gap-2 text-sm">
-                <Link
-                  to="/auth/forgot-password"
-                  className="font-medium text-[rgb(var(--accent))] hover:underline"
-                >
+                <Link to="/auth/forgot-password" className="font-semibold text-[rgb(var(--accent))] hover:underline">
                   Forgot password?
                 </Link>
               </div>
               <button
                 type="submit"
                 disabled={passwordBusy}
-                className="rt-btn-primary w-full flex items-center justify-center gap-2 py-3.5"
+                className="rt-btn-primary flex w-full items-center justify-center gap-2 py-3"
               >
                 {passwordBusy ? (
                   <>
@@ -219,25 +201,25 @@ export default function LoginPage() {
               </button>
             </form>
 
-            <div className="rt-login-divider my-7">
-              <span className="text-sm text-[rgb(var(--muted))]">or</span>
+            <div className="pulse-login-divider my-7">
+              <span>or</span>
             </div>
 
             <a
               href={googleSignInUrl}
               onClick={onGoogleClick}
-              className="rt-login-oauth-btn group"
+              className="pulse-login-oauth group"
               aria-busy={oauthBusy}
             >
               {oauthBusy ? (
                 <>
                   <Loader2 size={22} className="animate-spin text-[rgb(var(--accent))]" />
-                  <span className="flex-1 text-center font-semibold text-[15px]">Opening Google…</span>
+                  <span className="flex-1 text-center font-semibold">Opening Google…</span>
                 </>
               ) : (
                 <>
                   <GoogleIcon />
-                  <span className="flex-1 text-center font-semibold text-[15px]">Continue with Google</span>
+                  <span className="flex-1 text-center font-semibold">Continue with Google</span>
                   <ArrowRight
                     size={20}
                     className="opacity-50 transition-transform group-hover:translate-x-0.5 group-hover:opacity-80"
@@ -246,40 +228,41 @@ export default function LoginPage() {
               )}
             </a>
 
-            <div className="mt-6 flex items-start gap-3 rounded-[var(--radius-lg)] border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-4 py-4">
+            <div className="pulse-callout pulse-callout--info mt-6">
               <Shield size={20} className="mt-0.5 shrink-0 text-[rgb(var(--accent))]" />
-              <p className="text-[14px] leading-relaxed text-[rgb(var(--muted))]">
+              <p className="text-[14px] leading-relaxed">
                 Google uses your <strong className="font-semibold text-[rgb(var(--text))]">{WEBKNOT_WORK_EMAIL_SUFFIX}</strong>{" "}
-                account. Password login uses a secure hash stored on the server (JWT + session cookies).
+                account. Password login uses a secure hash stored on the server.
               </p>
             </div>
 
-            {import.meta.env?.DEV ? (
-              <div className="mt-6 rounded-[var(--radius-lg)] border border-dashed border-[rgb(var(--border))] bg-[rgb(var(--surface-2))]/80 px-4 py-4 text-[13px] text-[rgb(var(--muted))] leading-relaxed">
+            {import.meta.env?.DEV && String(import.meta.env?.VITE_ENABLE_DEV_QA ?? "") === "true" ? (
+              <div className="pulse-surface-muted mt-6 text-[13px] leading-relaxed text-[rgb(var(--muted))]">
                 <p className="font-semibold text-[rgb(var(--text))]">Dev QA accounts</p>
-                <p className="mt-1">
-                  After seeding: <code className="text-[12px]">{QA_HINT}</code> for{" "}
-                  <code className="text-[12px]">qa.*@webknot.in</code>
+                <p className="mt-1 text-[12px]">
+                  Run <code className="text-[11px]">npm run seed:minimal</code> for directory rows + QA Demo Project.
                 </p>
-                <ul className="mt-2 list-disc pl-5 space-y-0.5">
-                  <li>qa.employee.one@webknot.in — Employee</li>
-                  <li>qa.employee.two@webknot.in — Employee</li>
-                  <li>qa.manager.one@webknot.in — Manager</li>
-                </ul>
-                <p className="mt-2 font-medium text-[rgb(var(--text))]">
-                  Manager login: use <code className="text-[12px]">qa.manager.one@webknot.in</code> with the password
-                  above, then click <strong>Seed QA users</strong> if sign-in fails. You should land in the Manager portal
-                  (not Employee). Real managers need Google or a password set by HR.
-                </p>
-                <p className="mt-2">
-                  Backend must run with <code className="text-[12px]">webtrak.env=dev</code> (or default dev) for seeding.
-                </p>
-                <button
-                  type="button"
-                  onClick={onSeedQa}
-                  disabled={seedBusy}
-                  className="mt-3 rt-btn-secondary w-full text-sm py-2.5"
-                >
+                <div className="mt-3 overflow-x-auto rounded-lg border border-[rgb(var(--border))]">
+                  <table className="w-full min-w-[20rem] text-left text-[12px]">
+                    <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">Role</th>
+                        <th className="px-3 py-2 font-semibold">Email</th>
+                        <th className="px-3 py-2 font-semibold">Password</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {seededAccounts.map((row) => (
+                        <tr key={row.email} className="border-t border-[rgb(var(--border))]">
+                          <td className="px-3 py-2 text-[rgb(var(--text))]">{row.role}</td>
+                          <td className="px-3 py-2 font-mono text-[11px] break-all">{row.email}</td>
+                          <td className="px-3 py-2 font-mono text-[11px] text-[rgb(var(--text))]">{row.password}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button type="button" onClick={onSeedQa} disabled={seedBusy} className="rt-btn-secondary mt-3 w-full text-sm py-2.5">
                   {seedBusy ? "Seeding…" : "Seed QA users on backend"}
                 </button>
                 {seedMessage ? <p className="mt-2 text-[rgb(var(--text))]">{seedMessage}</p> : null}
@@ -287,7 +270,7 @@ export default function LoginPage() {
             ) : null}
           </div>
 
-          <p className="lg:hidden absolute bottom-6 left-0 right-0 text-center text-sm text-[rgb(var(--muted))]">
+          <p className="mt-6 text-center text-sm text-[rgb(var(--muted))] lg:hidden">
             &copy; {new Date().getFullYear()} Webknot Technologies
           </p>
         </section>
