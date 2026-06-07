@@ -31,7 +31,8 @@ import {
 } from "../../utils/submissionStatus";
 import { isHrPortalUser } from "../../utils/hrRatingsFilter";
 import { isSuperAdminPortalUser } from "../../utils/portalAccess";
-import { formatPerformanceRating } from "../../utils/ratingLabels";
+import { formatPerformanceRating, parseDecimalPerformanceRating } from "../../utils/ratingLabels";
+import { DecimalPerformanceRatingInput } from "../shared/PerformanceRatingField";
 
 function resolveAssignedSuperAdminReviewerId(item) {
   const sub = item?.submission ?? item?.raw ?? {};
@@ -77,15 +78,26 @@ function formatDateTimeLabel(raw) {
   }
 }
 
-function computeLocalScoreBreakdown(submission, raw) {
+function computeLocalScoreBreakdown(submission, raw, overrides = {}) {
   const source = { payload: submission, raw: raw ?? submission?.raw };
   return computeSubmissionScoreBreakdown({
-    managerKpiRatings: resolveManagerKpiRatings(source),
-    managerWebknotValueRatings: resolveManagerValueRatings(source),
+    managerKpiRatings: overrides.managerKpiRatings ?? resolveManagerKpiRatings(source),
+    managerWebknotValueRatings: overrides.managerWebknotValueRatings ?? resolveManagerValueRatings(source),
     certifications: submission?.certifications,
     recognitionsCount: submission?.recognitionsCount,
     techShowcase: submission?.techShowcase,
   });
+}
+
+function normalizeDecimalRatingsMap(input) {
+  const out = {};
+  for (const [key, value] of Object.entries(input || {})) {
+    const id = String(key || "").trim();
+    if (!id) continue;
+    const parsed = parseDecimalPerformanceRating(value);
+    if (parsed != null) out[id] = parsed;
+  }
+  return out;
 }
 
 function normalizeAdminSubmissions(data, employeeLookup) {
@@ -241,6 +253,8 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
   const [scoreBreakdown, setScoreBreakdown] = useState(null);
   const [scoreBreakdownLoading, setScoreBreakdownLoading] = useState(false);
   const [scoreBreakdownError, setScoreBreakdownError] = useState("");
+  const [reviewEditableKpiRatings, setReviewEditableKpiRatings] = useState({});
+  const [reviewEditableValueRatings, setReviewEditableValueRatings] = useState({});
   const [kpiIndex, setKpiIndex] = useState({});
   const [valueIndex, setValueIndex] = useState({});
   const [serverCycles, setServerCycles] = useState(null);
@@ -379,6 +393,29 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
   }, [reviewModal?.item]);
 
   useEffect(() => {
+    if (!reviewModal.open || !reviewModal.item) {
+      setReviewEditableKpiRatings({});
+      setReviewEditableValueRatings({});
+      return;
+    }
+    if (reviewModalIsManagerSelf) {
+      setReviewEditableKpiRatings(normalizeDecimalRatingsMap(reviewModalEmployeeKpiRatings));
+      setReviewEditableValueRatings(normalizeDecimalRatingsMap(reviewModalEmployeeValueRatings));
+      return;
+    }
+    setReviewEditableKpiRatings(normalizeDecimalRatingsMap(reviewModalManagerKpiRatings));
+    setReviewEditableValueRatings(normalizeDecimalRatingsMap(reviewModalManagerValueRatings));
+  }, [
+    reviewModal.open,
+    reviewModal.item,
+    reviewModalIsManagerSelf,
+    reviewModalEmployeeKpiRatings,
+    reviewModalEmployeeValueRatings,
+    reviewModalManagerKpiRatings,
+    reviewModalManagerValueRatings,
+  ]);
+
+  useEffect(() => {
     if (!reviewModal.open || !reviewModal.item?.submission) {
       setScoreBreakdown(null);
       setScoreBreakdownError("");
@@ -387,10 +424,6 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
     }
 
     const controller = new AbortController();
-    const ratingSource = {
-      payload: reviewModal.item.submission,
-      raw: reviewModal.item.submission?.raw ?? reviewModal.item.raw,
-    };
     const payload = {
       month: reviewModal.item.month,
       cycleKey: reviewModal.item.submission?.cycleKey,
@@ -399,8 +432,8 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
       submissionType: reviewModal.item.submission?.submissionType ?? reviewModal.item.submissionType,
       targetRole: reviewModal.item.submission?.targetRole,
       certifications: reviewModal.item.submission?.certifications,
-      kpiRatings: resolveManagerKpiRatings(ratingSource),
-      webknotValueRatings: resolveManagerValueRatings(ratingSource),
+      kpiRatings: reviewEditableKpiRatings,
+      webknotValueRatings: reviewEditableValueRatings,
       recognitionsCount: reviewModal.item.submission?.recognitionsCount,
       techShowcase: reviewModal.item.submission?.techShowcase,
     };
@@ -422,13 +455,27 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
       });
 
     return () => controller.abort();
-  }, [reviewModal.open, reviewModal.item]);
+  }, [reviewModal.open, reviewModal.item, reviewEditableKpiRatings, reviewEditableValueRatings]);
 
   const scoringBreakdown = useMemo(() => {
-    if (scoreBreakdown) return scoreBreakdown;
     if (!reviewModal.item?.submission) return null;
-    return computeLocalScoreBreakdown(reviewModal.item.submission, reviewModal.item.raw);
-  }, [reviewModal.item?.submission, scoreBreakdown]);
+    const local = computeLocalScoreBreakdown(reviewModal.item.submission, reviewModal.item.raw, {
+      managerKpiRatings: reviewEditableKpiRatings,
+      managerWebknotValueRatings: reviewEditableValueRatings,
+    });
+    if (reviewModal.open && (Object.keys(reviewEditableKpiRatings).length || Object.keys(reviewEditableValueRatings).length)) {
+      return local;
+    }
+    if (scoreBreakdown) return scoreBreakdown;
+    return local;
+  }, [
+    reviewModal.item?.submission,
+    reviewModal.item?.raw,
+    reviewModal.open,
+    reviewEditableKpiRatings,
+    reviewEditableValueRatings,
+    scoreBreakdown,
+  ]);
 
   const [scoreWeightPercents, setScoreWeightPercents] = useState(() => getResolvedScoreWeights().percents);
 
@@ -543,6 +590,8 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
   function closeReview() {
     setReviewModal({ open: false, item: null });
     setTechShowcaseText("");
+    setReviewEditableKpiRatings({});
+    setReviewEditableValueRatings({});
   }
 
   return (
@@ -818,7 +867,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                             <div className="flex-1 min-w-0">
                               <div className="text-sm truncate">{kpiLabel(kpiId)}</div>
                             </div>
-                            <span className="font-mono text-sm">{Number(rating).toFixed(1)}</span>
+                            <span className="font-mono text-sm">{formatPerformanceRating(rating)}</span>
                           </div>
                         ))
                       ) : (
@@ -833,7 +882,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                             <div className="flex-1 min-w-0">
                               <div className="text-sm truncate">{valueLabel(valueId)}</div>
                             </div>
-                            <span className="font-mono text-sm">{Number(rating).toFixed(1)}</span>
+                            <span className="font-mono text-sm">{formatPerformanceRating(rating)}</span>
                           </div>
                         ))
                       ) : (
@@ -888,29 +937,107 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
               <div className="rt-panel-subtle rounded-lg p-6">
                 <div className="space-y-5">
                   {reviewModalIsManagerSelf ? (
-                    <div className="rt-panel-subtle rounded-lg p-4 space-y-2">
-                      <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Self Review</div>
-                      <p className="text-sm text-[rgb(var(--muted))]">
-                        This entry is a manager or admin self review. The assigned super admin reviews and approves directly in this queue.
-                      </p>
-                      <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
-                        Super admin review
+                    <div className="rt-panel-subtle rounded-lg p-4 space-y-4">
+                      <div className="space-y-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Self Review</div>
+                        <p className="text-sm text-[rgb(var(--muted))]">
+                          This entry is a manager or admin self review. The assigned super admin reviews and approves directly in this queue.
+                        </p>
+                        <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
+                          Super admin review
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
+                          Final KPI scores (decimals allowed)
+                        </div>
+                        <div className="mt-2 space-y-2">
+                          {Object.entries(reviewEditableKpiRatings).length ? (
+                            Object.entries(reviewEditableKpiRatings).map(([kpiId, rating]) => (
+                              <div key={kpiId} className="flex items-center justify-between gap-3">
+                                <div className="flex-1 min-w-0 truncate">{kpiLabel(kpiId)}</div>
+                                <DecimalPerformanceRatingInput
+                                  value={rating}
+                                  onChange={(next) => {
+                                    setReviewEditableKpiRatings((prev) => {
+                                      const updated = { ...(prev || {}) };
+                                      if (next == null) {
+                                        delete updated[kpiId];
+                                        return updated;
+                                      }
+                                      updated[kpiId] = next;
+                                      return updated;
+                                    });
+                                  }}
+                                />
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-xs text-[rgb(var(--muted))]">No KPI ratings to review.</div>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
+                          Final value scores (decimals allowed)
+                        </div>
+                        <div className="mt-2 space-y-2">
+                          {Object.entries(reviewEditableValueRatings).length ? (
+                            Object.entries(reviewEditableValueRatings).map(([valueId, rating]) => (
+                              <div key={valueId} className="flex items-center justify-between gap-3">
+                                <div className="flex-1 min-w-0 truncate">{valueLabel(valueId)}</div>
+                                <DecimalPerformanceRatingInput
+                                  value={rating}
+                                  onChange={(next) => {
+                                    setReviewEditableValueRatings((prev) => {
+                                      const updated = { ...(prev || {}) };
+                                      if (next == null) {
+                                        delete updated[valueId];
+                                        return updated;
+                                      }
+                                      updated[valueId] = next;
+                                      return updated;
+                                    });
+                                  }}
+                                />
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-xs text-[rgb(var(--muted))]">No value ratings to review.</div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ) : (
                     <div className="rt-panel-subtle rounded-lg p-4">
                       <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Ratings & Comments</div>
+                      <p className="mt-2 text-[11px] text-[rgb(var(--muted))]">
+                        Fine-tune manager scores with one decimal place before approval.
+                      </p>
                       <div className="mt-3 space-y-3 text-sm text-[rgb(var(--text))]">
                         <div>
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Ratings</div>
-                          <div className="mt-2 space-y-1">
-                            {Object.entries(reviewModalManagerKpiRatings).length ? (
-                              Object.entries(reviewModalManagerKpiRatings).map(([kpiId, rating]) => (
+                          <div className="mt-2 space-y-2">
+                            {Object.entries(reviewEditableKpiRatings).length ? (
+                              Object.entries(reviewEditableKpiRatings).map(([kpiId, rating]) => (
                                 <div key={kpiId} className="flex items-center justify-between gap-2">
                                   <div className="flex-1 min-w-0">
                                     <div className="truncate">{kpiLabel(kpiId)}</div>
                                   </div>
-                                  <span className="font-mono">{formatPerformanceRating(rating)}</span>
+                                  <DecimalPerformanceRatingInput
+                                    value={rating}
+                                    onChange={(next) => {
+                                      setReviewEditableKpiRatings((prev) => {
+                                        const updated = { ...(prev || {}) };
+                                        if (next == null) {
+                                          delete updated[kpiId];
+                                          return updated;
+                                        }
+                                        updated[kpiId] = next;
+                                        return updated;
+                                      });
+                                    }}
+                                  />
                                 </div>
                               ))
                             ) : (
@@ -920,14 +1047,27 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                         </div>
                         <div>
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Value Ratings</div>
-                          <div className="mt-2 space-y-1">
-                            {Object.entries(reviewModalManagerValueRatings).length ? (
-                              Object.entries(reviewModalManagerValueRatings).map(([valueId, rating]) => (
+                          <div className="mt-2 space-y-2">
+                            {Object.entries(reviewEditableValueRatings).length ? (
+                              Object.entries(reviewEditableValueRatings).map(([valueId, rating]) => (
                                 <div key={valueId} className="flex items-center justify-between gap-2">
                                   <div className="flex-1 min-w-0">
                                     <div className="truncate">{valueLabel(valueId)}</div>
                                   </div>
-                                  <span className="font-mono">{formatPerformanceRating(rating)}</span>
+                                  <DecimalPerformanceRatingInput
+                                    value={rating}
+                                    onChange={(next) => {
+                                      setReviewEditableValueRatings((prev) => {
+                                        const updated = { ...(prev || {}) };
+                                        if (next == null) {
+                                          delete updated[valueId];
+                                          return updated;
+                                        }
+                                        updated[valueId] = next;
+                                        return updated;
+                                      });
+                                    }}
+                                  />
                                 </div>
                               ))
                             ) : (

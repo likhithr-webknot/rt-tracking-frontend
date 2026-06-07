@@ -4,10 +4,10 @@ import { normalizeSubmissionWindow, resolveSubmissionAccess } from "../utils/sub
 import { getAuthHeader } from "./auth";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, toHttpError, withCsrfHeaders } from "./http";
 import { fetchSubmissionCycleByKey } from "./monthly-submissions";
-import { currentReviewCycleKey } from "../utils/reviewCycles";
+import { formatYearMonth } from "../utils/reviewCycles";
 
 function monthCycleKey(date = new Date()) {
-  return currentReviewCycleKey(date) || "";
+  return formatYearMonth(date) || "";
 }
 
 function normalizeScope(role) {
@@ -264,7 +264,9 @@ export async function upsertMonthlySubmissionWindow({
     targetEmpId,
   });
   const data = await postUpsertSubmissionCycle(body, { signal });
-  return toWindowResponse(data, body);
+  const root = data?.data && typeof data.data === "object" ? data.data : data;
+  const cycle = root?.cycle ?? root;
+  return toWindowResponse(cycle, body);
 }
 
 export async function fetchSubmissionWindowCurrent({ signal } = {} as ApiOptions) {

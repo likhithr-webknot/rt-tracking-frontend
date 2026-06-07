@@ -83,6 +83,25 @@ function toIsoDate(value) {
   return parsed.toISOString();
 }
 
+function stripHtmlForNotification(value) {
+  const text = toTrimmedString(value);
+  if (!text) return "";
+  if (!/[<>]/.test(text)) return text;
+  return text
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 function unwrapRoot(data) {
   if (!isPlainObject(data)) return {};
   if (isPlainObject(data.data)) return data.data;
@@ -200,7 +219,7 @@ function buildEmployeeTitle(type) {
 }
 
 function buildEmployeeMessage(type, payload, obj) {
-  const direct = toTrimmedString(obj?.message);
+  const direct = stripHtmlForNotification(obj?.message);
   if (direct) return direct;
   if (!isPlainObject(payload)) return "";
 
@@ -223,7 +242,7 @@ function normalizeInboxNotification(raw, allowedTypes, buildTitle, buildMessage,
   const obj = isPlainObject(raw) ? raw : {};
   const id = toTrimmedString(obj.id) || toTrimmedString(obj.notificationId);
   const title = toTrimmedString(obj.title);
-  const message = toTrimmedString(obj.message);
+  const message = stripHtmlForNotification(obj.message);
   if (!id && !title && !message) return null;
 
   const type =
@@ -269,11 +288,12 @@ function normalizeNotification(raw, allowedTypes, buildTitle, buildMessage) {
     {};
 
   const title = toTrimmedString(obj.title) || toTrimmedString(payload.title) || buildTitle(type);
-  const message =
+  const message = stripHtmlForNotification(
     toTrimmedString(obj.message) ||
-    toTrimmedString(obj.text) ||
-    toTrimmedString(payload.message) ||
-    buildMessage(type, payload);
+      toTrimmedString(obj.text) ||
+      toTrimmedString(payload.message) ||
+      buildMessage(type, payload, obj),
+  );
 
   const createdAt =
     toIsoDate(obj.createdAt ?? obj.occurredAt ?? obj.timestamp ?? obj.emittedAt ?? payload.createdAt) ||

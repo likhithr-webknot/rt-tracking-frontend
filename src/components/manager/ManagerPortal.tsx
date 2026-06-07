@@ -66,7 +66,8 @@ import {
 } from "../../api/notifications";
 import { getManagerSettings } from "../../utils/appSettings";
 import { buildCycleMeta, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles";
-import { formatPerformanceRating, performanceRatingLabel, performanceRatingScaleText } from "../../utils/ratingLabels";
+import { formatPerformanceRating, performanceRatingLabel, performanceRatingScaleText, parseIntegerPerformanceRating } from "../../utils/ratingLabels";
+import { IntegerPerformanceRatingSelect } from "../shared/PerformanceRatingField";
 
 import Toast from "../shared/Toast";
 import CursorPagination from "../shared/CursorPagination";
@@ -434,9 +435,9 @@ function normalizeSelfKpiRatings(input) {
     const parsed =
       typeof valueRaw === "number" ? valueRaw : Number.parseFloat(String(valueRaw ?? ""));
     if (!Number.isFinite(parsed)) continue;
-    const rounded = Math.round(parsed * 10) / 10;
-    if (rounded < 1 || rounded > 5) continue;
-    out[id] = rounded;
+    const integer = parseIntegerPerformanceRating(Math.round(parsed));
+    if (integer == null) continue;
+    out[id] = integer;
   }
   return out;
 }
@@ -510,9 +511,9 @@ function normalizeSelfValueRatings(input) {
           ? ratingRaw
           : Number.parseFloat(String(ratingRaw));
     if (!Number.isFinite(parsed)) return;
-    const rounded = Math.round(parsed * 10) / 10;
-    if (rounded < 1 || rounded > 5) return;
-    out[id] = rounded;
+    const integer = parseIntegerPerformanceRating(Math.round(parsed));
+    if (integer == null) return;
+    out[id] = integer;
   };
 
   if (Array.isArray(input)) {
@@ -1160,8 +1161,7 @@ export default function ManagerPortal({ onLogout, auth }) {
   function handleSelfRatingChange(kind, id, rawValue) {
     if (selfReviewLocked) return;
 
-    const raw = String(rawValue ?? "").trim();
-    if (raw === "") {
+    if (rawValue == null || rawValue === "") {
       setSelfRatingValidationError("");
       if (kind === "kpi") {
         setManagerSelfKpiRatings((prev) => {
@@ -1179,19 +1179,9 @@ export default function ManagerPortal({ onLogout, auth }) {
       return;
     }
 
-    const parsed = Number.parseFloat(raw);
-    if (!Number.isFinite(parsed)) {
-      setSelfRatingValidationError("Enter a valid rating between 1 and 5.");
-      return;
-    }
-
-    const rounded = Math.round(parsed * 10) / 10;
-    if (rounded > 5) {
-      setSelfRatingValidationError("Rating cannot be more than 5.");
-      return;
-    }
-    if (rounded < 1) {
-      setSelfRatingValidationError("Rating cannot be less than 1.");
+    const parsed = parseIntegerPerformanceRating(rawValue);
+    if (parsed == null) {
+      setSelfRatingValidationError("Choose a rating from 1 to 5.");
       return;
     }
 
@@ -1199,12 +1189,12 @@ export default function ManagerPortal({ onLogout, auth }) {
     if (kind === "kpi") {
       setManagerSelfKpiRatings((prev) => ({
         ...(prev || {}),
-        [id]: rounded,
+        [id]: parsed,
       }));
     } else {
       setManagerSelfValueRatings((prev) => ({
         ...(prev || {}),
-        [id]: rounded,
+        [id]: parsed,
       }));
     }
   }
@@ -1964,7 +1954,10 @@ export default function ManagerPortal({ onLogout, auth }) {
     if (!String(month || "").trim()) return;
     if (hydratingSelfSubmission) return;
     if (selfReviewLocked) return;
-    if (!canEnterManagerValues) return;
+
+    const canAutosaveDraft =
+      canEnterManagerValues || Boolean(isResubmissionRequested(selfSubmissionMeta));
+    if (!canAutosaveDraft) return;
 
     const payload = buildManagerSelfSubmissionPayload({
       month,
@@ -1987,8 +1980,19 @@ export default function ManagerPortal({ onLogout, auth }) {
       setManagerDraftError("");
       setManagerDraftSaving(true);
       try {
-        await saveMonthlyDraft(payload);
+        const saved = await saveMonthlyDraft(payload);
         lastSavedSelfDraftHashRef.current = hash;
+        const normalized = normalizeMonthlySubmission(saved);
+        if (normalized) {
+          setSelfSubmissionMeta((prev) => ({
+            ...(prev || {}),
+            id: normalized.id ?? prev?.id,
+            month: normalized.month || month,
+            status: normalized.status || prev?.status || "DRAFT",
+            reviewStatus: normalized.reviewStatus || prev?.reviewStatus || "DRAFT",
+            updatedAt: normalized.updatedAt || new Date().toISOString(),
+          }));
+        }
       } catch (err) {
         if (err?.status === 401) {
           onLogout?.();
@@ -2002,6 +2006,7 @@ export default function ManagerPortal({ onLogout, auth }) {
 
     return () => window.clearTimeout(id);
   }, [
+    canEnterManagerValues,
     hydratingSelfSubmission,
     managerSelfKpiRatings,
     managerSelfReviewText,
@@ -2011,12 +2016,42 @@ export default function ManagerPortal({ onLogout, auth }) {
     month,
     onLogout,
     filteredSelfKpiIds,
-    selfSubmissionMeta?.reviewStatus,
-    selfSubmissionMeta?.reopenedForResubmission,
+    selfSubmissionMeta,
     selfReviewLocked,
-    canEnterManagerValues,
     selfReviewerFields,
   ]);
+
+  const currentSelfDraftHash = useMemo(
+    () =>
+      payloadHash(
+        buildManagerSelfSubmissionPayload({
+          month,
+          selfReviewText: managerSelfReviewText,
+          kpiRatings: managerSelfKpiRatings,
+          selectedValues: managerSelfValueRatings,
+          valueComments: managerSelfValueComments,
+          allowedKpiIds: filteredSelfKpiIds,
+          managerId,
+          ...selfReviewerFields,
+          reviewStatus: selfSubmissionMeta?.reviewStatus || "DRAFT",
+          reopenedForResubmission: selfSubmissionMeta?.reopenedForResubmission,
+        }),
+      ),
+    [
+      filteredSelfKpiIds,
+      managerId,
+      managerSelfKpiRatings,
+      managerSelfReviewText,
+      managerSelfValueComments,
+      managerSelfValueRatings,
+      month,
+      selfReviewerFields,
+      selfSubmissionMeta?.reviewStatus,
+      selfSubmissionMeta?.reopenedForResubmission,
+    ],
+  );
+
+  const selfDraftIsSynced = currentSelfDraftHash === lastSavedSelfDraftHashRef.current;
 
   const teamInsightSourceRows = useMemo(
     () => (teamInsightsRows.length ? teamInsightsRows : teamSubs),
@@ -2181,8 +2216,19 @@ export default function ManagerPortal({ onLogout, auth }) {
     setSavingSelfReview(true);
     setManagerDraftError("");
     try {
-      await saveMonthlyDraft(payload);
+      const saved = await saveMonthlyDraft(payload);
       lastSavedSelfDraftHashRef.current = payloadHash(payload);
+      const normalized = normalizeMonthlySubmission(saved);
+      if (normalized) {
+        setSelfSubmissionMeta((prev) => ({
+          ...(prev || {}),
+          id: normalized.id ?? prev?.id,
+          month: normalized.month || month,
+          status: normalized.status || prev?.status || "DRAFT",
+          reviewStatus: normalized.reviewStatus || prev?.reviewStatus || "DRAFT",
+          updatedAt: normalized.updatedAt || new Date().toISOString(),
+        }));
+      }
       showToast({ title: "Draft saved", message: "Manager self review saved." });
     } catch (err) {
       setManagerDraftError(err?.message || "Please try again.");
@@ -3037,7 +3083,18 @@ export default function ManagerPortal({ onLogout, auth }) {
             ) : null}
 
             <div className="mt-5 text-xs text-[rgb(var(--muted))]">
-              Draft: {selfReviewLocked ? "Locked" : (hydratingSelfSubmission ? "Loading…" : managerDraftSaving ? "Saving…" : "Saved")}
+              Draft:{" "}
+              {selfReviewLocked
+                ? "Locked"
+                : hydratingSelfSubmission
+                  ? "Loading…"
+                  : managerDraftSaving
+                    ? "Saving…"
+                    : managerDraftError
+                      ? "Not saved"
+                      : selfDraftIsSynced
+                        ? "Saved"
+                        : "Unsaved changes"}
             </div>
 
             <div className="mt-6 rt-panel-subtle rounded-lg p-4">
@@ -3086,29 +3143,19 @@ export default function ManagerPortal({ onLogout, auth }) {
                   {filteredSelfKpis.map((k) => {
                     const id = String(k?.id || "").trim();
                     const value = managerSelfKpiRatings?.[id];
-                    const display = formatOneDecimalDisplay(value);
                     return (
-                      <div key={id} className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-3">
+                      <div key={id} className="grid grid-cols-[minmax(0,1fr)_12rem] items-center gap-3">
                         <div className="min-w-0 pr-2">
                           <div className="text-sm text-[rgb(var(--text))] truncate">{String(k?.title || id)}</div>
                           <div className="text-[10px] text-[rgb(var(--muted))] font-mono mt-1">
                             {String(k?.weight || "—")}
                           </div>
                         </div>
-                        <input
-                          type="number"
-                          min={1}
-                          max={5}
-                          step={0.1}
-                          value={display}
-                          readOnly={selfReviewLocked}
-                          onWheel={preventWheelInputChange}
-                          onChange={(e) => handleSelfRatingChange("kpi", id, e.target.value)}
-                          className={[
-                            "rt-input w-36 py-2 px-3 text-sm justify-self-end",
-                            selfReviewLocked ? "opacity-75 cursor-not-allowed" : "",
-                          ].join(" ")}
-                          placeholder="1-5"
+                        <IntegerPerformanceRatingSelect
+                          value={value}
+                          disabled={selfReviewLocked}
+                          className="rt-input w-full py-2 px-3 text-sm justify-self-end"
+                          onChange={(next) => handleSelfRatingChange("kpi", id, next)}
                         />
                       </div>
                     );
@@ -3128,29 +3175,19 @@ export default function ManagerPortal({ onLogout, auth }) {
                       {group.items.map((valueItem) => {
                         const id = String(valueItem?.id || "").trim();
                         const value = managerSelfValueRatings?.[id];
-                        const display = formatOneDecimalDisplay(value);
                         const comment = managerSelfValueComments?.[id] || "";
                         return (
                           <div key={id} className="space-y-2 rounded-md border border-[rgb(var(--border))] p-3 bg-[rgb(var(--surface-1))]">
-                            <div className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-3">
+                            <div className="grid grid-cols-[minmax(0,1fr)_12rem] items-center gap-3">
                               <div className="min-w-0 pr-2">
                                 <div className="text-sm text-[rgb(var(--text))] truncate">{String(valueItem?.title || id)}</div>
                                 <div className="text-[10px] text-[rgb(var(--muted))] mt-1">{String(valueItem?.pillar || group.pillar || "—")}</div>
                               </div>
-                              <input
-                                type="number"
-                                min={1}
-                                max={5}
-                                step={0.1}
-                                value={display}
-                                readOnly={selfReviewLocked}
-                                onWheel={preventWheelInputChange}
-                                onChange={(e) => handleSelfRatingChange("value", id, e.target.value)}
-                                className={[
-                                  "rt-input w-36 py-2 px-3 text-sm justify-self-end",
-                                  selfReviewLocked ? "opacity-75 cursor-not-allowed" : "",
-                                ].join(" ")}
-                                placeholder="1-5"
+                              <IntegerPerformanceRatingSelect
+                                value={value}
+                                disabled={selfReviewLocked}
+                                className="rt-input w-full py-2 px-3 text-sm justify-self-end"
+                                onChange={(next) => handleSelfRatingChange("value", id, next)}
                               />
                             </div>
                             <div>
@@ -3374,31 +3411,6 @@ export default function ManagerPortal({ onLogout, auth }) {
                 </div>
                 <div className="mt-4 space-y-5">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Webknot Values (Employee Reference)</div>
-                    <div className="mt-2 space-y-2">
-                      {Object.keys(selectedEmployeeValueRatings).length ? (
-                        Object.entries(selectedEmployeeValueRatings)
-                          .sort(([a], [b]) => String(a).localeCompare(String(b), undefined, { numeric: true }))
-                          .map(([id, rating]) => (
-                            <div key={`emp-ref-${String(id || "")}`} className="flex items-center justify-between gap-4 text-[13px]">
-                              <div className="text-[rgb(var(--muted))] truncate">{valueLabelIndex[String(id)] || String(id || "")}</div>
-                              <div className="font-mono text-[rgb(var(--text))] text-right">{formatPerformanceRating(rating)}</div>
-                            </div>
-                          ))
-                      ) : Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
-                        selectedRow.payload.webknotValues.map((v) => (
-                          <div key={`emp-ref-${String(v || "")}`} className="flex items-center justify-between gap-4 text-[13px]">
-                            <div className="text-[rgb(var(--muted))] truncate">{valueLabelIndex[String(v)] || String(v || "")}</div>
-                            <div className="font-mono text-[rgb(var(--text))]">—</div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="text-sm text-[rgb(var(--muted))]">No values provided by employee.</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
                     <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">KPI Ratings (Manager)</div>
                     <p className="mt-2 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
                       Rating scale: {performanceRatingScaleText()}
@@ -3407,40 +3419,26 @@ export default function ManagerPortal({ onLogout, auth }) {
                       {selectedReviewKpiIds.length ? (
                         selectedReviewKpiIds.map((id) => {
                           const current = managerRatings?.[id];
-                          const display =
-                            typeof current === "number" && Number.isFinite(current) ? current : (current ?? "");
                           return (
                             <div key={id} className="flex items-center justify-between gap-3">
                               <div className="text-sm text-[rgb(var(--text))]">
                                 {kpiIndex?.[id]?.title || id}
                               </div>
-                              <div className="flex flex-col items-end gap-1">
-                                <input
-                                  type="number"
-                                  min={1}
-                                  max={5}
-                                  step={0.1}
-                                  value={display}
-                                  onChange={(e) => {
-                                    const raw = String(e.target.value ?? "").trim();
-                                    const parsed = raw === "" ? null : Number.parseFloat(raw);
-                                    setManagerRatings((prev) => {
-                                      const next = { ...(prev || {}) };
-                                      if (parsed == null || !Number.isFinite(parsed)) {
-                                        delete next[id];
-                                        return next;
-                                      }
-                                      next[id] = Math.round(parsed * 10) / 10;
-                                      return next;
-                                    });
-                                  }}
-                                  className="rt-input w-28 py-2 px-3 text-sm"
-                                  placeholder="1-5"
-                                />
-                                {performanceRatingLabel(current) ? (
-                                  <span className="text-[10px] text-[rgb(var(--muted))]">{formatPerformanceRating(current)}</span>
-                                ) : null}
-                              </div>
+                              <IntegerPerformanceRatingSelect
+                                value={current}
+                                className="rt-input w-56 py-2 px-3 text-sm"
+                                onChange={(next) => {
+                                  setManagerRatings((prev) => {
+                                    const updated = { ...(prev || {}) };
+                                    if (next == null) {
+                                      delete updated[id];
+                                      return updated;
+                                    }
+                                    updated[id] = next;
+                                    return updated;
+                                  });
+                                }}
+                              />
                             </div>
                           );
                         })
@@ -3458,35 +3456,26 @@ export default function ManagerPortal({ onLogout, auth }) {
                           .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }))
                           .map((id) => {
                             const current = managerValueRatings?.[id];
-                            const display =
-                              typeof current === "number" && Number.isFinite(current) ? current : (current ?? "");
                             const valueLabel = valueLabelIndex[String(id)] || id;
                             const selfComment = selectedValueComments?.[String(id)] || "";
                             return (
                               <div key={id} className="space-y-2 rounded-md border border-[rgb(var(--border))] p-3 bg-[rgb(var(--surface-1))]">
                                 <div className="flex items-start justify-between gap-3">
                                   <div className="text-sm text-[rgb(var(--text))] leading-tight">{String(valueLabel)}</div>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    max={5}
-                                    step={0.1}
-                                    value={display}
-                                    onChange={(e) => {
-                                      const raw = String(e.target.value ?? "").trim();
-                                      const parsed = raw === "" ? null : Number.parseFloat(raw);
+                                  <IntegerPerformanceRatingSelect
+                                    value={current}
+                                    className="rt-input w-56 py-2 px-3 text-sm"
+                                    onChange={(next) => {
                                       setManagerValueRatings((prev) => {
-                                        const next = { ...(prev || {}) };
-                                        if (parsed == null || !Number.isFinite(parsed)) {
-                                          delete next[id];
-                                          return next;
+                                        const updated = { ...(prev || {}) };
+                                        if (next == null) {
+                                          delete updated[id];
+                                          return updated;
                                         }
-                                        next[id] = Math.round(parsed * 10) / 10;
-                                        return next;
+                                        updated[id] = next;
+                                        return updated;
                                       });
                                     }}
-                                    className="rt-input w-28 py-2 px-3 text-sm"
-                                    placeholder="1-5"
                                   />
                                 </div>
                                 {selfComment ? (
