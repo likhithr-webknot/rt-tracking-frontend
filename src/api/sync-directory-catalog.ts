@@ -2,8 +2,9 @@
 import {
   addBand,
   addStream,
-  deleteBandOrDeactivate,
+  deleteBand,
   deleteStream,
+  resolveBandNumericId,
   fetchBands,
   fetchStreams,
   updateStream,
@@ -49,8 +50,8 @@ function deptNameOf(row) {
 
 /**
  * Replace bands & departments with the canonical CSV catalogs.
- * Bands not in the list are deleted or deactivated; missing bands are created.
- * Departments not in the list are unlisted; missing ones are added or reactivated.
+ * Bands not in the list are deleted when unused; missing bands are created.
+ * Departments not in the list are removed when unused; missing ones are added.
  */
 export async function syncStandardBandsAndDepartments({ signal } = {}) {
   const standardBands = new Set(STANDARD_BAND_CODES.map((c) => c.toUpperCase()));
@@ -72,7 +73,11 @@ export async function syncStandardBandsAndDepartments({ signal } = {}) {
       continue;
     }
     try {
-      await deleteBandOrDeactivate(row, { signal });
+      const direct = String(row?.id ?? "").trim();
+      const bandId = /^\d+$/.test(direct)
+        ? direct
+        : await resolveBandNumericId(row, { signal });
+      await deleteBand(bandId, { signal });
       bandReport.removed += 1;
     } catch (err) {
       bandReport.errors.push(`Band ${code}: ${err?.message || "remove failed"}`);
@@ -116,12 +121,7 @@ export async function syncStandardBandsAndDepartments({ signal } = {}) {
       await deleteStream(row, { signal });
       deptReport.removed += 1;
     } catch (err) {
-      try {
-        await updateStream(row, { id: row.id, active: false, listed: false }, { signal });
-        deptReport.removed += 1;
-      } catch (err2) {
-        deptReport.errors.push(`Department ${name}: ${err2?.message || err?.message || "remove failed"}`);
-      }
+      deptReport.errors.push(`Department ${name}: ${err?.message || "remove failed"}`);
     }
   }
 

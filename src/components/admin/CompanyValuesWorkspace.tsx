@@ -15,7 +15,7 @@ import {
 import ModalOverlay from "../shared/ModalOverlay";
 import ConfirmDialog from "../shared/ConfirmDialog";
 import Toast from "../shared/Toast";
-import AdminPageHeader from "./AdminPageHeader";
+import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import EntityCsvToolbar from "../shared/EntityCsvToolbar";
 import { exportCompanyValuesCsv } from "../../utils/entityCsvExport";
 import {
@@ -74,12 +74,12 @@ function titleCase(text) {
 }
 
 const CRITERIA_PALETTE = [
-  { ring: "ring-indigo-500/25", dot: "bg-indigo-500", badge: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 border-indigo-500/20" },
+  { ring: "ring-blue-500/25", dot: "bg-blue-500", badge: "bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20" },
   { ring: "ring-emerald-500/25", dot: "bg-emerald-500", badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border-emerald-500/20" },
-  { ring: "ring-amber-500/25", dot: "bg-amber-500", badge: "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20" },
-  { ring: "ring-violet-500/25", dot: "bg-violet-500", badge: "bg-violet-500/10 text-violet-600 dark:text-violet-300 border-violet-500/20" },
-  { ring: "ring-rose-500/25", dot: "bg-rose-500", badge: "bg-rose-500/10 text-rose-600 dark:text-rose-300 border-rose-500/20" },
+  { ring: "ring-amber-500/25", dot: "bg-amber-500", badge: "bg-amber-700/10 text-amber-700 dark:text-amber-300 border-amber-500/20" },
   { ring: "ring-cyan-500/25", dot: "bg-cyan-500", badge: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-300 border-cyan-500/20" },
+  { ring: "ring-rose-500/25", dot: "bg-rose-500", badge: "bg-rose-500/10 text-rose-600 dark:text-rose-300 border-rose-500/20" },
+  { ring: "ring-sky-500/25", dot: "bg-sky-500", badge: "bg-sky-500/10 text-sky-600 dark:text-sky-300 border-sky-500/20" },
 ];
 
 function paletteForCriteria(key) {
@@ -257,8 +257,7 @@ export default function CompanyValuesWorkspace() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8 animate-in fade-in duration-500">
-      {/* Header */}
+    <AdminPageShell>
       <AdminPageHeader
         title="Webknot Values"
         subtitle="Define values and evaluation criteria used in employee and manager reviews."
@@ -432,11 +431,11 @@ export default function CompanyValuesWorkspace() {
         >
           <form onSubmit={submitEditor} className="mt-6 space-y-5">
             <Field
-              label="Value name"
+              label="Details"
               required
               value={formDraft.name}
               onChange={(name) => setFormDraft((d) => ({ ...d, name }))}
-              placeholder="e.g. Own the outcome"
+              placeholder="e.g. Owns tasks end-to-end without pushing blame"
             />
             <Field
               label="Evaluation criteria"
@@ -445,8 +444,8 @@ export default function CompanyValuesWorkspace() {
               onChange={(evaluationCriteria) =>
                 setFormDraft((d) => ({ ...d, evaluationCriteria }))
               }
-              placeholder="e.g. Ownership"
-              hint="Groups values in review scorecards."
+              placeholder="e.g. Extreme Ownership"
+              hint="Groups values in review scorecards. Repeat on the first row of each CSV group only."
             />
             <Field
               label="Description"
@@ -488,22 +487,18 @@ export default function CompanyValuesWorkspace() {
       />
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-    </div>
+    </AdminPageShell>
   );
 }
 
 function StatCard({ icon: Icon, label, value }) {
   return (
-    <div className="rt-panel-subtle flex items-center gap-4 px-5 py-4">
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgb(var(--surface))] text-[rgb(var(--primary))] ring-1 ring-[rgb(var(--border))]">
-        <Icon size={18} />
+    <div className="pulse-metric">
+      <div className="flex items-start justify-between gap-3">
+        <div className="pulse-metric-label">{label}</div>
+        <Icon size={18} className="text-[rgb(var(--accent))]" />
       </div>
-      <div>
-        <div className="text-[10px] font-bold uppercase tracking-widest text-[rgb(var(--muted))]">
-          {label}
-        </div>
-        <div className="mt-0.5 text-2xl font-bold tabular-nums text-[rgb(var(--text))]">{value}</div>
-      </div>
+      <div className="pulse-metric-value">{value}</div>
     </div>
   );
 }

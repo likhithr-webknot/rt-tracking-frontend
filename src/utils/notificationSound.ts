@@ -1,35 +1,55 @@
 // @ts-nocheck
+let sharedAudioContext = null;
+
+async function resolveAudioContext() {
+  if (typeof window === "undefined") return null;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!sharedAudioContext) {
+    sharedAudioContext = new AudioCtx();
+  }
+  if (sharedAudioContext.state === "suspended") {
+    try {
+      await sharedAudioContext.resume();
+    } catch {
+      return null;
+    }
+  }
+  return sharedAudioContext.state === "running" ? sharedAudioContext : null;
+}
+
 /**
- * Plays a notification sound using the Web Audio API
- * Falls back gracefully if audio is not supported or disabled
- * @returns {Promise<void>}
+ * Plays a notification sound using the Web Audio API.
+ * Respects browser autoplay policy by resuming a shared AudioContext when needed.
  */
-export const playNotificationSound = async () => {
+export const playNotificationSound = async ({ enabled = true } = {}) => {
+  if (enabled === false) return;
   try {
-    // Create a simple beep sound using Web Audio API
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const audioContext = await resolveAudioContext();
+    if (!audioContext) return;
+
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
 
     oscillator.connect(gainNode);
     gainNode.connect(audioContext.destination);
 
-    // Set frequency and duration for a pleasant notification sound
-    oscillator.frequency.value = 800; // Frequency in Hz
+    oscillator.frequency.value = 800;
     oscillator.type = "sine";
 
-    // Fade in and out for a smooth sound
-    gainNode.gain.setValueAtTime(0, audioContext.currentTime);
-    gainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.05);
-    gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.2);
+    const startAt = audioContext.currentTime;
+    gainNode.gain.setValueAtTime(0, startAt);
+    gainNode.gain.linearRampToValueAtTime(0.3, startAt + 0.05);
+    gainNode.gain.linearRampToValueAtTime(0, startAt + 0.2);
 
-    oscillator.start(audioContext.currentTime);
-    oscillator.stop(audioContext.currentTime + 0.2);
-
-    return Promise.resolve();
+    oscillator.start(startAt);
+    oscillator.stop(startAt + 0.2);
   } catch (error) {
-    // Silently fail if audio context is not available or user has disabled audio
     console.debug("Notification sound not available:", error);
-    return Promise.resolve();
   }
+};
+
+/** Call once after a user gesture so later notification sounds can play. */
+export const unlockNotificationSound = () => {
+  resolveAudioContext().catch(() => {});
 };

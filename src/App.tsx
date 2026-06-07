@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, Navigate } from "react-router-dom";
+import { useLocation, Navigate, useNavigate } from "react-router-dom";
 
 /* ── Lazy-loaded portals (code-split per role) ─────────────── */
 const AdminControlCenter = lazy(() => import("./components/admin/AdminControlCenter"));
@@ -28,6 +28,7 @@ import {
 import { isWebknotWorkEmail } from "./utils/webknotEmail";
 import { isHrPortalUser } from "./utils/hrRatingsFilter";
 import CompanyLogo from "./components/shared/CompanyLogo";
+import NotFoundPage from "./components/shared/NotFoundPage";
 
 const EMPLOYEE_LEGACY_TABS = new Set([
   "profile",
@@ -175,6 +176,17 @@ function getAuthEmailForPortal(auth) {
     if (t) return t;
   }
   return "";
+}
+
+function AppNotFound() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  return (
+    <NotFoundPage
+      attemptedPath={location.pathname}
+      onGoHome={() => navigate("/")}
+    />
+  );
 }
 
 export default function App() {
@@ -435,7 +447,7 @@ export default function App() {
       }
     }
 
-    return <Navigate to="/" replace />;
+    return <AppNotFound />;
   };
 
   return (

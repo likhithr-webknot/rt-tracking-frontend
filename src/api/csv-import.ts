@@ -59,6 +59,14 @@ function csvSingleImportPaths(entityPath) {
     );
   }
 
+  if (entityPath === "ratings-history") {
+    paths.unshift(
+      "/api/v1/admin/monthly-submissions/import-csv",
+      "/api/v1/monthly-submissions/import-csv",
+      "/api/v1/admin/imports/csv/ratings-history",
+    );
+  }
+
   return [...new Set(paths)];
 }
 
@@ -92,6 +100,7 @@ export const CSV_ENTITY_MAP = {
   certifications: "certifications",
   "designation-lookups": "designation-lookups",
   "monthly-submissions": "monthly-submissions",
+  "ratings-history": "ratings-history",
   projects: "projects",
 };
 
@@ -104,6 +113,7 @@ export const CSV_BULK_FIELD_MAP = {
   certifications: "certifications",
   designationLookups: "designationLookups",
   monthlySubmissions: "monthlySubmissions",
+  ratingsHistory: "ratingsHistory",
   projects: "projects",
 };
 
@@ -117,6 +127,7 @@ export const CSV_ENTITY_TO_BULK_FIELD = {
   certifications: "certifications",
   "designation-lookups": "designationLookups",
   "monthly-submissions": "monthlySubmissions",
+  "ratings-history": "ratingsHistory",
   projects: "projects",
 };
 
@@ -192,8 +203,13 @@ export async function importCsvSingle(entity, file, opts = {}) {
         fieldName,
       });
       if (result && !result.err) {
+        const dataMsg =
+          typeof result?.data === "string"
+            ? result.data
+            : result?.data?.message || result?.data?.summary || null;
         return {
           ...result,
+          message: dataMsg || result?.message,
           normalized: true,
           warnings: warnings || [],
         };

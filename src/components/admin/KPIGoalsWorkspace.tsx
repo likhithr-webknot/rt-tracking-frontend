@@ -9,7 +9,6 @@ import {
   Loader2,
   Pencil,
   Plus,
-  RefreshCw,
   Search,
   Trash2,
 } from "lucide-react";
@@ -24,10 +23,10 @@ import {
 import { computeKpiWeightIntegrity } from "../../utils/kpiWeightIntegrity";
 
 const GROUP_PALETTE = [
-  { ring: "ring-indigo-500/25", dot: "bg-indigo-500", band: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/20", dept: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20" },
+  { ring: "ring-blue-500/25", dot: "bg-blue-500", band: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20", dept: "bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/20" },
   { ring: "ring-emerald-500/25", dot: "bg-emerald-500", band: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20", dept: "bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-500/20" },
   { ring: "ring-amber-500/25", dot: "bg-amber-500", band: "bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/20", dept: "bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/20" },
-  { ring: "ring-violet-500/25", dot: "bg-violet-500", band: "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/20", dept: "bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20" },
+  { ring: "ring-cyan-500/25", dot: "bg-cyan-500", band: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border-cyan-500/20", dept: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20" },
 ];
 
 function normKey(v) {
@@ -82,7 +81,6 @@ export default function KPIGoalsWorkspace({
   onEditKpi,
   onDeleteKpi,
   loading,
-  onReload,
   onReloadAll = null,
   pager,
   pageSize = 10,
@@ -113,11 +111,6 @@ export default function KPIGoalsWorkspace({
     if (Array.isArray(allKpis) && allKpis.length) return;
     onReloadAll({ silent: true }).catch(() => {});
   }, [allKpis, allKpisLoading, onReloadAll, searchQuery]);
-
-  const handleRefresh = React.useCallback(() => {
-    onReload?.();
-    onReloadAll?.({ silent: true }).catch(() => {});
-  }, [onReload, onReloadAll]);
 
   const streamOptions = useMemo(() => {
     const fromCat = (catalogStreams || [])
@@ -219,10 +212,6 @@ export default function KPIGoalsWorkspace({
               ))}
             </select>
           </label>
-          <button type="button" onClick={handleRefresh} disabled={loading} className="rt-btn-ghost">
-            <RefreshCw size={18} className={loading ? "animate-spin" : ""} />
-            {loading ? "Loading…" : "Refresh"}
-          </button>
           <EntityCsvToolbar
             entityKey="kpi-definitions"
             onImportComplete={onImportComplete}
@@ -243,27 +232,18 @@ export default function KPIGoalsWorkspace({
       ) : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <div className="rt-panel-subtle p-4">
-          <div className="rt-kicker">Total goals</div>
-          <div className="mt-2 text-2xl font-semibold">{stats.total}</div>
-        </div>
-        <div className="rt-panel-subtle p-4">
-          <div className="rt-kicker">Criteria groups</div>
-          <div className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold">
-            <Layers3 size={18} className="text-blue-500" />
-            {stats.groups}
-          </div>
-        </div>
-        <div className="rt-panel-subtle p-4">
-          <div className="rt-kicker">Over 100%</div>
-          <div className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold">
-            <AlertTriangle
-              size={18}
-              className={stats.overweightCount > 0 ? "text-red-500" : "text-emerald-500"}
-            />
-            {stats.overweightCount}
-          </div>
-        </div>
+        <StatCard icon={Hash} label="Total goals" value={stats.total} />
+        <StatCard icon={Layers3} label="Criteria groups" value={stats.groups} />
+        <StatCard
+          icon={AlertTriangle}
+          label="Over 100%"
+          value={stats.overweightCount}
+          iconClassName={
+            stats.overweightCount > 0
+              ? "text-red-500 dark:text-red-400"
+              : "text-emerald-500 dark:text-emerald-400"
+          }
+        />
       </div>
 
       {weightReport.overweightCount > 0 ? (
@@ -444,5 +424,17 @@ export default function KPIGoalsWorkspace({
         />
       ) : null}
     </AdminPageShell>
+  );
+}
+
+function StatCard({ icon: Icon, label, value, iconClassName = "text-[rgb(var(--accent))]" }) {
+  return (
+    <div className="pulse-metric">
+      <div className="flex items-start justify-between gap-3">
+        <div className="pulse-metric-label">{label}</div>
+        {Icon ? <Icon size={18} strokeWidth={2} className={iconClassName} /> : null}
+      </div>
+      <div className="pulse-metric-value tabular-nums">{value}</div>
+    </div>
   );
 }

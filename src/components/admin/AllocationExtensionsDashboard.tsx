@@ -3,6 +3,7 @@ import React, { useState, useEffect } from "react";
 import { History, CheckCircle2, XCircle, Search, Loader2, User, Clock, AlertTriangle, MoreVertical } from "lucide-react";
 import { fetchAllocationExtensions, updateExtensionStatus } from "../../api/allocation-extensions";
 import Toast from "../shared/Toast";
+import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 
 export default function AllocationExtensionsDashboard() {
   const [requests, setRequests] = useState([]);
@@ -45,13 +46,13 @@ export default function AllocationExtensionsDashboard() {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <header>
-        <h2 className="rt-title text-[rgb(var(--text))]">Extension Requests</h2>
-        <p className="text-sm text-[rgb(var(--muted))] mt-2 font-medium">Review and moderate project allocation extension requests from managers.</p>
-      </header>
+    <AdminPageShell>
+      <AdminPageHeader
+        title="Extension Requests"
+        subtitle="Review and moderate project allocation extension requests from managers."
+      />
 
-      <div className="rt-panel overflow-hidden">
+      <div className="pulse-surface overflow-hidden">
         <div className="p-6 border-b border-[rgb(var(--border))] flex items-center justify-between gap-4 flex-wrap">
            <div className="relative max-w-sm w-full">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" size={16} />
@@ -166,6 +167,6 @@ export default function AllocationExtensionsDashboard() {
       </div>
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-    </div>
+    </AdminPageShell>
   );
 }

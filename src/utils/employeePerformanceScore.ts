@@ -4,6 +4,7 @@ import {
   computeCertificationComponentScore,
   computeSubmissionScoreBreakdown,
   computeWeightedScore503515,
+  DEFAULT_INCOMPLETE_SUBMISSION_SCORE,
 } from "./submissionScoring";
 
 /**
@@ -45,28 +46,56 @@ export function computeEmployeeBrowniePoints(emp) {
 /** Extract a 1–5 weighted score from a normalized monthly submission row. */
 export function scoreFromMonthlySubmission(item) {
   const sub = item?.submission && typeof item.submission === "object" ? item.submission : item;
+  const raw = sub?.raw && typeof sub.raw === "object" ? sub.raw : item;
   const payload = sub?.payload && typeof sub.payload === "object" ? sub.payload : sub;
+
+  const clampScore = (value) => Math.round(Math.min(5, Math.max(1, value)) * 10) / 10;
+
+  const approvedScore = Number(sub?.finalScore ?? raw?.finalScore ?? NaN);
+  if (Number.isFinite(approvedScore) && approvedScore >= 1) {
+    return clampScore(approvedScore);
+  }
+
   const mgr =
     sub?.managerEvaluation && typeof sub.managerEvaluation === "object"
       ? sub.managerEvaluation
       : payload?.managerEvaluation;
+  const managerKpiRatings = mgr?.kpiRatings ?? sub?.managerKpiRatings ?? payload?.managerKpiRatings;
+  const managerWebknotValueRatings =
+    mgr?.webknotValueRatings ?? sub?.managerWebknotValueRatings ?? payload?.managerWebknotValueRatings;
+
   const breakdown = computeSubmissionScoreBreakdown({
-    managerKpiRatings: mgr?.kpiRatings ?? sub?.managerKpiRatings ?? payload?.managerKpiRatings,
-    managerWebknotValueRatings:
-      mgr?.webknotValueRatings ?? sub?.managerWebknotValueRatings ?? payload?.managerWebknotValueRatings,
+    managerKpiRatings,
+    managerWebknotValueRatings,
     certifications: sub?.certifications ?? payload?.certifications ?? [],
     recognitionsCount: sub?.recognitions ?? payload?.recognitions ?? sub?.recognitionsCount,
     techShowcase: sub?.techShowcase ?? payload?.techShowcase ?? "",
   });
-  const direct = Number(
-    sub?.weightedScore ??
-      sub?.finalScore ??
-      sub?.abilityScore ??
-      breakdown.weightedScore ??
-      NaN,
+
+  const hasManagerRatings =
+    breakdown.managerKpiAverage != null || breakdown.managerWebknotValueAverage != null;
+  if (hasManagerRatings && breakdown.weightedScore != null) {
+    return clampScore(breakdown.weightedScore);
+  }
+
+  const direct = Number(sub?.weightedScore ?? raw?.weightedScore ?? sub?.abilityScore ?? NaN);
+  if (Number.isFinite(direct) && direct >= 1) {
+    return clampScore(direct);
+  }
+
+  const hasSubmissionRow = Boolean(
+    sub?.month ??
+    raw?.month ??
+    sub?.submittedAt ??
+    raw?.submittedAt ??
+    sub?.id ??
+    raw?.id
   );
-  if (Number.isFinite(direct)) return Math.round(Math.min(5, Math.max(1, direct)) * 10) / 10;
-  return breakdown.weightedScore;
+  if (hasSubmissionRow) {
+    return DEFAULT_INCOMPLETE_SUBMISSION_SCORE;
+  }
+
+  return null;
 }
 
 export function averageNumericScores(scores) {
@@ -83,17 +112,28 @@ export function buildSubmissionScoreIndex(submissions) {
   const byEmployee = new Map();
   for (const item of Array.isArray(submissions) ? submissions : []) {
     const sub = item?.submission && typeof item.submission === "object" ? item.submission : item;
-    const empId = String(
-      sub?.employeeId ?? sub?.empId ?? item?.employeeId ?? item?.empId ?? "",
-    ).trim();
-    if (!empId) continue;
+    const raw = sub?.raw && typeof sub.raw === "object" ? sub.raw : item;
+    const keys = [
+      sub?.empId,
+      sub?.employeeId,
+      sub?.subjectEmployeeId,
+      raw?.empId,
+      raw?.userId,
+      item?.empId,
+      item?.userId,
+    ]
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean);
+    if (!keys.length) continue;
     const score = scoreFromMonthlySubmission(item);
     if (score == null) continue;
-    const bucket = byEmployee.get(empId) || { scores: [], months: [] };
-    bucket.scores.push(score);
     const month = String(sub?.month ?? sub?.cycleKey ?? item?.month ?? "").trim();
-    if (month) bucket.months.push(month);
-    byEmployee.set(empId, bucket);
+    for (const empId of keys) {
+      const bucket = byEmployee.get(empId) || { scores: [], months: [] };
+      bucket.scores.push(score);
+      if (month) bucket.months.push(month);
+      byEmployee.set(empId, bucket);
+    }
   }
   const averages = new Map();
   for (const [empId, bucket] of byEmployee.entries()) {

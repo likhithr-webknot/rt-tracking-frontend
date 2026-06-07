@@ -5,6 +5,8 @@ import { buildApiUrl, ensureCsrfCookie, safeJsonParse, toHttpError, withCsrfHead
 
 export const ADMIN_NOTIFICATION_TYPES = Object.freeze({
   MANAGER_EMPLOYEE_PAIR_SUBMITTED: "MANAGER_EMPLOYEE_PAIR_SUBMITTED",
+  MONTHLY_MANAGER_REVIEW_SUBMITTED: "MONTHLY_MANAGER_REVIEW_SUBMITTED",
+  MONTHLY_SELF_REVIEW_SUBMITTED: "MONTHLY_SELF_REVIEW_SUBMITTED",
   FORGOT_PASSWORD_REQUESTED: "FORGOT_PASSWORD_REQUESTED",
   PROJECT_STAKEHOLDER_ALERT: "PROJECT_STAKEHOLDER_ALERT",
   EMPLOYEE_PROJECT_SUBMITTED: "EMPLOYEE_PROJECT_SUBMITTED",
@@ -14,6 +16,27 @@ export const MANAGER_NOTIFICATION_TYPES = Object.freeze({
   EMPLOYEE_SUBMITTED_FOR_REVIEW: "EMPLOYEE_SUBMITTED_FOR_REVIEW",
   PROJECT_STAKEHOLDER_ALERT: "PROJECT_STAKEHOLDER_ALERT",
   EMPLOYEE_PROJECT_SUBMITTED: "EMPLOYEE_PROJECT_SUBMITTED",
+});
+
+/** Backend {@code NotificationType} values employees receive in their inbox. */
+export const EMPLOYEE_NOTIFICATION_TYPES = Object.freeze({
+  MONTHLY_MANAGER_REVIEW_SUBMITTED: "MONTHLY_MANAGER_REVIEW_SUBMITTED",
+  MONTHLY_SELF_REVIEW_SUBMITTED: "MONTHLY_SELF_REVIEW_SUBMITTED",
+  LEAVE_REQUEST: "LEAVE_REQUEST",
+  LEAVE_APPROVED: "LEAVE_APPROVED",
+  LEAVE_REJECTED: "LEAVE_REJECTED",
+  WFH_REQUEST: "WFH_REQUEST",
+  WFH_APPROVED: "WFH_APPROVED",
+  WFH_REJECTED: "WFH_REJECTED",
+  COMP_OFF_REQUEST: "COMP_OFF_REQUEST",
+  COMP_OFF_APPROVED: "COMP_OFF_APPROVED",
+  COMP_OFF_REJECTED: "COMP_OFF_REJECTED",
+  PROJECT_ASSIGNMENT: "PROJECT_ASSIGNMENT",
+  ANNOUNCEMENT: "ANNOUNCEMENT",
+  ALLOCATION_EXTENSION_REQUEST: "ALLOCATION_EXTENSION_REQUEST",
+  ALLOCATION_EXTENSION_APPROVED: "ALLOCATION_EXTENSION_APPROVED",
+  ALLOCATION_EXTENSION_REJECTED: "ALLOCATION_EXTENSION_REJECTED",
+  INTERNSHIP_ABOUT_TO_COMPLETE: "INTERNSHIP_ABOUT_TO_COMPLETE",
 });
 
 const ADMIN_ALLOWED_NOTIFICATION_TYPES = new Set(Object.values(ADMIN_NOTIFICATION_TYPES));
@@ -26,6 +49,13 @@ const MANAGER_ALLOWED_NOTIFICATION_TYPES = new Set([
   "PROJECT_SUBMIT_ALERT",
   "PM_PROJECT_ALERT",
   "AM_PROJECT_ALERT",
+]);
+const EMPLOYEE_ALLOWED_NOTIFICATION_TYPES = new Set([
+  ...Object.values(EMPLOYEE_NOTIFICATION_TYPES),
+  "MANAGER_REVIEW_SUBMITTED",
+  "SUBMISSION_RETURNED",
+  "RESUBMISSION_REQUESTED",
+  "EMPLOYEE_GENERIC",
 ]);
 
 function isPlainObject(value) {
@@ -76,14 +106,27 @@ function buildAdminTitle(type) {
   if (type === ADMIN_NOTIFICATION_TYPES.MANAGER_EMPLOYEE_PAIR_SUBMITTED) {
     return "Manager + Employee submissions completed";
   }
+  if (type === ADMIN_NOTIFICATION_TYPES.MONTHLY_MANAGER_REVIEW_SUBMITTED) {
+    return "Manager review ready for approval";
+  }
+  if (type === ADMIN_NOTIFICATION_TYPES.MONTHLY_SELF_REVIEW_SUBMITTED) {
+    return "Submission returned for resubmission";
+  }
   if (type === ADMIN_NOTIFICATION_TYPES.FORGOT_PASSWORD_REQUESTED) {
     return "Forgot password request";
   }
   return "Admin notification";
 }
 
-function buildAdminMessage(type, payload) {
-  if (!isPlainObject(payload)) return "";
+function buildAdminMessage(type, payload, obj) {
+  const direct = toTrimmedString(obj?.message);
+  if (direct && (
+    type === ADMIN_NOTIFICATION_TYPES.MONTHLY_MANAGER_REVIEW_SUBMITTED ||
+    type === ADMIN_NOTIFICATION_TYPES.MONTHLY_SELF_REVIEW_SUBMITTED
+  )) {
+    return direct;
+  }
+  if (!isPlainObject(payload)) payload = {};
 
   if (type === ADMIN_NOTIFICATION_TYPES.FORGOT_PASSWORD_REQUESTED || type === "FORGOT_PASSWORD") {
     const email = toTrimmedString(payload.email) || "An employee";
@@ -111,7 +154,16 @@ function buildAdminMessage(type, payload) {
       : `${employeeName} and ${managerName} completed submissions.`;
   }
 
-  return "";
+  if (type === ADMIN_NOTIFICATION_TYPES.MONTHLY_MANAGER_REVIEW_SUBMITTED) {
+    const employeeName =
+      toTrimmedString(payload.employeeName) || toTrimmedString(payload.userName) || "An employee";
+    const month = toTrimmedString(payload.month) || toTrimmedString(payload.monthKey);
+    return month
+      ? `Manager review submitted for ${employeeName} (${month}). Open Admin Submissions to approve.`
+      : `Manager review submitted for ${employeeName}. Open Admin Submissions to approve.`;
+  }
+
+  return direct || "";
 }
 
 function buildManagerTitle(type) {
@@ -131,6 +183,72 @@ function buildManagerMessage(type, payload) {
   return month
     ? `${employee} submitted monthly review for ${month}.`
     : `${employee} submitted monthly review.`;
+}
+
+function buildEmployeeTitle(type) {
+  if (type === EMPLOYEE_NOTIFICATION_TYPES.MONTHLY_MANAGER_REVIEW_SUBMITTED) {
+    return "Manager review submitted";
+  }
+  if (type === EMPLOYEE_NOTIFICATION_TYPES.ANNOUNCEMENT) {
+    return "Announcement";
+  }
+  if (String(type || "").includes("APPROVED")) return "Request approved";
+  if (String(type || "").includes("REJECTED")) return "Request declined";
+  if (String(type || "").includes("REQUEST")) return "Request update";
+  if (type === EMPLOYEE_NOTIFICATION_TYPES.PROJECT_ASSIGNMENT) return "Project assignment";
+  return "Notification";
+}
+
+function buildEmployeeMessage(type, payload, obj) {
+  const direct = toTrimmedString(obj?.message);
+  if (direct) return direct;
+  if (!isPlainObject(payload)) return "";
+
+  if (type === EMPLOYEE_NOTIFICATION_TYPES.MONTHLY_MANAGER_REVIEW_SUBMITTED) {
+    const manager = toTrimmedString(payload.managerName) || "Your manager";
+    const month = toTrimmedString(payload.month) || toTrimmedString(payload.monthKey);
+    return month
+      ? `${manager} submitted their review for ${month}.`
+      : `${manager} submitted their review.`;
+  }
+
+  const sender = toTrimmedString(payload.senderName) || toTrimmedString(obj?.senderName);
+  if (sender && direct === "") {
+    return sender;
+  }
+  return "";
+}
+
+function normalizeInboxNotification(raw, allowedTypes, buildTitle, buildMessage, genericType) {
+  const obj = isPlainObject(raw) ? raw : {};
+  const id = toTrimmedString(obj.id) || toTrimmedString(obj.notificationId);
+  const title = toTrimmedString(obj.title);
+  const message = toTrimmedString(obj.message);
+  if (!id && !title && !message) return null;
+
+  const type =
+    normalizeType(obj.type ?? obj.eventType ?? obj.notificationType ?? obj.kind, allowedTypes) ||
+    genericType;
+
+  const payload =
+    (isPlainObject(obj.payload) && obj.payload) ||
+    (isPlainObject(obj.data) && obj.data) ||
+    {};
+
+  const createdAt =
+    toIsoDate(obj.createdAt ?? obj.occurredAt ?? obj.timestamp ?? obj.emittedAt) ||
+    new Date().toISOString();
+
+  return {
+    id: id || `${type}:${createdAt}`,
+    type,
+    title: title || buildTitle(type),
+    message: message || buildMessage(type, payload, obj),
+    createdAt,
+    read: toBoolean(obj.read ?? obj.isRead ?? obj.acknowledged ?? obj.seen),
+    payload,
+    raw: obj,
+  };
 }
 
 function normalizeNotification(raw, allowedTypes, buildTitle, buildMessage) {
@@ -365,33 +483,63 @@ export function isSupportedManagerNotificationType(value) {
 }
 
 export function normalizeAdminNotification(raw) {
-  const first = normalizeNotification(raw, ADMIN_ALLOWED_NOTIFICATION_TYPES, buildAdminTitle, buildAdminMessage);
+  const first = normalizeNotification(
+    raw,
+    ADMIN_ALLOWED_NOTIFICATION_TYPES,
+    buildAdminTitle,
+    (type, payload) => buildAdminMessage(type, payload, raw)
+  );
   if (first) return first;
 
   const obj = isPlainObject(raw) ? raw : {};
   const type = toTrimmedString(obj.type ?? obj.eventType ?? obj.notificationType ?? obj.kind) || "ADMIN_GENERIC";
+  const allowed = new Set([type, ...ADMIN_ALLOWED_NOTIFICATION_TYPES]);
   const fallback = normalizeNotification(
     { ...obj, type },
-    new Set([type, ...ADMIN_ALLOWED_NOTIFICATION_TYPES]),
+    allowed,
     buildAdminTitle,
-    buildAdminMessage
+    (t, payload) => buildAdminMessage(t, payload, obj)
   );
-  return fallback;
+  if (fallback) return fallback;
+
+  return normalizeInboxNotification(
+    raw,
+    allowed,
+    buildAdminTitle,
+    (t, payload, inboxObj) => buildAdminMessage(t, payload, inboxObj) || toTrimmedString(inboxObj?.message),
+    "ADMIN_GENERIC"
+  );
 }
 
 export function normalizeManagerNotification(raw) {
   const first = normalizeNotification(raw, MANAGER_ALLOWED_NOTIFICATION_TYPES, buildManagerTitle, buildManagerMessage);
   if (first) return first;
 
-  const obj = isPlainObject(raw) ? raw : {};
-  const type = toTrimmedString(obj.type ?? obj.eventType ?? obj.notificationType ?? obj.kind) || "MANAGER_GENERIC";
-  const fallback = normalizeNotification(
-    { ...obj, type },
-    new Set([type, ...MANAGER_ALLOWED_NOTIFICATION_TYPES]),
+  return normalizeInboxNotification(
+    raw,
+    MANAGER_ALLOWED_NOTIFICATION_TYPES,
     buildManagerTitle,
-    buildManagerMessage
+    (type, payload) => buildManagerMessage(type, payload),
+    "MANAGER_GENERIC"
   );
-  return fallback;
+}
+
+export function normalizeEmployeeNotification(raw) {
+  const first = normalizeNotification(
+    raw,
+    EMPLOYEE_ALLOWED_NOTIFICATION_TYPES,
+    buildEmployeeTitle,
+    (type, payload) => buildEmployeeMessage(type, payload, raw)
+  );
+  if (first) return first;
+
+  return normalizeInboxNotification(
+    raw,
+    EMPLOYEE_ALLOWED_NOTIFICATION_TYPES,
+    buildEmployeeTitle,
+    (type, payload, obj) => buildEmployeeMessage(type, payload, obj),
+    "EMPLOYEE_GENERIC"
+  );
 }
 
 export function normalizeAdminNotificationPage(data) {
@@ -400,6 +548,10 @@ export function normalizeAdminNotificationPage(data) {
 
 export function normalizeManagerNotificationPage(data) {
   return normalizePage(data, normalizeManagerNotification);
+}
+
+export function normalizeEmployeeNotificationPage(data) {
+  return normalizePage(data, normalizeEmployeeNotification);
 }
 
 function toUserId(value) {
@@ -528,10 +680,16 @@ async function markNotificationReadById(notificationId, { signal } = {} as ApiOp
 }
 
 export async function fetchAdminNotifications({ userId, signal } = {} as ApiOptions) {
-  return fetchNotificationsByUserId(userId, { signal });
+  const resolvedId = resolveNotificationUserId(userId);
+  const raw = await fetchNotificationsByUserId(resolvedId, { signal });
+  return normalizeAdminNotificationPage(Array.isArray(raw) ? { items: raw } : raw);
 }
 
 export async function fetchManagerNotifications({ userId, signal } = {} as ApiOptions) {
+  return fetchNotificationsByUserId(userId, { signal });
+}
+
+export async function fetchEmployeeNotifications({ userId, signal } = {} as ApiOptions) {
   return fetchNotificationsByUserId(userId, { signal });
 }
 
@@ -540,6 +698,10 @@ export async function markAdminNotificationRead(notificationId, { signal } = {} 
 }
 
 export async function markManagerNotificationRead(notificationId, { signal } = {} as ApiOptions) {
+  return markNotificationReadById(notificationId, { signal });
+}
+
+export async function markEmployeeNotificationRead(notificationId, { signal } = {} as ApiOptions) {
   return markNotificationReadById(notificationId, { signal });
 }
 
@@ -560,6 +722,10 @@ export async function markAllAdminNotificationsRead({ notifications = [], signal
 }
 
 export async function markAllManagerNotificationsRead({ notifications = [], signal } = {} as ApiOptions) {
+  return markAllByIterating(notifications, { signal });
+}
+
+export async function markAllEmployeeNotificationsRead({ notifications = [], signal } = {} as ApiOptions) {
   return markAllByIterating(notifications, { signal });
 }
 
@@ -590,4 +756,31 @@ export function subscribeManagerNotificationsStream({ userId, onNotification, on
     onNotification,
     onError,
   });
+}
+
+export function subscribeEmployeeNotificationsStream({ userId, onNotification, onError } = {} as ApiOptions) {
+  const candidates = userIdCandidates(userId);
+  const streamId = candidates.find((x) => isNumericToken(x)) || "";
+  if (!streamId) return () => {};
+  return subscribeNotificationsStream({
+    path: `/api/v1/notifications/subscribe/${encodeURIComponent(streamId)}`,
+    types: null,
+    normalizer: normalizeEmployeeNotification,
+    customEventNames: ["employee-notification", "notification"],
+    onNotification,
+    onError,
+  });
+}
+
+/** Prefer numeric backend user id for inbox + SSE routes. */
+export function resolveNotificationUserId(...candidates) {
+  const numeric = [];
+  const other = [];
+  for (const candidate of candidates) {
+    const text = toTrimmedString(candidate);
+    if (!text) continue;
+    if (isNumericToken(text)) numeric.push(text);
+    else other.push(text);
+  }
+  return numeric[0] || other[0] || "";
 }

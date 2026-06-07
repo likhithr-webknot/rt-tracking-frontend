@@ -1,56 +1,47 @@
 // @ts-nocheck
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAdminMonthlyOverview } from "../../hooks/queries";
+import { fetchAdminAllSubmissions, fetchSubmissionCycles } from "../../api/monthly-submissions";
 import {
   Activity,
-  ArrowDown,
-  ArrowUp,
-  ArrowUpCircle,
-  Award,
-  BarChart3,
-  Briefcase,
+  AlertTriangle,
   CheckCircle2,
   Clock,
   Download,
-  FileBarChart,
-  Filter,
-  Layers,
-  Minus,
   Shield,
-  Target,
+  Search,
   TrendingUp,
-  UserCheck,
   Users,
   Zap,
 } from "lucide-react";
 import {
   ResponsiveContainer,
-  LineChart,
-  Line,
   AreaChart,
   Area,
-  BarChart,
-  Bar,
-  PieChart,
-  Pie,
-  Cell,
-  RadarChart,
-  Radar,
-  PolarGrid,
-  PolarAngleAxis,
-  PolarRadiusAxis,
-  Legend,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
 } from "recharts";
+import ListPaginationBar from "../shared/ListPaginationBar";
 import Toast from "../shared/Toast";
-import PortalPageHeader from "../shared/PortalPageHeader";
+import { useClientPagination } from "../../hooks/useClientPagination";
+import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import { ADMIN_TAB_COPY } from "../../config/portalNavigation";
 
-import { formatYearMonth } from "../../api/monthly-submissions";
+import {
+  buildCycleMeta,
+  collectCycleKeysFromUnknown,
+  collectRatedCycleCounts,
+  currentReviewCycleKey,
+  formatCycleKeyLabel,
+  getCycleSlotLabel,
+  normalizeCycleKey,
+  normalizeYearMonth,
+  resolveSubmissionCycleKey,
+} from "../../utils/reviewCycles";
 import { friendlyProxyUnreachableMessage } from "../../api/http";
+import { normalizeMonthlySubmission } from "../../api/monthly-submissions";
 import { resolveRoleStatsBucket } from "../../api/employees";
 import {
   computeEmployeePerformanceScore,
@@ -83,6 +74,63 @@ function formatDelta(delta) {
 
 function getDepartmentLabel(emp) {
   return String(emp?.stream || emp?.designation || emp?.role || "Unassigned").trim() || "Unassigned";
+}
+
+function isSubmittedStatus(status) {
+  const s = String(status || "").trim().toUpperCase();
+  return s === "SUBMITTED" || s === "APPROVED" || s === "COMPLETED" || s === "FINAL" || s === "REVIEWED";
+}
+
+function formatPresentMonth(value) {
+  const normalized = normalizeYearMonth(value);
+  if (!normalized) return "—";
+  const [yText, mText] = normalized.split("-");
+  const y = Number(yText);
+  const m = Number(mText);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return normalized;
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(new Date(y, m - 1, 1));
+  } catch {
+    return normalized;
+  }
+}
+
+function extractSubmissionEmployeeId(raw, submission) {
+  const obj = raw && typeof raw === "object" ? raw : {};
+  const payload =
+    obj.payload && typeof obj.payload === "object"
+      ? obj.payload
+      : submission?.raw?.payload && typeof submission.raw.payload === "object"
+        ? submission.raw.payload
+        : {};
+  const employee = obj.employee || obj.user || obj.emp || payload?.employee || null;
+  return String(
+    employee?.employeeId ??
+      employee?.empId ??
+      employee?.id ??
+      obj.employeeId ??
+      obj.empId ??
+      obj.userId ??
+      payload?.employeeId ??
+      payload?.subjectEmployeeId ??
+      submission?.subjectEmployeeId ??
+      "",
+  ).trim();
+}
+
+function submissionCountsAsSubmitted(raw, submission) {
+  if (!submission) return false;
+  const status = String(submission.status ?? submission.reviewStatus ?? "").trim();
+  if (isSubmittedStatus(status)) return true;
+  if (submission.submittedAt) return true;
+  const payload = submission.raw?.payload && typeof submission.raw.payload === "object" ? submission.raw.payload : raw?.payload;
+  if (payload && typeof payload === "object") {
+    const kpi = payload.kpiRatings ?? submission.kpiRatings;
+    const values = payload.webknotValueRatings ?? submission.webknotValueRatings;
+    if (kpi && typeof kpi === "object" && Object.keys(kpi).length > 0) return true;
+    if (values && typeof values === "object" && Object.keys(values).length > 0) return true;
+  }
+  return false;
 }
 
 function isPortalWindowOpen(windowData, at = new Date()) {
@@ -152,7 +200,7 @@ function getChartTooltipStyle() {
     return raw ? `rgb(${raw})` : undefined;
   };
   return {
-    backgroundColor: resolve("--surface") || "#16121b",
+    backgroundColor: resolve("--surface") || "#141824",
     border: `1px solid ${resolve("--border") || "#28293e"}`,
     borderRadius: "0.5rem",
     color: resolve("--text") || "#edeef3",
@@ -171,36 +219,50 @@ function useChartTooltipStyle() {
 function SectionHeader({ icon: Icon, iconClassName, title, subtitle, compact = false, className = "" }) {
   const iconNode = Icon ? React.createElement(Icon, { size: 16 }) : null;
   return (
-    <div className={`flex items-center gap-3 ${compact ? "mb-1" : "mb-4"} ${className}`.trim()}>
-      <div className={`rounded-lg p-2 ${iconClassName}`}>
-        {iconNode}
-      </div>
-      <div className="rt-section-header">
-        <h3 className="rt-section-title">{title}</h3>
-        <p className="rt-section-subtitle">{subtitle}</p>
+    <div className={`pulse-section-head ${compact ? "!mb-2" : ""} ${className}`.trim()}>
+      <div className={`pulse-section-icon ${iconClassName}`}>{iconNode}</div>
+      <div>
+        <h3 className="pulse-section-title">{title}</h3>
+        <p className="pulse-section-subtitle">{subtitle}</p>
       </div>
     </div>
   );
 }
 
-function OverviewMetricTile({ icon: Icon, title, value, helper, tone = "slate" }) {
-  const tones = {
-    slate: "bg-slate-500/10 text-slate-600 dark:text-slate-300",
-    blue: "bg-blue-500/10 text-blue-600 dark:text-blue-300",
-    emerald: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
-    amber: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
-    violet: "bg-blue-500/10 text-blue-700 dark:text-blue-300",
-    rose: "bg-rose-500/10 text-rose-700 dark:text-rose-300",
+function formatWindowLabel(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) return "No schedule configured";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(d);
+  } catch {
+    return value;
+  }
+}
+
+function DashMetric({ label, value, hint, icon: Icon, accent = "blue" }) {
+  const accents = {
+    blue: "text-blue-600 dark:text-blue-400",
+    emerald: "text-emerald-600 dark:text-emerald-400",
+    amber: "text-amber-600 dark:text-amber-400",
+    rose: "text-rose-600 dark:text-rose-400",
   };
-  const iconNode = Icon ? React.createElement(Icon, { size: 16 }) : null;
+  const iconNode = Icon ? React.createElement(Icon, { size: 18, className: accents[accent] || accents.blue }) : null;
   return (
-    <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">{title}</div>
-        <div className={`rounded-md p-1.5 ${tones[tone] || tones.slate}`}>{iconNode}</div>
+    <div className="pulse-metric">
+      <div className="flex items-start justify-between gap-3">
+        <div className="pulse-metric-label">{label}</div>
+        {iconNode}
       </div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums text-[rgb(var(--text))]">{value}</div>
-      <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{helper}</div>
+      <div className="pulse-metric-value">{value}</div>
+      {hint ? <div className="pulse-metric-hint">{hint}</div> : null}
     </div>
   );
 }
@@ -210,30 +272,6 @@ function MiniProgressBar({ value, max = 100, color = "bg-blue-500" }) {
   return (
     <div className="h-1.5 w-full rounded-full bg-[rgb(var(--surface-3))] overflow-hidden">
       <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
-
-/* ── funnel step ── */
-function FunnelStep({ label, count, total, color }) {
-  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-  return (
-    <div className="group flex items-center gap-4 py-0.5">
-      <div className="w-14 text-right flex-shrink-0">
-        <div className="text-base font-bold tabular-nums" style={{ color }}>{count}</div>
-        <div className="text-[10px] font-medium text-[rgb(var(--muted))]">{pct}%</div>
-      </div>
-      <div className="flex-1 relative">
-        <div className="h-8 rounded-lg bg-[rgb(var(--surface-2))] overflow-hidden">
-          <div
-            className="h-full rounded-lg relative overflow-hidden"
-            style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: color }}
-          >
-
-          </div>
-        </div>
-      </div>
-      <div className="w-32 text-xs font-semibold text-[rgb(var(--text))] truncate">{label}</div>
     </div>
   );
 }
@@ -265,17 +303,85 @@ export default function AdminDashboard({
   );
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
-  const [selectedCycleKey, setSelectedCycleKey] = useState(() => formatYearMonth(new Date()));
+  const [selectedCycleKey, setSelectedCycleKey] = useState("");
+  const [serverCycleKeys, setServerCycleKeys] = useState([]);
+  const [allSubmissions, setAllSubmissions] = useState([]);
+  const [cyclesLoading, setCyclesLoading] = useState(true);
+  const [submissionTab, setSubmissionTab] = useState("submitted");
+  const [submissionRosterSearch, setSubmissionRosterSearch] = useState("");
 
-  const overviewMonth = selectedCycleKey && selectedCycleKey !== "ALL"
-    ? selectedCycleKey
-    : formatYearMonth(new Date());
+  useEffect(() => {
+    let alive = true;
+    const controller = new AbortController();
+    setCyclesLoading(true);
+    Promise.all([
+      fetchSubmissionCycles({ signal: controller.signal }).catch(() => []),
+      fetchAdminAllSubmissions({ signal: controller.signal }).catch(() => []),
+    ])
+      .then(([cyclesData, submissions]) => {
+        if (!alive) return;
+        setServerCycleKeys([...collectCycleKeysFromUnknown(cyclesData)]);
+        setAllSubmissions(Array.isArray(submissions) ? submissions : []);
+      })
+      .finally(() => {
+        if (alive) setCyclesLoading(false);
+      });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, []);
+
+  const currentSubmissionMonth = normalizeYearMonth(new Date());
+  const activeCycleKey =
+    normalizeCycleKey(selectedCycleKey) || currentReviewCycleKey();
+
+  const ratedCycleCounts = useMemo(
+    () => collectRatedCycleCounts(allSubmissions),
+    [allSubmissions],
+  );
+
+  const cycleOptions = useMemo(() => {
+    const keys = new Set();
+    const currentKey = currentReviewCycleKey();
+    if (currentKey) keys.add(currentKey);
+
+    for (const [key] of ratedCycleCounts.entries()) {
+      if (key) keys.add(key);
+    }
+
+    for (const [rawKey, entry] of Object.entries(submissionCycleMap || {})) {
+      const submittedCount = Array.isArray(entry?.submittedIds)
+        ? entry.submittedIds.length
+        : Number(entry?.submitted) || 0;
+      if (submittedCount <= 0) continue;
+      const normalized = normalizeCycleKey(rawKey);
+      if (normalized) keys.add(normalized);
+    }
+
+    for (const key of serverCycleKeys) {
+      const normalized = normalizeCycleKey(key);
+      if (normalized) keys.add(normalized);
+    }
+
+    return [...keys]
+      .sort((a, b) => b.localeCompare(a))
+      .map((key) => {
+        const ratingCount = ratedCycleCounts.get(key) || 0;
+        const suffix = ratingCount > 0 ? ` · ${ratingCount} rated` : "";
+        return {
+          key,
+          label: `${formatCycleKeyLabel(key)}${suffix}`,
+          ratingCount,
+        };
+      });
+  }, [ratedCycleCounts, submissionCycleMap, serverCycleKeys]);
+
   const overviewQuery = useAdminMonthlyOverview({
-    month: overviewMonth,
-    cycleKey: selectedCycleKey === "ALL" ? null : selectedCycleKey,
+    month: currentSubmissionMonth,
+    cycleKey: activeCycleKey,
   });
   const monthlyOverview = overviewQuery.data ?? null;
-  const monthlyOverviewLoading = overviewQuery.isLoading || overviewQuery.isFetching;
   const monthlyOverviewError = overviewQuery.error
     ? friendlyProxyUnreachableMessage(
         (overviewQuery.error as Error)?.message || "Failed to load monthly overview."
@@ -290,55 +396,97 @@ export default function AdminDashboard({
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }
 
-  const cycleOptions = useMemo(() => {
-    const keys = Object.keys(submissionCycleMap || {});
-    const sorted = keys.sort((a, b) => b.localeCompare(a));
-    return [{ key: "ALL", label: "All cycles" }, ...sorted.map((k) => ({ key: k, label: k }))];
-  }, [submissionCycleMap]);
 
   useEffect(() => {
-    const currentKey = formatYearMonth(new Date());
+    if (cyclesLoading) return;
     const validKeys = new Set(cycleOptions.map((c) => c.key));
-    if (!validKeys.has(selectedCycleKey)) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSelectedCycleKey(validKeys.has(currentKey) ? currentKey : "ALL");
+    if (selectedCycleKey && validKeys.has(selectedCycleKey)) return;
+
+    const currentKey = currentReviewCycleKey();
+    const nextKey = validKeys.has(currentKey)
+      ? currentKey
+      : cycleOptions[0]?.key || "";
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedCycleKey(nextKey);
+  }, [cycleOptions, cyclesLoading, selectedCycleKey]);
+
+  const cycleHeroLabel = useMemo(() => {
+    const key =
+      normalizeCycleKey(monthlyOverview?.cycleKey) ||
+      activeCycleKey ||
+      currentReviewCycleKey();
+    return key ? formatCycleKeyLabel(key) : "Current review cycle";
+  }, [monthlyOverview?.cycleKey, activeCycleKey]);
+
+  const cycleHeroKey = useMemo(() => {
+    return (
+      normalizeCycleKey(monthlyOverview?.cycleKey) ||
+      activeCycleKey ||
+      currentReviewCycleKey() ||
+      "—"
+    );
+  }, [monthlyOverview?.cycleKey, activeCycleKey]);
+
+  const presentMonthLabel = useMemo(() => {
+    const month =
+      normalizeYearMonth(monthlyOverview?.month) ||
+      currentSubmissionMonth ||
+      buildCycleMeta(new Date()).month;
+    return formatPresentMonth(month);
+  }, [monthlyOverview?.month, currentSubmissionMonth]);
+
+  const activeCycleSubmittedIds = useMemo(() => {
+    const targetCycle = normalizeCycleKey(activeCycleKey) || currentReviewCycleKey();
+    const ids = new Set();
+    for (const raw of allSubmissions) {
+      const submission = normalizeMonthlySubmission(raw);
+      if (!submission) continue;
+      const itemCycle =
+        normalizeCycleKey(submission.cycleKey) ||
+        resolveSubmissionCycleKey({ month: submission.month, cycleKey: submission.cycleKey });
+      if (targetCycle && itemCycle && itemCycle !== targetCycle) continue;
+      if (!submissionCountsAsSubmitted(raw, submission)) continue;
+      const empId = extractSubmissionEmployeeId(raw, submission);
+      if (empId) ids.add(empId.toLowerCase());
     }
-  }, [cycleOptions, selectedCycleKey]);
+    return ids;
+  }, [allSubmissions, activeCycleKey]);
 
   /* ───── data computations ───── */
 
   const normalizedEmployees = useMemo(() => {
-    const currentMonthKey = formatYearMonth(new Date());
+    const currentMonthKey = normalizeYearMonth(new Date());
     const summaryMatches = submissionSummary?.monthKey === currentMonthKey;
-    const cycleEntry = selectedCycleKey && selectedCycleKey !== "ALL" ? submissionCycleMap?.[selectedCycleKey] : null;
+    const cycleEntry =
+      selectedCycleKey
+        ? submissionCycleMap?.[selectedCycleKey] ??
+          submissionCycleMap?.[normalizeCycleKey(selectedCycleKey) ?? ""]
+        : null;
     const cycleSubmittedIds = cycleEntry && Array.isArray(cycleEntry.submittedIds)
       ? new Set(cycleEntry.submittedIds.map(String))
       : null;
-    const allCycleSubmittedIds = (() => {
-      const set = new Set();
-      for (const entry of Object.values(submissionCycleMap || {}))
-        if (Array.isArray(entry?.submittedIds)) entry.submittedIds.forEach((id) => set.add(String(id)));
-      return set;
-    })();
     const submittedIds = cycleSubmittedIds
       ? cycleSubmittedIds
-      : selectedCycleKey === "ALL"
-        ? allCycleSubmittedIds
-        : summaryMatches && Array.isArray(submissionSummary?.submittedIds)
-          ? new Set(submissionSummary.submittedIds.map(String))
+      : summaryMatches && Array.isArray(submissionSummary?.submittedIds)
+        ? new Set(submissionSummary.submittedIds.map(String))
+        : activeCycleSubmittedIds.size
+          ? activeCycleSubmittedIds
           : new Set();
     return safeEmployees.map((e) => {
       const bucket = resolveRoleStatsBucket(e);
       return {
         ...e,
-        submitted: submittedIds.has(String(e.id)) || Boolean(e.submitted),
+        submitted:
+          submittedIds.has(String(e.id).trim().toLowerCase()) ||
+          submittedIds.has(String(e.id).trim()) ||
+          Boolean(e.submitted),
         _roleKey: bucket,
         _isManager: bucket === "manager",
         _isEmployee: bucket === "employee",
         _isAdmin: bucket === "admin",
       };
     });
-  }, [safeEmployees, selectedCycleKey, submissionCycleMap, submissionSummary]);
+  }, [safeEmployees, selectedCycleKey, submissionCycleMap, submissionSummary, activeCycleSubmittedIds]);
 
   const stats = useMemo(() => {
     const directoryEmployeeCount = Number.isFinite(directoryTotals?.employeeCount) ? directoryTotals.employeeCount : null;
@@ -627,7 +775,13 @@ export default function AdminDashboard({
           total > 0 && Number.isFinite(total)
             ? Math.max(0, Math.min(100, Math.round((submitted / total) * 100)))
             : 0;
-        return { cycle: key || "—", submitted, pending, rate };
+        const normalizedKey = normalizeCycleKey(key) || key;
+        return {
+          cycle: normalizedKey ? getCycleSlotLabel(normalizedKey) : "—",
+          submitted,
+          pending,
+          rate,
+        };
       })
       .filter((row) => Number.isFinite(row.submitted) && Number.isFinite(row.pending) && Number.isFinite(row.rate));
 
@@ -638,13 +792,13 @@ export default function AdminDashboard({
     if (!total) return [];
     return [
       {
-        cycle: overviewMonth || formatYearMonth(new Date()),
+        cycle: activeCycleKey ? getCycleSlotLabel(activeCycleKey) : getCycleSlotLabel(currentReviewCycleKey()),
         submitted,
         pending: Math.max(0, total - submitted),
         rate: Math.max(0, Math.min(100, Math.round((submitted / total) * 100))),
       },
     ];
-  }, [submissionCycleMap, safeEmployees, stats, overviewMonth]);
+  }, [submissionCycleMap, safeEmployees, stats, activeCycleKey]);
 
   /* ── performance distribution (histogram) ── */
   const performanceDistribution = useMemo(() => {
@@ -686,7 +840,7 @@ export default function AdminDashboard({
     }
     return [
       { label: "Total Eligible", count: totalEligible, color: "#3b82f6" },
-      { label: "In Draft", count: inDraft, color: "#a855f7" },
+      { label: "In Draft", count: inDraft, color: "#60a5fa" },
       { label: "Submitted", count: submitted, color: "#3b82f6" },
       { label: "Manager Reviewed", count: managerReviewed, color: "#f59e0b" },
       { label: "Admin Approved", count: adminApproved, color: "#10b981" },
@@ -713,63 +867,60 @@ export default function AdminDashboard({
 
   const interventionDeptCount = departmentBreakdown.filter((d) => d.needsIntervention).length;
 
-  const pendingContributors = Math.max(0, (stats.employeeHeadcount + stats.totalManagers) - (stats.employeesSubmitted + stats.managersSubmitted));
+  const pendingContributors = Math.max(
+    0,
+    stats.employeeHeadcount + stats.totalManagers - (stats.employeesSubmitted + stats.managersSubmitted),
+  );
 
-  const promotionsCount = useMemo(() => {
-    return safeEmployees.filter((e) => e.lastPromotionDate).length;
-  }, [safeEmployees]);
+  const submissionRoster = useMemo(() => {
+    const contributors = enrichedEmployees
+      .filter((emp) => !emp._isAdmin)
+      .map((emp) => ({
+        id: String(emp?.id ?? "").trim(),
+        name: String(emp?.name || emp?.email || emp?.id || "Unknown").trim(),
+        department: getDepartmentLabel(emp),
+        band: String(emp?.band || "—").trim() || "—",
+        role: emp._isManager ? "Manager" : "Employee",
+        submitted: Boolean(emp.submitted),
+      }))
+      .filter((row) => row.id)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 
-  const overviewTiles = [
-    {
-      title: "Workforce",
-      value: stats.totalHeadcount,
-      helper: `${stats.employeeHeadcount} employees · ${stats.totalManagers} managers`,
-      icon: Users,
-      tone: "blue",
-    },
-    {
-      title: "Promotions",
-      value: promotionsCount,
-      helper: "Manual promotions recorded this cycle",
-      icon: ArrowUpCircle,
-      tone: "blue",
-    },
-    {
-      title: "Coverage",
-      value: `${stats.overallSubmissionRate}%`,
-      helper: `${stats.employeesSubmitted + stats.managersSubmitted} contributors submitted`,
-      icon: CheckCircle2,
-      tone: "emerald",
-    },
-    {
-      title: "Pending Contributors",
-      value: pendingContributors,
-      helper: "People who still need to submit",
-      icon: Clock,
-      tone: pendingContributors > 0 ? "amber" : "emerald",
-    },
-    {
-      title: "Manager Review",
-      value: `${managerReviewCompletionRate}%`,
-      helper: `${managerReviewDone}/${totalSubmissionRecords} reviewed`,
-      icon: Shield,
-      tone: managerReviewCompletionRate >= 80 ? "emerald" : managerReviewCompletionRate >= 50 ? "amber" : "rose",
-    },
-    {
-      title: "Ability Pulse",
-      value: stats.latestAbility ? stats.latestAbility.toFixed(1) : "0.0",
-      helper: stats.abilityDelta != null ? `${stats.abilityDelta > 0 ? "+" : ""}${stats.abilityDelta.toFixed(1)} vs previous cycle` : "Awaiting previous cycle baseline",
-      icon: TrendingUp,
-      tone: stats.abilityDelta > 0 ? "emerald" : stats.abilityDelta < 0 ? "rose" : "slate",
-    },
-    {
-      title: "Cycle Mode",
-      value: monthlyOverview?.sixMonthReviewMonth ? "Six-Month" : "Monthly",
-      helper: monthlyOverview?.reviewMonthLabel || (monthlyOverview?.month || selectedCycleKey || "Current cycle"),
-      icon: Target,
-      tone: "blue",
-    },
-  ];
+    return {
+      submitted: contributors.filter((row) => row.submitted),
+      pending: contributors.filter((row) => !row.submitted),
+    };
+  }, [enrichedEmployees]);
+
+  const activeSubmissionRows = useMemo(() => {
+    const base = submissionTab === "submitted" ? submissionRoster.submitted : submissionRoster.pending;
+    const q = submissionRosterSearch.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter(
+      (row) =>
+        row.name.toLowerCase().includes(q) ||
+        row.department.toLowerCase().includes(q) ||
+        row.band.toLowerCase().includes(q) ||
+        row.role.toLowerCase().includes(q) ||
+        row.id.toLowerCase().includes(q),
+    );
+  }, [submissionTab, submissionRoster, submissionRosterSearch]);
+
+  const submissionListPagination = useClientPagination(activeSubmissionRows, {
+    pageSize: 12,
+    pageSizeOptions: [12, 24, 48],
+    resetKey: `${submissionTab}|${activeCycleKey}|${submissionRosterSearch}`,
+  });
+
+  const workforceMaxHeadcount = useMemo(
+    () => Math.max(...departmentPerformanceData.map((row) => row.headcount), 1),
+    [departmentPerformanceData],
+  );
+
+  const bandWorkforceMax = useMemo(
+    () => Math.max(...bandDistributionData.map((row) => row.total), 1),
+    [bandDistributionData],
+  );
 
   /* ───── Report generator ───── */
   function handleGenerateReport() {
@@ -778,7 +929,7 @@ export default function AdminDashboard({
     const sections = [];
     sections.push("=== RT TRACKING — ADMIN PERFORMANCE REPORT ===");
     sections.push(`Generated: ${ts}`);
-    sections.push(`Cycle: ${selectedCycleKey}`);
+    sections.push(`Cycle: ${activeCycleKey || "ALL"}`);
     sections.push(`Portal Status: ${portalIsOpenNow ? "OPEN" : "CLOSED"}`);
     sections.push(`Window Start: ${portalWindow.start || "N/A"}`);
     sections.push(`Window End: ${portalWindow.end || "N/A"}`);
@@ -831,7 +982,7 @@ export default function AdminDashboard({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `rt-admin-report-${selectedCycleKey}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `rt-admin-report-${activeCycleKey || "all-cycles"}-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -839,593 +990,420 @@ export default function AdminDashboard({
     showToast({ title: "Report downloaded", message: "Full report CSV exported." });
   }
 
+  const selectedCycleRatingCount = ratedCycleCounts.get(activeCycleKey) || 0;
+  const attentionDepartments = departmentBreakdown.filter((d) => d.needsIntervention).slice(0, 6);
+
   /* ───── render ───── */
 
   return (
-    <div className="mx-auto w-full min-w-0 max-w-7xl space-y-6 px-0 sm:space-y-8 sm:px-0">
-
-      <PortalPageHeader
+    <AdminPageShell>
+      <AdminPageHeader
         title={ADMIN_TAB_COPY.dashboard.title}
         subtitle={ADMIN_TAB_COPY.dashboard.subtitle}
         sectionLabel={ADMIN_TAB_COPY.dashboard.sectionLabel}
       >
-        <div className="flex items-center gap-3 flex-wrap">
-          <select
-            value={selectedCycleKey}
-            onChange={(e) => setSelectedCycleKey(e.target.value)}
-            className="rt-input px-3 py-2.5 text-sm w-44 rounded-xl"
-          >
-            {cycleOptions.map((opt) => (
-              <option key={opt.key} value={opt.key}>{opt.label}</option>
-            ))}
-          </select>
-          <button onClick={handleGenerateReport} className="rt-btn-ghost py-2.5">
-            <Download size={15} /> Export Brief
-          </button>
-        </div>
-      </PortalPageHeader>
+        <label className="sr-only" htmlFor="dash-cycle-select">
+          Review cycle
+        </label>
+        <select
+          id="dash-cycle-select"
+          value={selectedCycleKey}
+          onChange={(e) => setSelectedCycleKey(e.target.value)}
+          disabled={cyclesLoading || !cycleOptions.length}
+          className="rt-input min-w-[14rem] text-sm"
+        >
+          {cyclesLoading ? (
+            <option value="">Loading cycles…</option>
+          ) : cycleOptions.length ? (
+            cycleOptions.map((opt) => (
+              <option key={opt.key} value={opt.key}>
+                {opt.label}
+              </option>
+            ))
+          ) : (
+            <option value={currentReviewCycleKey() || ""}>
+              {formatCycleKeyLabel(currentReviewCycleKey()) || "Current cycle"}
+            </option>
+          )}
+        </select>
+        <button type="button" onClick={handleGenerateReport} className="rt-btn-secondary">
+          <Download size={15} /> Export brief
+        </button>
+      </AdminPageHeader>
 
-      <div className="rt-portal-hero mb-2">
-        <div className="relative z-10 rt-portal-stat-grid">
-          <div className="rt-portal-stat-card">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Cycle</div>
-            <div className="mt-2 text-lg font-bold text-[rgb(var(--text))]">{monthlyOverviewLoading ? "Loading…" : (monthlyOverview?.month || selectedCycleKey || "Current")}</div>
-            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{monthlyOverview?.reviewMonthLabel || "Review window monitored in real-time"}</div>
+      {activeCycleKey || cycleHeroKey !== "—" ? (
+        <div className="pulse-hero-band -mt-4">
+          <span className="pulse-chip pulse-chip--accent">Cycle · {cycleHeroLabel}</span>
+          <span className="pulse-chip">Month · {presentMonthLabel}</span>
+          {selectedCycleRatingCount > 0 ? (
+            <span className="pulse-chip">
+              {selectedCycleRatingCount} rated submission{selectedCycleRatingCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {monthlyOverviewError ? (
+        <div className="pulse-callout pulse-callout--warn">
+          <AlertTriangle size={20} className="shrink-0 text-amber-700 dark:text-amber-200" />
+          <div className="min-w-0">
+            <p className="font-semibold text-amber-950 dark:text-amber-50">{monthlyOverviewError}</p>
           </div>
-          <div className="rt-portal-stat-card">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Submission window</div>
-            <div className="mt-2 text-lg font-bold text-[rgb(var(--text))]">
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <DashMetric
+          label="Workforce"
+          value={stats.totalHeadcount}
+          hint={`${stats.employeeHeadcount} employees · ${stats.totalManagers} managers`}
+          icon={Users}
+          accent="blue"
+        />
+        <DashMetric
+          label="Coverage"
+          value={`${stats.overallSubmissionRate}%`}
+          hint={`${stats.employeesSubmitted + stats.managersSubmitted} contributors submitted`}
+          icon={CheckCircle2}
+          accent="emerald"
+        />
+        <DashMetric
+          label="Pending"
+          value={pendingContributors}
+          hint="Still need to submit this cycle"
+          icon={Clock}
+          accent={pendingContributors > 0 ? "amber" : "emerald"}
+        />
+        <DashMetric
+          label="Ability"
+          value={stats.latestAbility ? stats.latestAbility.toFixed(1) : "0.0"}
+          hint={
+            stats.abilityDelta != null
+              ? `${stats.abilityDelta > 0 ? "+" : ""}${stats.abilityDelta.toFixed(1)} vs previous`
+              : "Awaiting baseline"
+          }
+          icon={TrendingUp}
+          accent="blue"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+        <div className="pulse-surface xl:col-span-3">
+          <SectionHeader
+            icon={Activity}
+            iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-300"
+            title="Submission pipeline"
+            subtitle="Progress from eligibility through manager review"
+            compact
+          />
+          <div className="mt-4 space-y-4">
+            {submissionFunnel.slice(0, 4).map((step) => (
+              <div key={step.label}>
+                <div className="mb-1.5 flex items-center justify-between gap-3 text-sm">
+                  <span className="font-medium text-[rgb(var(--text))]">{step.label}</span>
+                  <span className="tabular-nums text-[rgb(var(--muted))]">{step.count}</span>
+                </div>
+                <MiniProgressBar
+                  value={step.count}
+                  max={submissionFunnel[0]?.count || 1}
+                  color="bg-blue-500"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="pulse-surface xl:col-span-2 space-y-3">
+          <div className="pulse-surface-muted">
+            <div className="pulse-metric-label">Submission window</div>
+            <div className={`pulse-metric-value text-xl ${portalLiveOpen ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
               {portalLiveOpen ? "Open" : "Closed"}
             </div>
-            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">{portalWindow?.start ? `Starts ${portalWindow.start}` : "No schedule configured"}</div>
-          </div>
-          <div className="rt-portal-stat-card">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Performance drift</div>
-            <div className="mt-2 text-lg font-bold text-[rgb(var(--text))]">{stats.abilityDelta != null ? `${stats.abilityDelta > 0 ? "+" : ""}${stats.abilityDelta.toFixed(1)} vs previous` : "No baseline yet"}</div>
-            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">Latest ability: {stats.latestAbility ? stats.latestAbility.toFixed(1) : "0.0"}</div>
-          </div>
-          <div className="rt-portal-stat-card">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Headcount</div>
-            <div className="mt-2 flex items-center gap-2 text-lg font-bold text-[rgb(var(--text))]">
-              <Users size={18} className="text-[rgb(var(--primary))]" />
-              {safeEmployees.length}
+            <div className="pulse-metric-hint">
+              {portalWindow?.start ? `Opens ${formatWindowLabel(portalWindow.start)}` : "No schedule configured"}
             </div>
-            <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">Active employee records</div>
+          </div>
+          <div className="pulse-surface-muted">
+            <div className="pulse-metric-label">Manager review</div>
+            <div className="pulse-metric-value text-xl">{managerReviewCompletionRate}%</div>
+            <div className="pulse-metric-hint">
+              {managerReviewDone}/{totalSubmissionRecords} reviewed
+            </div>
+          </div>
+          <div className="pulse-surface-muted">
+            <div className="pulse-metric-label">Needs attention</div>
+            <div className="pulse-metric-value text-xl">{interventionDeptCount}</div>
+            <div className="pulse-metric-hint">Departments flagged for intervention</div>
           </div>
         </div>
       </div>
 
-      {monthlyOverviewError ? (
-        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-200">
-          {monthlyOverviewError}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div className="pulse-surface">
+          <SectionHeader
+            icon={Users}
+            iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-300"
+            title="Workforce by department"
+            subtitle="Headcount distribution across the company"
+            compact
+          />
+          <div className="mt-4 space-y-3">
+            {departmentPerformanceData.length ? (
+              departmentPerformanceData.map((row) => (
+                <div key={`dept:${row.department}`}>
+                  <div className="mb-1.5 flex items-center justify-between gap-3 text-sm">
+                    <span className="truncate font-medium text-[rgb(var(--text))]">{row.department}</span>
+                    <span className="shrink-0 tabular-nums text-[rgb(var(--muted))]">
+                      {row.headcount} · {row.submissionRate}% submitted
+                    </span>
+                  </div>
+                  <MiniProgressBar value={row.headcount} max={workforceMaxHeadcount} color="bg-blue-500" />
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-[rgb(var(--muted))]">No department data available.</p>
+            )}
+          </div>
         </div>
-      ) : null}
 
-      <section className="rt-panel p-6">
+        <div className="pulse-surface">
           <SectionHeader
             icon={Activity}
-            iconClassName="bg-cyan-500/10 text-cyan-600 dark:text-cyan-300"
-            title="Executive Pulse"
-            subtitle="Core operating metrics for this cycle"
+            iconClassName="bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+            title="Workforce by band"
+            subtitle="People grouped by career band"
+            compact
           />
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-            {overviewTiles.map((tile) => (
-              <OverviewMetricTile
-                key={tile.title}
-                icon={tile.icon}
-                title={tile.title}
-                value={tile.value}
-                helper={tile.helper}
-                tone={tile.tone}
-              />
-            ))}
+          <div className="mt-4 space-y-3">
+            {bandDistributionData.length ? (
+              bandDistributionData.map((row) => (
+                <div key={`band:${row.band}`}>
+                  <div className="mb-1.5 flex items-center justify-between gap-3 text-sm">
+                    <span className="font-mono font-medium text-[rgb(var(--text))]">{row.band}</span>
+                    <span className="shrink-0 tabular-nums text-[rgb(var(--muted))]">
+                      {row.total} · {row.submittedRate}% submitted
+                    </span>
+                  </div>
+                  <MiniProgressBar value={row.total} max={bandWorkforceMax} color="bg-emerald-500" />
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-[rgb(var(--muted))]">No band data available.</p>
+            )}
           </div>
-      </section>
+        </div>
+      </div>
 
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="rt-panel p-6">
+      <div className="pulse-surface overflow-hidden">
+        <div className="flex flex-col gap-4 border-b border-[rgb(var(--border))]/70 pb-4 sm:flex-row sm:items-end sm:justify-between">
           <SectionHeader
-            icon={Filter}
-            iconClassName="bg-blue-500/10 text-blue-700 dark:text-blue-300"
-            title="Flow Snapshot"
-            subtitle="Current conversion from eligibility to approval"
+            icon={CheckCircle2}
+            iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-300"
+            title="Submission roster"
+            subtitle={`${submissionRoster.submitted.length} submitted · ${submissionRoster.pending.length} still pending`}
+            compact
+            className="!mb-0"
           />
-          <div className="space-y-2.5">
-            {submissionFunnel.map((step) => (
-              <FunnelStep
-                key={step.label}
-                label={step.label}
-                count={step.count}
-                total={submissionFunnel[0]?.count || 1}
-                color={step.color}
-              />
-            ))}
+          <div className="inline-flex rounded-[0.75rem] border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))]/60 p-1">
+            <button
+              type="button"
+              onClick={() => setSubmissionTab("submitted")}
+              className={[
+                "rounded-[0.6rem] px-3 py-1.5 text-xs font-semibold transition-colors",
+                submissionTab === "submitted"
+                  ? "bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-sm"
+                  : "text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]",
+              ].join(" ")}
+            >
+              Submitted ({submissionRoster.submitted.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSubmissionTab("pending")}
+              className={[
+                "rounded-[0.6rem] px-3 py-1.5 text-xs font-semibold transition-colors",
+                submissionTab === "pending"
+                  ? "bg-[rgb(var(--surface))] text-[rgb(var(--text))] shadow-sm"
+                  : "text-[rgb(var(--muted))] hover:text-[rgb(var(--text))]",
+              ].join(" ")}
+            >
+              Not submitted ({submissionRoster.pending.length})
+            </button>
           </div>
         </div>
 
-        <div className="rt-panel p-6">
-          <SectionHeader
-            icon={Award}
-            iconClassName="bg-amber-500/10 text-amber-700 dark:text-amber-300"
-            title="Strategic Highlights"
-            subtitle="Operational posture for the active cycle"
-          />
-          <div className="space-y-3">
-            <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
-              <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Review Cadence</div>
-              <div className="mt-1 text-lg font-semibold text-[rgb(var(--text))]">{monthlyOverview?.sixMonthReviewMonth ? "Six-Month Cycle" : "Monthly Cycle"}</div>
-              <div className="text-xs text-[rgb(var(--muted))] mt-1">{monthlyOverview?.reviewMonthLabel || (monthlyOverview?.month || selectedCycleKey || "Current cycle")}</div>
-            </div>
-            <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
-              <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Review Backlog</div>
-              <div className="mt-1 text-lg font-semibold text-[rgb(var(--text))]">{pendingManagerReviews}</div>
-              <div className="text-xs text-[rgb(var(--muted))] mt-1">{pendingManagerReviews > 0 ? "Items waiting for manager review completion" : "No pending manager reviews"}</div>
-            </div>
-            <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4">
-              <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Intervention Load</div>
-              <div className="mt-1 text-lg font-semibold text-[rgb(var(--text))]">{interventionDeptCount}</div>
-              <div className="text-xs text-[rgb(var(--muted))] mt-1">Departments currently flagged for intervention</div>
-            </div>
-          </div>
+        <div className="border-b border-[rgb(var(--border))]/70 px-4 py-3">
+          <label className="relative block">
+            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
+            <input
+              type="search"
+              value={submissionRosterSearch}
+              onChange={(e) => setSubmissionRosterSearch(e.target.value)}
+              placeholder="Search name, department, band, or role…"
+              className="rt-input h-10 w-full pl-9 text-sm"
+              aria-label="Search submission roster"
+            />
+          </label>
         </div>
-      </section>
 
-      {/* ── ability trend + org health radar ── */}
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div className="xl:col-span-2 rt-panel p-6">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
+              <tr>
+                <th className="px-4 py-3 font-semibold">Name</th>
+                <th className="px-4 py-3 font-semibold">Role</th>
+                <th className="px-4 py-3 font-semibold">Department</th>
+                <th className="px-4 py-3 font-semibold">Band</th>
+                <th className="px-4 py-3 text-right font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[rgb(var(--border))]">
+              {submissionListPagination.slice.length ? (
+                submissionListPagination.slice.map((row) => (
+                  <tr key={`roster:${row.id}`} className="hover:bg-[rgb(var(--surface-2))]/45">
+                    <td className="px-4 py-3 font-medium text-[rgb(var(--text))]">{row.name}</td>
+                    <td className="px-4 py-3 text-[rgb(var(--muted))]">{row.role}</td>
+                    <td className="px-4 py-3 text-[rgb(var(--muted))]">{row.department}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-[rgb(var(--muted))]">{row.band}</td>
+                    <td className="px-4 py-3 text-right">
+                      <span
+                        className={[
+                          "inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                          row.submitted
+                            ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                            : "bg-amber-500/10 text-amber-800 dark:text-amber-200",
+                        ].join(" ")}
+                      >
+                        {row.submitted ? "Submitted" : "Pending"}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-[rgb(var(--muted))]">
+                    {submissionRosterSearch.trim()
+                      ? "No roster entries match your search."
+                      : submissionTab === "submitted"
+                        ? "No submissions recorded for this cycle yet."
+                        : "Everyone in scope has submitted for this cycle."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {submissionListPagination.show ? (
+          <ListPaginationBar
+            rangeLabel={submissionListPagination.rangeLabel}
+            page={submissionListPagination.page}
+            maxPage={submissionListPagination.maxPage}
+            pageSize={submissionListPagination.pageSize}
+            pageSizeOptions={submissionListPagination.pageSizeOptions}
+            onPageChange={submissionListPagination.setPage}
+            onPageSizeChange={submissionListPagination.setPageSize}
+          />
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <div className="pulse-surface xl:col-span-2">
           <SectionHeader
             icon={TrendingUp}
-            iconClassName="bg-blue-500/10 text-blue-500"
-            title="Performance Trend"
-            subtitle="6-month rolling average score"
+            iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-300"
+            title="Performance trend"
+            subtitle="Six-month rolling average score"
             compact
           />
           <div className="mt-4 w-full" style={{ height: 260 }}>
             {safeAbility6m.length > 0 && safeAbility6m.some((p) => String(p?.month || "").trim()) ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={safeAbility6m} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
-                <XAxis dataKey="month" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} domain={[0, 5]} />
-                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
-                <Area type="monotone" dataKey="avg" stroke="#2563eb" strokeWidth={2.5} fill="#2563eb" fillOpacity={0.1} dot={false} activeDot={false} animationDuration={1200} />
-              </AreaChart>
-            </ResponsiveContainer>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={safeAbility6m} margin={{ top: 10, right: 16, bottom: 0, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
+                  <XAxis dataKey="month" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
+                  <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} domain={[0, 5]} />
+                  <Tooltip
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="avg"
+                    stroke="#2563eb"
+                    strokeWidth={2.5}
+                    fill="#2563eb"
+                    fillOpacity={0.12}
+                    dot={false}
+                    animationDuration={900}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
             ) : (
-              <div className="h-full grid place-items-center text-[rgb(var(--muted))] text-sm px-4 text-center">
-                No six-month ability trend from the server yet. Department and score charts below still use live directory data.
+              <div className="grid h-full place-items-center px-4 text-center text-sm text-[rgb(var(--muted))]">
+                No trend data yet for this cycle.
               </div>
             )}
           </div>
         </div>
 
-        <div className="rt-panel p-6">
+        <div className="pulse-surface">
           <SectionHeader
-            icon={Target}
-            iconClassName="bg-blue-500/10 text-blue-500"
-            title="Workforce Distribution"
-            subtitle="Employee headcount by department"
+            icon={Zap}
+            iconClassName="bg-amber-500/10 text-amber-600 dark:text-amber-300"
+            title="Top performers"
+            subtitle="Highest scores this cycle"
             compact
           />
-          <div className="mt-4 w-full" style={{ height: 320 }}>
-            {hasRadarData ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <RadarChart outerRadius="65%" data={orgHealthRadarData}>
-                  <PolarGrid stroke="rgb(var(--border))" strokeDasharray="3 3" />
-                  <PolarAngleAxis dataKey="metric" tick={{ fontSize: 9, fill: "rgb(var(--muted))" }} />
-                  <PolarRadiusAxis angle={90} domain={[0, 'dataMax']} tick={{ fontSize: 9, fill: "rgb(var(--muted))" }} axisLine={false} />
-                  <Radar name="Employees" dataKey="employees" stroke="#2563eb" fill="#2563eb" fillOpacity={0.12} strokeWidth={2} dot={false} animationDuration={1200} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(value) => [`${value} employee${value !== 1 ? 's' : ''}`, 'Headcount']} />
-                </RadarChart>
-              </ResponsiveContainer>
+          <div className="mt-3 max-h-[280px] space-y-2 overflow-y-auto custom-scrollbar pr-1">
+            {topPerformers.length ? (
+              topPerformers.map((emp, idx) => (
+                <div key={`top:${emp.id}`} className="pulse-list-row">
+                  <span className="pulse-rank">{idx + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-semibold text-sm text-[rgb(var(--text))]">{emp.name}</div>
+                    <div className="truncate text-[11px] text-[rgb(var(--muted))]">
+                      {getDepartmentLabel(emp)} · {emp.band || "—"}
+                    </div>
+                  </div>
+                  <div className="text-right tabular-nums">
+                    <div className="text-base font-bold text-[rgb(var(--text))]">
+                      {(emp.performanceScore || 0).toFixed(1)}
+                    </div>
+                  </div>
+                </div>
+              ))
             ) : (
-              <div className="h-full grid place-items-center text-[rgb(var(--muted))] text-sm">No department data yet.</div>
+              <p className="text-sm text-[rgb(var(--muted))]">No performance data yet.</p>
             )}
           </div>
         </div>
-      </section>
+      </div>
 
-      {/* ── cycle comparison + completion trend + pie ── */}
-      {cycleComparisonData.length > 0 ? (
-        <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <div className="rt-panel p-6">
-            <SectionHeader
-              icon={BarChart3}
-              iconClassName="bg-emerald-500/10 text-emerald-500"
-              title="Review Cycle Comparison"
-              subtitle="Submission volume per cycle"
-            />
-            <div style={{ height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={cycleComparisonData} barGap={4} barCategoryGap={20}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
-                  <XAxis dataKey="cycle" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
-                  <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600 }} />
-                  <Bar dataKey="submitted" name="Submitted" fill="#2563eb" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={40} animationDuration={1000} />
-                  <Bar dataKey="pending" name="Pending" fill="#f59e0b" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={40} animationDuration={1000} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="rt-panel p-6">
-            <SectionHeader
-              icon={TrendingUp}
-              iconClassName="bg-blue-500/10 text-blue-500"
-              title="Completion Rate Trend"
-              subtitle="Submission rate % across cycles"
-            />
-            <div style={{ height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={cycleComparisonData} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
-                  <XAxis dataKey="cycle" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} formatter={(value) => [`${value}%`, "Completion Rate"]} />
-                  <Line type="monotone" dataKey="rate" stroke="#2563eb" strokeWidth={2.5} dot={false} activeDot={false} animationDuration={1200} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="rt-panel p-6">
-            <SectionHeader
-              icon={FileBarChart}
-              iconClassName="bg-amber-500/10 text-amber-500"
-              title="Current Cycle Status"
-              subtitle="Employee vs manager submission progress"
-            />
-            <div style={{ height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={cycleHealthPieData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={88} paddingAngle={3} strokeWidth={0} animationDuration={1000}>
-                    {cycleHealthPieData.map((entry, idx) => <Cell key={`hc:${idx}`} fill={entry.color} />)}
-                  </Pie>
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
-                  <Legend
-                    verticalAlign="bottom"
-                    height={40}
-                    content={({ payload }) => (
-                      <div className="flex flex-wrap items-center justify-center gap-3 px-2 text-[11px] font-semibold text-[rgb(var(--text))]">
-                        {(payload || []).map((entry, idx) => (
-                          <span key={idx} className="inline-flex items-center gap-1.5 whitespace-nowrap">
-                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: entry?.color || "#8884d8" }} />
-                            {entry?.value}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      {/* ── performance distribution ── */}
-      <section className="grid grid-cols-1 gap-4">
-        <div className="rt-panel p-6">
+      {attentionDepartments.length ? (
+        <div className="pulse-surface">
           <SectionHeader
-            icon={BarChart3}
-            iconClassName="bg-blue-500/10 text-blue-500"
-            title="Score Distribution"
-            subtitle="Performance bell curve across all employees"
+            icon={Shield}
+            iconClassName="bg-rose-500/10 text-rose-600 dark:text-rose-300"
+            title="Departments needing attention"
+            subtitle="Low scores, declining trends, or weak submission rates"
+            compact
           />
-          <div style={{ height: 280 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={performanceDistribution.buckets} barCategoryGap="20%" margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
-                <XAxis dataKey="range" stroke="rgb(var(--muted))" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
-                <Tooltip
-                  contentStyle={CHART_TOOLTIP_STYLE}
-                  labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }}
-                  formatter={(value) => [`${value} employee${value !== 1 ? "s" : ""}`, "Count"]}
-                />
-                <Bar dataKey="count" name="Employees" radius={[8, 8, 0, 0]} maxBarSize={52} animationDuration={1200} animationEasing="ease-out">
-                  {performanceDistribution.buckets.map((b, i) => (
-                    <Cell key={`cell-${i}`} fill={b.color} opacity={0.85} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="mt-3 flex items-center justify-center gap-5 text-[10px] text-[rgb(var(--muted))]">
-            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-red-500" />Needs Improvement</span>
-            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-blue-500" />Core</span>
-            <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" />Top Performers</span>
-          </div>
-        </div>
-      </section>
-
-      {/* ── department breakdown ── */}
-      <section className="grid grid-cols-1 gap-4">
-        <div className="rt-panel p-6">
-          <SectionHeader
-            icon={Briefcase}
-            iconClassName="bg-blue-500/10 text-blue-500"
-            title="Department Analysis"
-            subtitle="Performance classification and alerts"
-          />
-          <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
-            {departmentBreakdown.slice(0, 8).map((row) => (
-              <div key={`dep-${row.group}`} className="rt-panel-subtle p-3.5">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="font-semibold text-sm text-[rgb(var(--text))] truncate">{row.group}</div>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${row.bell.className}`}>{row.bell.label}</span>
-                    {row.needsIntervention ? (
-                      <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20">Action</span>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="mt-2 flex items-center gap-4 text-xs text-[rgb(var(--muted))] flex-wrap">
-                  <span>Avg <span className="font-mono text-[rgb(var(--text))]">{row.latestAvg.toFixed(1)}</span></span>
-                  <span>Δ <span className="font-mono">{formatDelta(row.delta)}</span></span>
-                  <span>HC {row.headcount}</span>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {attentionDepartments.map((row) => (
+              <div key={`alert:${row.group}`} className="pulse-surface-muted">
+                <div className="font-semibold text-sm text-[rgb(var(--text))]">{row.group}</div>
+                <div className="mt-2 flex flex-wrap gap-3 text-xs text-[rgb(var(--muted))]">
+                  <span>Avg {row.latestAvg.toFixed(1)}</span>
                   <span>{Math.round(row.submissionRate * 100)}% submitted</span>
+                  <span>{row.headcount} people</span>
                 </div>
               </div>
             ))}
-            {!departmentBreakdown.length ? <p className="text-sm text-[rgb(var(--muted))]">No data available.</p> : null}
           </div>
         </div>
-      </section>
-
-      {/* ── delivery analytics ── */}
-      <section className="rt-panel p-6">
-        <SectionHeader
-          icon={BarChart3}
-          iconClassName="bg-blue-500/10 text-blue-500"
-          title="Operational Analytics"
-          subtitle="Role throughput and band distribution"
-          className="mb-5"
-        />
-
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <div className="rt-panel-subtle p-4 flex flex-col" style={{ height: 340 }}>
-            <div className="flex items-center gap-2 mb-3">
-              <Users size={14} className="text-[rgb(var(--muted))]" />
-              <div className="rt-kicker">Role Throughput</div>
-            </div>
-            <div className="flex-1 min-h-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={roleThroughputData} barGap={6} barCategoryGap={24}>
-                  <XAxis dataKey="role" stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={{ fill: "rgb(var(--surface-2))", opacity: 0.5 }} />
-                  <Legend wrapperStyle={{ fontSize: 10, fontWeight: 600 }} />
-                  <Bar dataKey="submitted" name="Submitted" fill="#2563eb" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={36} animationDuration={1000} />
-                  <Bar dataKey="pending" name="Pending" fill="#94a3b8" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={36} animationDuration={1000} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="rt-panel-subtle p-4 flex flex-col" style={{ height: 340 }}>
-            <div className="flex items-center gap-2 mb-3 shrink-0">
-              <Layers size={14} className="text-[rgb(var(--muted))]" />
-              <div className="rt-kicker">Band Distribution</div>
-            </div>
-            <div className="flex-1 min-h-0 space-y-2 overflow-y-auto pr-1">
-              {bandDistributionData.length ? bandDistributionData.map((row) => (
-                <div key={`bd:${row.band}`} className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-2.5">
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold text-[rgb(var(--text))]">{row.band}</span>
-                    <span className="font-mono text-[rgb(var(--muted))]">{row.total}</span>
-                  </div>
-                  <MiniProgressBar value={row.submittedRate} color="bg-emerald-500" />
-                  <div className="mt-1 text-[10px] text-[rgb(var(--muted))]">{row.submittedRate}% submitted</div>
-                </div>
-              )) : <p className="text-sm text-[rgb(var(--muted))]">No band data yet.</p>}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ── dept & band performance charts ── */}
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="rt-panel p-6">
-          <SectionHeader
-            icon={Briefcase}
-            iconClassName="bg-blue-500/10 text-blue-500"
-            title="Department Performance"
-            subtitle="Average score and submission rate by department"
-          />
-          <div style={{ height: 280 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={departmentPerformanceData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
-                <XAxis dataKey="department" stroke="rgb(var(--muted))" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis yAxisId="left" domain={[0, 5]} stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis yAxisId="right" orientation="right" domain={[0, 100]} stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
-                <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600 }} />
-                <Bar yAxisId="left" dataKey="avgScore" name="Avg Score" fill="#2563eb" opacity={0.85} radius={[6, 6, 0, 0]} animationDuration={1000} />
-                <Bar yAxisId="right" dataKey="submissionRate" name="Submission %" fill="#0f766e" opacity={0.85} radius={[6, 6, 0, 0]} animationDuration={1000} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="rt-panel p-6">
-          <SectionHeader
-            icon={Layers}
-            iconClassName="bg-blue-500/10 text-blue-500"
-            title="Band Performance"
-            subtitle="Performance by employee band"
-          />
-          <div style={{ height: 280 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={bandPerformanceData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
-                <XAxis dataKey="band" stroke="rgb(var(--muted))" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis yAxisId="left" domain={[0, 5]} stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis yAxisId="right" orientation="right" domain={[0, 100]} stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
-                <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600 }} />
-                <Bar yAxisId="left" dataKey="avgScore" name="Avg Score" fill="#2563eb" opacity={0.85} radius={[6, 6, 0, 0]} animationDuration={1000} />
-                <Bar yAxisId="right" dataKey="submissionRate" name="Submission %" fill="#f59e0b" opacity={0.85} radius={[6, 6, 0, 0]} animationDuration={1000} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </section>
-
-      {/* ── manager ownership + top performers ── */}
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="rt-panel p-6">
-          <SectionHeader
-            icon={Shield}
-            iconClassName="bg-emerald-500/10 text-emerald-500"
-            title="Manager Team Overview"
-            subtitle="Team composition and submission progress"
-          />
-          <div style={{ height: 280 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={managerOwnershipData} barGap={4} barCategoryGap={24}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
-                <XAxis dataKey="managerName" stroke="rgb(var(--muted))" fontSize={10} tickLine={false} axisLine={false} />
-                <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} labelStyle={{ color: CHART_TOOLTIP_STYLE.color, fontWeight: 600 }} />
-                <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600 }} />
-                <Bar dataKey="submitted" name="Submitted" fill="#16a34a" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={36} animationDuration={1000} />
-                <Bar dataKey="pending" name="Pending" fill="#f97316" opacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={36} animationDuration={1000} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="rt-panel p-6">
-          <SectionHeader
-            icon={Award}
-            iconClassName="bg-amber-500/10 text-amber-500"
-            title="Top Performers"
-            subtitle="Highest-rated employees this cycle"
-          />
-          <div className="space-y-2.5 max-h-[280px] overflow-y-auto pr-1">
-            {topPerformers.length ? topPerformers.map((emp, idx) => (
-              <div
-                key={`top:${emp.id}`}
-                className="rt-panel-subtle p-3 flex items-center gap-3 group hover:bg-[rgb(var(--surface-2)/.5)] transition-colors"
-              >
-                <div className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold text-white ${idx === 0 ? "bg-amber-500" : idx === 1 ? "bg-slate-400" : idx === 2 ? "bg-orange-500" : "bg-[rgb(var(--surface-3))] text-[rgb(var(--text))]"}`}>
-                  {idx + 1}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm text-[rgb(var(--text))] truncate">{emp.name}</div>
-                  <div className="text-[11px] text-[rgb(var(--muted))]">{getDepartmentLabel(emp)} · {emp.band || "—"}</div>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <div className="text-lg font-bold rt-stat-value">{(emp.performanceScore || 0).toFixed(1)}</div>
-                  <div className="text-[10px] text-[rgb(var(--muted))]">Brownie: {emp.browniePoints || 0}</div>
-                </div>
-              </div>
-            )) : <p className="text-sm text-[rgb(var(--muted))]">No performance data yet.</p>}
-          </div>
-        </div>
-      </section>
-
-      {/* ── department granularity table ── */}
-      <section className="rt-panel overflow-hidden">
-        <div className="p-6 flex items-center gap-3">
-          <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><FileBarChart size={16} /></div>
-          <div className="rt-section-header">
-            <h3 className="rt-section-title">Department Details</h3>
-            <p className="rt-section-subtitle">Comprehensive breakdown with employee and manager metrics</p>
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-t border-b border-[rgb(var(--border))]">
-              <tr>
-                <th className="py-3 px-4 font-semibold">Department</th>
-                <th className="py-3 px-4 font-semibold">Employees</th>
-                <th className="py-3 px-4 font-semibold">Managers</th>
-                <th className="py-3 px-4 font-semibold">Avg Score</th>
-                <th className="py-3 px-4 font-semibold">Submission</th>
-                <th className="py-3 px-4 font-semibold">Top Employee</th>
-                <th className="py-3 px-4 font-semibold">Top Manager</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[rgb(var(--border))]">
-              {departmentGranularityRows.map((row) => (
-                <tr key={`dg:${row.department}`} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
-                  <td className="py-3 px-4 font-semibold text-sm text-[rgb(var(--text))]">{row.department}</td>
-                  <td className="py-3 px-4 font-mono text-sm text-[rgb(var(--muted))]">{row.headcount}</td>
-                  <td className="py-3 px-4 font-mono text-sm text-[rgb(var(--muted))]">{row.managerCount}</td>
-                  <td className="py-3 px-4 font-mono text-sm text-[rgb(var(--text))]">{row.avgScore.toFixed(1)}</td>
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2">
-                      <MiniProgressBar value={row.submissionRate} color={row.submissionRate >= 70 ? "bg-emerald-500" : row.submissionRate >= 40 ? "bg-amber-500" : "bg-red-500"} />
-                      <span className="text-xs font-mono text-[rgb(var(--muted))]">{row.submissionRate}%</span>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 text-sm text-[rgb(var(--text))]">{row.topEmployeeName}</td>
-                  <td className="py-3 px-4 text-sm text-[rgb(var(--text))]">{row.topManagerName}</td>
-                </tr>
-              ))}
-              {!departmentGranularityRows.length ? (
-                <tr><td className="py-6 px-4 text-[rgb(var(--muted))]" colSpan={7}>No data available.</td></tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* ── employee roster ── */}
-      <section className="rt-panel overflow-hidden">
-        <div className="p-6 flex items-center gap-3">
-          <div className="rounded-lg p-2 bg-blue-500/10 text-blue-500"><Users size={16} /></div>
-          <div className="rt-section-header">
-            <h3 className="rt-section-title">Employee Roster</h3>
-            <p className="rt-section-subtitle">Complete directory with submission status</p>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-t border-b border-[rgb(var(--border))]">
-              <tr>
-                <th className="py-3 px-4 font-semibold">Employee</th>
-                <th className="py-3 px-4 font-semibold">Role</th>
-                <th className="py-3 px-4 font-semibold">Band</th>
-                <th className="py-3 px-4 font-semibold">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[rgb(var(--border))]">
-              {normalizedEmployees.map((emp) => (
-                <tr key={emp.id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
-                  <td className="py-3 px-4">
-                    <div className="font-semibold text-sm text-[rgb(var(--text))]">{emp.name}</div>
-                    <div className="text-xs text-[rgb(var(--muted))] mt-0.5 break-all">{emp.email || "—"}</div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="text-[10px] font-semibold uppercase px-2 py-0.5 bg-[rgb(var(--surface-2))] text-[rgb(var(--text))] rounded border border-[rgb(var(--border))]">
-                      {emp.role}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 font-mono text-sm text-blue-500">{emp.band}</td>
-                  <td className="py-3 px-4">
-                    <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded border ${
-                      emp.submitted
-                        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
-                        : "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20"
-                    }`}>
-                      {emp.submitted ? "Submitted" : "Pending"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      ) : null}
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-    </div>
+    </AdminPageShell>
   );
 }

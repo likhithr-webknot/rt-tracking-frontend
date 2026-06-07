@@ -8,12 +8,12 @@ export default function AppShell({
   sidebar,
   topbar,
   children,
-  maxWidth = "max-w-7xl",
+  maxWidth = "max-w-[88rem]",
 }) {
-  const inset = sidebarWidthPx(isSidebarOpen);
+  const sidebarWidth = sidebarWidthPx(isSidebarOpen);
 
   return (
-    <div className="rt-shell flex min-h-[100dvh] overflow-x-hidden">
+    <div className="pulse-app">
       <AnimatePresence>
         {isSidebarOpen ? (
           <Motion.button
@@ -21,25 +21,34 @@ export default function AppShell({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-40 bg-slate-950/50 backdrop-blur-sm md:hidden"
+            className="pulse-scrim md:hidden"
             onClick={() => setIsSidebarOpen(false)}
             aria-label="Close menu"
           />
         ) : null}
       </AnimatePresence>
 
-      {sidebar}
+      <div className="pulse-app-body">
+        <div
+          className={[
+            "pulse-sidebar-wrap",
+            isSidebarOpen ? "pulse-sidebar-wrap--open" : "",
+          ].join(" ")}
+          style={{ "--pulse-sidebar-width": `${sidebarWidth}px` }}
+        >
+          {sidebar}
+        </div>
 
-      <div
-        className="rt-workspace-topbar pointer-events-auto"
-        style={{ left: inset, right: 0 }}
-      >
-        <div className="flex w-full items-center justify-end gap-2 sm:gap-3">{topbar}</div>
+        <div className="pulse-main">
+          <header className="pulse-topbar">
+            <div className="pulse-topbar-inner">{topbar}</div>
+          </header>
+
+          <main className="pulse-content custom-scrollbar">
+            <div className={`pulse-content-inner mx-auto w-full min-w-0 ${maxWidth}`}>{children}</div>
+          </main>
+        </div>
       </div>
-
-      <main className="rt-workspace-main" style={{ marginLeft: inset }}>
-        <div className={`mx-auto w-full min-w-0 ${maxWidth}`}>{children}</div>
-      </main>
     </div>
   );
 }

@@ -1,10 +1,10 @@
 // @ts-nocheck
 
-/** Wraps a portal workflow step with consistent spacing and card surface. */
+/** Page content frame — full-width flow with consistent vertical rhythm. */
 export default function PortalWorkflowFrame({ children, className = "" }) {
   return (
-    <div className={`rt-workflow-frame ${className}`.trim()}>
-      <div className="rt-workflow-frame-inner">{children}</div>
+    <div className={`pulse-page ${className}`.trim()}>
+      {children}
     </div>
   );
 }

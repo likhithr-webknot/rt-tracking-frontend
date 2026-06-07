@@ -1,7 +1,9 @@
 // @ts-nocheck
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Edit3, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Edit3, Loader2, Plus, Trash2 } from "lucide-react";
 import SearchField from "../shared/SearchField";
+import ListPaginationBar from "../shared/ListPaginationBar";
+import { useClientPagination } from "../../hooks/useClientPagination";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import EntityCsvToolbar from "../shared/EntityCsvToolbar";
 import Toast from "../shared/Toast";
@@ -11,7 +13,6 @@ import {
   createDesignationLookup,
   deleteDesignationLookup,
   fetchAllDesignations,
-  seedDesignations,
   updateDesignationLookup,
 } from "../../api/designations";
 import { fetchBands, fetchStreams, normalizeDirectoryPage } from "../../api/band-stream-directory";
@@ -75,27 +76,13 @@ export default function DesignationsWorkspace() {
     } catch (err) {
       const msg = String(err?.message ?? "");
       if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
-        try {
-          await seedDesignations();
-          const retry = await fetchAllDesignations({ search: search.trim(), limit: 500 });
-          setRows(retry.rows || []);
-          setToast({
-            title: "Sample designations loaded",
-            message: "Seeded lookup rows. Import your CSV to replace them.",
-            tone: "success",
-          });
-          return;
-        } catch (seedErr) {
-          setRows([]);
-          setToast({
-            title: "Designations API unavailable",
-            message:
-              seedErr?.message ||
-              "Restart the Webtrak backend, then refresh. Endpoints: GET /api/v1/designations/list",
-            tone: "error",
-          });
-          return;
-        }
+        setRows([]);
+        setToast({
+          title: "No job titles yet",
+          message: "Import designation lookups from CSV, or add titles with Add job title.",
+          tone: "warning",
+        });
+        return;
       }
       setRows([]);
       setToast({
@@ -166,6 +153,12 @@ export default function DesignationsWorkspace() {
       return band.includes(q) || stream.includes(q) || title.includes(q);
     });
   }, [rows, search]);
+
+  const listPagination = useClientPagination(filtered, {
+    pageSize: 25,
+    pageSizeOptions: [25, 50, 100],
+    resetKey: search,
+  });
 
   function openAdd() {
     setEditor({
@@ -284,7 +277,7 @@ export default function DesignationsWorkspace() {
         title="Designations"
         subtitle="Band × department job titles used in employee profiles and promotion paths."
       >
-        <button type="button" className="rt-btn-primary" onClick={openAdd}>
+        <button type="button" className="rt-btn-primary shrink-0 whitespace-nowrap" onClick={openAdd}>
           <Plus size={14} />
           Add job title
         </button>
@@ -298,10 +291,6 @@ export default function DesignationsWorkspace() {
           confirmImportMessage="Replace designation lookups from CSV? Rows not in the file are removed. Import bands and streams first."
           showToast={(t) => setToast(t)}
         />
-        <button type="button" className="rt-btn-soft" onClick={load} disabled={loading}>
-          <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-          Refresh
-        </button>
       </AdminPageHeader>
 
       <div className="rt-toolbar-panel">
@@ -315,14 +304,14 @@ export default function DesignationsWorkspace() {
         />
       </div>
 
-      <div className="rt-panel flex flex-col max-h-[min(72vh,720px)] overflow-hidden">
-        <div className="shrink-0 px-4 py-3 border-b border-[rgb(var(--border))]">
+      <div className="pulse-surface overflow-hidden">
+        <div className="border-b border-[rgb(var(--border))] px-4 py-3 sm:px-5">
           <h2 className="text-sm font-semibold">Lookup table</h2>
-          <p className="rt-section-subtitle mt-0.5">{filtered.length} rows · scroll inside this panel</p>
+          <p className="pulse-section-subtitle mt-0.5">{listPagination.rangeLabel}</p>
         </div>
-        <div className="min-w-0 flex-1 overflow-auto custom-scrollbar">
-          <table className="w-full text-left text-sm min-w-[620px]">
-            <thead className="sticky top-0 z-10 bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
+        <div className="overflow-x-auto custom-scrollbar">
+          <table className="w-full min-w-[620px] text-left text-sm">
+            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
               <tr>
                 <th className="p-4">Stream</th>
                 <th className="p-4">Band</th>
@@ -339,7 +328,7 @@ export default function DesignationsWorkspace() {
                 </tr>
               ) : null}
               {!loading &&
-                filtered.map((row) => (
+                listPagination.slice.map((row) => (
                   <tr
                     key={row.id ?? `${rowDepartment(row)}-${rowBandCode(row)}-${rowDesignation(row)}`}
                     className="hover:bg-[rgb(var(--surface-2))]"
@@ -379,6 +368,18 @@ export default function DesignationsWorkspace() {
             </tbody>
           </table>
         </div>
+        {listPagination.show ? (
+          <ListPaginationBar
+            rangeLabel={listPagination.rangeLabel}
+            page={listPagination.page}
+            maxPage={listPagination.maxPage}
+            pageSize={listPagination.pageSize}
+            pageSizeOptions={listPagination.pageSizeOptions}
+            loading={loading}
+            onPageChange={listPagination.setPage}
+            onPageSizeChange={listPagination.setPageSize}
+          />
+        ) : null}
       </div>
 
       <ModalOverlay

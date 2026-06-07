@@ -5,18 +5,24 @@
 // fires a curated request at every controller endpoint and prints a report.
 //
 // Usage:
-//   BACKEND_URL=http://localhost:8080 ADMIN_EMAIL=likhith.r@webknot.in node scripts/api-smoke.mjs
+//   BACKEND_URL=http://localhost:8080 ADMIN_EMAIL=your-super-admin@webknot.in node scripts/api-smoke.mjs
 //   node scripts/api-smoke.mjs --md=scripts/api-smoke-report.md
 //
 // Exits 0 if no endpoints regressed (5xx / unexpected 4xx), otherwise 1.
 
 import { writeFileSync } from "node:fs";
-import { argv, env } from "node:process";
+import { argv, env, exit } from "node:process";
 
 const BASE = (env.BACKEND_URL || "http://localhost:8080").replace(/\/$/, "");
-const ADMIN_EMAIL = env.ADMIN_EMAIL || "likhith.r@webknot.in";
+const ADMIN_EMAIL = String(env.ADMIN_EMAIL || "").trim();
 const _MANAGER_EMAIL = env.MANAGER_EMAIL || "manager1@webtrak.local";
 void _MANAGER_EMAIL;
+
+if (!ADMIN_EMAIL) {
+  console.error("Missing ADMIN_EMAIL. Example:");
+  console.error("  ADMIN_EMAIL=your-super-admin@webknot.in node scripts/api-smoke.mjs");
+  exit(1);
+}
 
 const args = Object.fromEntries(
   argv.slice(2).map((a) => {
@@ -205,11 +211,18 @@ T({ tag: "auth", name: "google signin (redirect)", method: "GET", path: "/api/v1
 
 const results = [];
 
+function redactSensitiveReportText(text) {
+  return String(text ?? "")
+    .replace(/[a-z0-9._+-]+@webknot\.in/gi, "[user]@webknot.in")
+    .replace(/\bLikhith R\b/gi, "[Admin User]");
+}
+
 function fmtBody(body, max = 220) {
   if (body == null) return "";
-  if (typeof body === "string") return body.slice(0, max);
+  if (typeof body === "string") return redactSensitiveReportText(body.slice(0, max));
   let s;
   try { s = JSON.stringify(body); } catch { s = String(body); }
+  s = redactSensitiveReportText(s);
   return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
@@ -441,7 +454,7 @@ function writeReport() {
   lines.push(`# API smoke report`);
   lines.push("");
   lines.push(`Backend: \`${BASE}\``);
-  lines.push(`Admin login: \`${ADMIN_EMAIL}\``);
+  lines.push(`Admin login: \`${redactSensitiveReportText(ADMIN_EMAIL)}\``);
   lines.push(`Generated: ${new Date().toISOString()}`);
   lines.push("");
   const pass = results.filter((r) => r.status === "PASS").length;

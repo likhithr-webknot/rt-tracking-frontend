@@ -1,4 +1,4 @@
-import type { ApiOptions } from "../types/api-options";
+import { coerceDisplayString } from "../utils/coerceDisplayString";
 import { z } from "zod";
 import { buildApiUrl, getCookieValue, readError, safeJsonParse, withCsrfHeaders } from "./http";
 import { loginWithEmailPassword } from "./password-auth";
@@ -45,13 +45,9 @@ function firstNullableString(...values) {
   return s ? s : null;
 }
 
-/** Always treated as Admin portal for this address; merge with VITE_ADMIN_EMAILS. */
-const BUILTIN_PORTAL_ADMIN_EMAILS = ["likhith.r@webknot.in"];
-
+/** Super Admin portal emails from VITE_ADMIN_EMAILS (comma-separated). Not used for QA seeding. */
 function portalAdminEmailSet() {
-  const s = new Set(
-    BUILTIN_PORTAL_ADMIN_EMAILS.map((e) => String(e).trim().toLowerCase()).filter(Boolean),
-  );
+  const s = new Set();
   const raw = String(import.meta?.env?.VITE_ADMIN_EMAILS ?? "").trim();
   if (raw) {
     for (const p of raw
@@ -354,13 +350,22 @@ export function setAuth(auth) {
     prev?.employeeName
   );
   const designation = firstNullableString(
-    obj.designation,
-    obj.title,
-    obj.jobTitle,
-    prev?.designation
+    coerceDisplayString(obj.designation),
+    coerceDisplayString(obj.title),
+    coerceDisplayString(obj.jobTitle),
+    coerceDisplayString(prev?.designation),
   );
-  const stream = firstNullableString(obj.stream, obj.context, prev?.stream);
-  const band = firstNullableString(obj.band, obj.level, prev?.band);
+  const stream = firstNullableString(
+    coerceDisplayString(obj.stream),
+    coerceDisplayString(obj.context),
+    coerceDisplayString(obj.department),
+    coerceDisplayString(prev?.stream),
+  );
+  const band = firstNullableString(
+    coerceDisplayString(obj.band),
+    coerceDisplayString(obj.level),
+    coerceDisplayString(prev?.band),
+  );
   const managerId = firstNullableString(obj.managerId, prev?.managerId);
   const needsOnboarding =
     obj.needsOnboarding === true
@@ -369,12 +374,22 @@ export function setAuth(auth) {
         ? false
         : prev?.needsOnboarding === true;
 
+  const empRole = firstNonEmptyString(
+    obj.role,
+    obj.empRole,
+    obj.portalRole,
+    claims?.role,
+    prev?.empRole,
+  );
+
   memoryAuth = {
     accessToken,
     tokenType,
     userId,
     id: userId,
     role,
+    empRole: empRole || role,
+    portalRole: firstNonEmptyString(obj.portalRole, empRole, prev?.portalRole),
     portal,
     email,
     employeeId,
@@ -625,6 +640,9 @@ export function getOAuthBypassUrl(email) {
 
 /** Dev-only: (re)create QA users with password WebknotQA#Test1 */
 export async function seedDevQaUsers({ signal } = {} as ApiOptions) {
+  if (!import.meta?.env?.DEV || String(import.meta.env?.VITE_ENABLE_DEV_QA ?? "") !== "true") {
+    throw new Error("QA seeding is disabled in this build.");
+  }
   const res = await fetch(buildApiUrl("/api/v1/dev/seed-qa-users"), {
     method: "POST",
     signal,

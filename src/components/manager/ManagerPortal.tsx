@@ -3,7 +3,6 @@ import type { ApiOptions } from "../../types/api-options";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  ArrowLeft,
   Bell,
   BellDot,
   Calendar,
@@ -14,7 +13,6 @@ import {
   ChevronRight,
   ClipboardCheck,
   Clock,
-  Clock3,
   Briefcase,
   Eye,
   FolderKanban,
@@ -24,8 +22,6 @@ import {
   Shield,
   Sparkles,
   Star,
-  Target,
-  TrendingUp,
   UserCircle2,
   Users,
   X,
@@ -46,11 +42,21 @@ import {
   fetchManagerTeamSubmissions,
   formatYearMonth,
   normalizeMonthlySubmission,
+  resolveManagerKpiRatings,
+  resolveManagerValueRatings,
+  resolveSubmissionKpiRatings,
+  resolveSubmissionValueRatings,
   saveMonthlyDraft,
   submitMonthlySubmission,
 } from "../../api/monthly-submissions";
-import { fetchManagerReportees, fetchManagers, normalizeEmployees, normalizeManagers } from "../../api/employees";
+import {
+  fetchManagerReportees,
+  fetchSuperAdminReviewers,
+  normalizeEmployees,
+  normalizeSuperAdminReviewers,
+} from "../../api/employees";
 import { fetchEmployeePortalKpiDefinitions, normalizeCursorPage } from "../../api/employee-portal";
+import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions";
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi";
 import { enhanceReviewText, fetchActiveAiAgent } from "../../api/ai-agents";
 import {
@@ -58,8 +64,9 @@ import {
   markAllNotificationsRead,
   markNotificationAsRead,
 } from "../../api/notifications";
-import { getAppSettings } from "../../utils/appSettings";
+import { getManagerSettings } from "../../utils/appSettings";
 import { buildCycleMeta, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles";
+import { formatPerformanceRating, performanceRatingLabel, performanceRatingScaleText } from "../../utils/ratingLabels";
 
 import Toast from "../shared/Toast";
 import CursorPagination from "../shared/CursorPagination";
@@ -68,11 +75,10 @@ import PortalUserMenu from "../shared/PortalUserMenu";
 import AppShell from "../shared/AppShell";
 import PortalSidebar from "../shared/PortalSidebar";
 import UserProfilePage from "../shared/UserProfilePage";
-import PortalSettingsModal from "../shared/PortalSettingsModal";
+import ManagerSettingsPanel from "../shared/settings/ManagerSettingsPanel";
 import PortalPageHeader from "../shared/PortalPageHeader";
 import PortalWorkflowFrame from "../shared/PortalWorkflowFrame";
 import SubmissionWindowClosed from "../employee/SubmissionWindowClosed";
-import ManagerCalibrationPanel from "./ManagerCalibrationPanel";
 import ManagerAiReviewAssist from "./ManagerAiReviewAssist";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
 import ResubmissionPlaybook from "../shared/ResubmissionPlaybook";
@@ -81,7 +87,7 @@ import { fetchSubmissionAccessForRole } from "../../api/submission-window";
 import { computeSubmissionWindowOpen } from "../../utils/submissionWindow";
 import { isHrPortalUser, shouldHideHrPeerRating } from "../../utils/hrRatingsFilter";
 import { buildCycleMonthOptions } from "../../utils/reviewCycles";
-import { playNotificationSound } from "../../utils/notificationSound";
+import { playNotificationSound, unlockNotificationSound } from "../../utils/notificationSound";
 import { safeJsonParse } from "../../utils/json";
 import {
   fetchManagerNotifications,
@@ -124,6 +130,19 @@ function isSubmittedStatus(status) {
   return s === "SUBMITTED" || s === "APPROVED" || s === "COMPLETED" || s === "FINAL";
 }
 
+function isPendingManagerReviewRow(row) {
+  const reviewStatus = String(
+    row?.raw?.reviewStatus ??
+    row?.payload?.reviewStatus ??
+    row?.submission?.reviewStatus ??
+    ""
+  )
+    .trim()
+    .toUpperCase();
+  if (reviewStatus === "NEEDS_MANAGER_REVIEW") return true;
+  return isSubmittedStatus(row?.status) && !row?.managerSubmitted;
+}
+
 function normalizeCertificationsForState(input) {
   const arr = Array.isArray(input) ? input : [];
   return arr
@@ -154,9 +173,22 @@ function normalizeTeamSubmissions(data) {
 
       const submission = normalizeMonthlySubmission(obj) || null;
       const emp = obj.employee || obj.reportee || obj.user || obj.emp || null;
-      const employeeId = emp?.employeeId ?? emp?.empId ?? emp?.id ?? obj.employeeId ?? null;
-      const employeeName = emp?.employeeName ?? emp?.name ?? emp?.fullName ?? obj.employeeName ?? null;
-      const email = emp?.email ?? obj.email ?? null;
+      const employeeId =
+        emp?.employeeId ??
+        emp?.empId ??
+        emp?.id ??
+        obj.employeeId ??
+        obj.empId ??
+        obj.userId ??
+        null;
+      const employeeName =
+        emp?.employeeName ??
+        emp?.name ??
+        emp?.fullName ??
+        obj.employeeName ??
+        obj.userName ??
+        null;
+      const email = emp?.email ?? obj.email ?? obj.userEmail ?? null;
       const payloadObj =
         submission && typeof submission === "object"
           ? submission
@@ -175,31 +207,40 @@ function normalizeTeamSubmissions(data) {
       const currentStatus = String(
         submission?.status ?? obj?.status ?? ""
       ).trim().toUpperCase();
+      const reviewStatusUpper = String(
+        submission?.reviewStatus ?? obj?.reviewStatus ?? ""
+      ).trim().toUpperCase();
       const rawManagerAction = String(
         obj?.managerReview?.action ||
         obj?.payload?.managerReview?.action ||
+        submission?.managerReview?.action ||
         ""
       ).trim().toUpperCase();
       const staleManagerReject =
-        currentStatus === "SUBMITTED" && rawManagerAction === "REJECT";
+        currentStatus === "SUBMITTED" &&
+        reviewStatusUpper === "SUBMITTED" &&
+        rawManagerAction === "REJECT";
+      const needsManagerRework = reviewStatusUpper === "NEEDS_MANAGER_REVIEW";
 
       const managerSubmittedFromSubmission =
         typeof submission?.managerSubmitted === "boolean" ? submission.managerSubmitted : null;
-      const managerSubmitted = staleManagerReject
+      const managerSubmitted = needsManagerRework
         ? false
-        : managerSubmittedFromSubmission != null
-          ? managerSubmittedFromSubmission
-          : Boolean(
-              obj?.managerSubmittedAt ||
-              obj?.managerReviewedAt ||
-              obj?.reviewedByManager ||
-              obj?.managerReview ||
-              obj?.managerEvaluation ||
-              obj?.payload?.managerSubmittedAt ||
-              obj?.payload?.managerReviewedAt ||
-              obj?.payload?.managerReview ||
-              obj?.payload?.managerEvaluation
-            );
+        : staleManagerReject
+          ? false
+          : managerSubmittedFromSubmission != null
+            ? managerSubmittedFromSubmission
+            : Boolean(
+                obj?.managerSubmittedAt ||
+                obj?.managerReviewedAt ||
+                obj?.reviewedByManager ||
+                obj?.managerReview ||
+                obj?.managerEvaluation ||
+                obj?.payload?.managerSubmittedAt ||
+                obj?.payload?.managerReviewedAt ||
+                obj?.payload?.managerReview ||
+                obj?.payload?.managerEvaluation
+              );
       const managerSubmittedAt = String(
         obj?.managerSubmittedAt ??
         obj?.managerReviewedAt ??
@@ -244,12 +285,46 @@ function normalizeCursorToken(value) {
 }
 
 function normalizeTeamPage(data) {
+  if (Array.isArray(data)) {
+    return {
+      items: normalizeTeamSubmissions(data),
+      nextCursor: null,
+      total: data.length,
+      submittedCount: null,
+      pendingManagerReviewCount: null,
+    };
+  }
+
   const root =
     data && typeof data === "object" && !Array.isArray(data) && data?.data && typeof data.data === "object"
       ? data.data
       : data && typeof data === "object" && !Array.isArray(data)
         ? data
         : {};
+
+  if (Array.isArray(root)) {
+    const wrapper =
+      data && typeof data === "object" && !Array.isArray(data) ? data : {};
+    return {
+      items: normalizeTeamSubmissions(root),
+      nextCursor: normalizeCursorToken(
+        wrapper?.nextCursor ??
+          wrapper?.next ??
+          wrapper?.nextToken ??
+          null
+      ),
+      total: root.length,
+      submittedCount:
+        typeof wrapper?.submittedCount === "number" && Number.isFinite(wrapper.submittedCount)
+          ? wrapper.submittedCount
+          : null,
+      pendingManagerReviewCount:
+        typeof wrapper?.pendingManagerReviewCount === "number" &&
+        Number.isFinite(wrapper.pendingManagerReviewCount)
+          ? wrapper.pendingManagerReviewCount
+          : null,
+    };
+  }
 
   const itemsRaw =
     Array.isArray(root.items)
@@ -260,9 +335,11 @@ function normalizeTeamPage(data) {
           ? root.content
           : Array.isArray(root.data)
             ? root.data
-            : Array.isArray(data)
-              ? data
-              : [];
+            : Array.isArray(data?.items)
+              ? data.items
+              : Array.isArray(data?.content)
+                ? data.content
+                : [];
 
   return {
     items: normalizeTeamSubmissions(itemsRaw),
@@ -578,7 +655,7 @@ function payloadHash(payload) {
 }
 
 function getDraftAutosaveDelayMs() {
-  const n = Number.parseInt(String(getAppSettings()?.draftAutosaveDelayMs ?? 900), 10);
+  const n = Number.parseInt(String(getManagerSettings()?.draftAutosaveDelayMs ?? 900), 10);
   if (!Number.isFinite(n)) return 900;
   return Math.min(5000, Math.max(500, n));
 }
@@ -649,7 +726,7 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [filter, setFilter] = useState("PENDING_MANAGER_REVIEW"); // SUBMITTED | ALL | PENDING_MANAGER_REVIEW
   const [teamSearch, setTeamSearch] = useState("");
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
-  const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review", "account", "notes", "drive"]), []);
+  const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review", "account", "notes", "drive", "settings"]), []);
 
   const getMgrTabFromPath = useCallback(() => {
     const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
@@ -689,12 +766,12 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [hydratingSelfSubmission, setHydratingSelfSubmission] = useState(false);
   const [selfSubmissionMeta, setSelfSubmissionMeta] = useState(null);
   const [selfReviewingManagerId, setSelfReviewingManagerId] = useState("");
-  const [superManagersLoading, setSuperManagersLoading] = useState(false);
-  const [superManagerOptions, setSuperManagerOptions] = useState([]);
+  const [superAdminReviewersLoading, setSuperAdminReviewersLoading] = useState(false);
+  const [superAdminReviewerOptions, setSuperAdminReviewerOptions] = useState([]);
 
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsError, setNotificationsError] = useState("");
@@ -711,10 +788,6 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [quickRejectModal, setQuickRejectModal] = useState({ open: false, row: null });
   const [quickRejectComment, setQuickRejectComment] = useState("");
   const [quickRejectBusy, setQuickRejectBusy] = useState(false);
-
-  /* ── review queue page state ── */
-  const [queueView, setQueueView] = useState(null); // "reportees" | "submitted" | "pending" | null
-  const [queueSearch, setQueueSearch] = useState("");
 
   /* ── project ratings state ── */
   const [mgrProjects, setMgrProjects] = useState([]);
@@ -995,7 +1068,8 @@ export default function ManagerPortal({ onLogout, auth }) {
     if (notifiedEventKeysRef.current.size > 500) {
       notifiedEventKeysRef.current = new Set(Array.from(notifiedEventKeysRef.current).slice(-250));
     }
-    playNotificationSound().catch(() => {});
+    const soundEnabled = Boolean(getManagerSettings()?.enableSoundAlerts ?? true);
+    playNotificationSound({ enabled: soundEnabled }).catch(() => {});
     showToast({
       title: incoming.title || "New employee submission",
       message: incoming.message || "",
@@ -1163,14 +1237,13 @@ export default function ManagerPortal({ onLogout, auth }) {
       const employeePayload = row.payload || {};
       const reviewedAt = new Date().toISOString();
       const cycleMeta = buildCycleMeta(m);
-      const employeeKpiRatings = normalizeSelfKpiRatings(employeePayload.kpiRatings || {});
-      const employeeValueRatings = normalizeSelfValueRatings(
-        employeePayload.webknotValueRatings ?? employeePayload.webknotValues
-      );
+      const employeeKpiRatings = resolveSubmissionKpiRatings(row);
+      const employeeValueRatings = resolveSubmissionValueRatings(row);
       const employeeValueEntries = Object.entries(employeeValueRatings);
       const employeeCertifications = normalizeCertificationsForState(employeePayload.certifications);
       const rejectSnapshot = captureRejectSnapshot({ submission: employeePayload, raw: row?.raw });
       const payload = {
+        submissionId: row?.submissionId ?? row?.id ?? row?.raw?.submissionId ?? row?.raw?.id ?? null,
         month: m,
         monthKey: m,
         cycleKey: cycleMeta.cycleKey,
@@ -1255,6 +1328,29 @@ export default function ManagerPortal({ onLogout, auth }) {
 
   const selectedRow = reviewModal.open ? reviewModal.row : null;
   const selectedKey = selectedRow ? `${selectedRow.employee.id}:${String(selectedRow.month || month)}` : "";
+  const selectedEmployeeKpiRatings = useMemo(
+    () => (selectedRow ? resolveSubmissionKpiRatings(selectedRow) : {}),
+    [selectedRow]
+  );
+  const selectedEmployeeValueRatings = useMemo(
+    () => (selectedRow ? resolveSubmissionValueRatings(selectedRow) : {}),
+    [selectedRow]
+  );
+  const selectedReviewKpiIds = useMemo(
+    () => Object.keys(selectedEmployeeKpiRatings || {}),
+    [selectedEmployeeKpiRatings]
+  );
+  const selectedReviewValueIds = useMemo(() => {
+    if (!selectedRow) return [];
+    return Array.from(
+      new Set([
+        ...Object.keys(selectedEmployeeValueRatings || {}),
+        ...(Array.isArray(selectedRow?.payload?.webknotValues)
+          ? selectedRow.payload.webknotValues.map((x) => String(x || "").trim())
+          : []),
+      ].filter(Boolean))
+    );
+  }, [selectedEmployeeValueRatings, selectedRow]);
   const selectedValueComments = useMemo(() => {
     if (!selectedRow) return {};
     const payload = selectedRow.payload || {};
@@ -1286,23 +1382,35 @@ export default function ManagerPortal({ onLogout, auth }) {
         ? selectedRow.raw.managerEvaluation
         : selectedRow?.raw?.payload?.managerEvaluation && typeof selectedRow.raw.payload.managerEvaluation === "object"
           ? selectedRow.raw.payload.managerEvaluation
-          : {};
+          : selectedRow?.payload?.managerEvaluation && typeof selectedRow.payload.managerEvaluation === "object"
+            ? selectedRow.payload.managerEvaluation
+            : {};
+    const savedManagerKpis = resolveManagerKpiRatings(selectedRow);
+    const employeeKpis = resolveSubmissionKpiRatings(selectedRow);
     const baseRatings = normalizeSelfKpiRatings(
-      managerEval?.kpiRatings && typeof managerEval.kpiRatings === "object"
-        ? managerEval.kpiRatings
-        : selectedRow?.payload?.kpiRatings && typeof selectedRow.payload.kpiRatings === "object"
-          ? selectedRow.payload.kpiRatings
-          : {}
+      Object.keys(savedManagerKpis).length
+        ? savedManagerKpis
+        : Object.keys(employeeKpis).length
+          ? employeeKpis
+          : managerEval?.kpiRatings && typeof managerEval.kpiRatings === "object"
+            ? managerEval.kpiRatings
+            : {}
     );
     const initialRatings =
       existing?.kpiRatings && typeof existing.kpiRatings === "object"
         ? existing.kpiRatings
         : baseRatings;
+    const savedManagerValues = resolveManagerValueRatings(selectedRow);
+    const employeeValues = resolveSubmissionValueRatings(selectedRow);
     const baseValueRatings = normalizeSelfValueRatings(
-      managerEval?.webknotValueRatings ??
-      managerEval?.webknotValues ??
-      selectedRow?.payload?.webknotValueRatings ??
-      selectedRow?.payload?.webknotValues
+      Object.keys(savedManagerValues).length
+        ? savedManagerValues
+        : Object.keys(employeeValues).length
+          ? employeeValues
+          : managerEval?.webknotValueRatings ??
+            managerEval?.webknotValues ??
+            selectedRow?.payload?.webknotValueRatings ??
+            selectedRow?.payload?.webknotValues
     );
     const initialValueRatings =
       existing?.valueRatings && typeof existing.valueRatings === "object"
@@ -1446,26 +1554,21 @@ export default function ManagerPortal({ onLogout, auth }) {
     if (activeTab !== "self-review") return;
     let mounted = true;
     const controller = new AbortController();
-    setSuperManagersLoading(true);
+    setSuperAdminReviewersLoading(true);
     (async () => {
       try {
-        const data = await fetchManagers({ signal: controller.signal });
+        const data = await fetchSuperAdminReviewers({ signal: controller.signal });
         if (!mounted) return;
         const selfKey = String(managerId || auth?.employeeId || "").trim();
-        const options = normalizeManagers(data)
-          .map((m) => ({
-            id: String(m?.id ?? m?.employeeId ?? "").trim(),
-            name: String(m?.name ?? m?.employeeName ?? "").trim() || String(m?.email ?? "").trim() || "Manager",
-            email: String(m?.email ?? "").trim(),
-          }))
-          .filter((m) => m.id && m.id !== selfKey)
+        const options = normalizeSuperAdminReviewers(data)
+          .filter((row) => row.id && row.id !== selfKey)
           .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-        setSuperManagerOptions(options);
+        setSuperAdminReviewerOptions(options);
       } catch (err) {
         if (err?.name === "AbortError" || !mounted) return;
-        setSuperManagerOptions([]);
+        setSuperAdminReviewerOptions([]);
       } finally {
-        if (mounted) setSuperManagersLoading(false);
+        if (mounted) setSuperAdminReviewersLoading(false);
       }
     })();
     return () => {
@@ -1475,13 +1578,13 @@ export default function ManagerPortal({ onLogout, auth }) {
   }, [activeTab, auth?.employeeId, managerId]);
 
   const selfReviewerFields = useMemo(() => {
-    const selected = superManagerOptions.find((m) => String(m.id) === String(selfReviewingManagerId || "").trim());
+    const selected = superAdminReviewerOptions.find((m) => String(m.id) === String(selfReviewingManagerId || "").trim());
     return {
       reviewingManagerId: String(selfReviewingManagerId || "").trim() || null,
       reviewingManagerName: selected?.name || null,
       reviewingManagerEmail: selected?.email || null,
     };
-  }, [selfReviewingManagerId, superManagerOptions]);
+  }, [selfReviewingManagerId, superAdminReviewerOptions]);
 
   const reloadTeam = useCallback(
     async ({ signal, cursor, pageAction = "stay", fromCursor = null } = {}) => {
@@ -1517,7 +1620,7 @@ export default function ManagerPortal({ onLogout, auth }) {
             nextCursor = end < fallbackRows.length ? String(end) : null;
             total = fallbackRows.length;
             submitted = fallbackRows.filter((s) => isSubmittedStatus(s.status)).length;
-            pendingReview = fallbackRows.filter((s) => isSubmittedStatus(s.status) && !s.managerSubmitted).length;
+            pendingReview = fallbackRows.filter((s) => isPendingManagerReviewRow(s)).length;
           }
         }
 
@@ -1814,37 +1917,37 @@ export default function ManagerPortal({ onLogout, auth }) {
   }, [auth, selfSubmissionMeta?.adminReview, selfSubmissionMeta?.managerReview]);
   const selfStatusSummary = useMemo(() => {
     const reviewStatus = String(selfSubmissionMeta?.reviewStatus || "DRAFT").trim().toUpperCase();
-    const managerAction = String(selfSubmissionMeta?.managerReview?.action || "").trim().toUpperCase();
+    const adminAction = String(selfSubmissionMeta?.adminReview?.action || "").trim().toUpperCase();
     const submittedAt = selfSubmissionMeta?.submittedAt || selfSubmissionMeta?.updatedAt || null;
     const actor =
-      selfSubmissionMeta?.managerReview?.reviewedBy ||
-      superManagerOptions.find((m) => m.id === selfReviewingManagerId)?.name ||
-      "Super manager";
+      selfSubmissionMeta?.adminReview?.reviewedBy ||
+      superAdminReviewerOptions.find((m) => m.id === selfReviewingManagerId)?.name ||
+      "Super Admin";
     const needsChanges = Boolean(isResubmissionRequested(selfSubmissionMeta));
     if (needsChanges) {
       return {
         chip: "Changes requested",
         chipClass: "bg-amber-500/15 text-amber-800 dark:text-amber-200 border-amber-500/30",
-        title: "Super manager returned your self review",
-        detail: "Address the feedback and resubmit. Your assigned super manager reviews you as a reportee.",
-        timestamp: formatReviewTimestamp(selfSubmissionMeta?.managerReview?.reviewedAt || submittedAt),
+        title: "Super admin returned your self review",
+        detail: "Address the feedback and resubmit. Your assigned super admin reviews you in Admin Submissions.",
+        timestamp: formatReviewTimestamp(selfSubmissionMeta?.adminReview?.reviewedAt || submittedAt),
       };
     }
-    if (reviewStatus.includes("APPROVED")) {
+    if (reviewStatus.includes("APPROVED") || adminAction === "APPROVE") {
       return {
         chip: "Approved",
         chipClass: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border-emerald-500/30",
-        title: "Approved by super manager",
-        detail: actor ? `${actor} approved this self review.` : "Your super manager approved this self review.",
-        timestamp: formatReviewTimestamp(selfSubmissionMeta?.managerReview?.reviewedAt || submittedAt),
+        title: "Approved by super admin",
+        detail: actor ? `${actor} approved this self review.` : "Your super admin approved this self review.",
+        timestamp: formatReviewTimestamp(selfSubmissionMeta?.adminReview?.reviewedAt || submittedAt),
       };
     }
     if (reviewStatus.includes("SUBMITTED")) {
       return {
-        chip: managerAction ? `Review: ${managerAction}` : "Submitted",
+        chip: adminAction ? `Review: ${adminAction}` : "Submitted",
         chipClass: "bg-blue-500/15 text-blue-800 dark:text-blue-200 border-blue-500/30",
-        title: "Pending super manager review",
-        detail: "Your selected super manager evaluates you like a reportee. You can edit until they finalize unless locked.",
+        title: "Pending super admin review",
+        detail: "Your selected super admin reviews this in Admin Submissions. You can edit until they finalize unless locked.",
         timestamp: formatReviewTimestamp(submittedAt),
       };
     }
@@ -1852,10 +1955,10 @@ export default function ManagerPortal({ onLogout, auth }) {
       chip: "Draft",
       chipClass: "bg-slate-500/10 text-slate-700 dark:text-slate-200 border-slate-500/20",
       title: "Draft in progress",
-      detail: "Choose your super manager reviewer, complete the review, then submit.",
+      detail: "Choose your super admin reviewer, complete band KPIs and Webknot values, then submit.",
       timestamp: submittedAt ? formatReviewTimestamp(submittedAt) : "—",
     };
-  }, [selfSubmissionMeta, selfReviewingManagerId, superManagerOptions]);
+  }, [selfSubmissionMeta, selfReviewingManagerId, superAdminReviewerOptions]);
 
   useEffect(() => {
     if (!String(month || "").trim()) return;
@@ -1947,10 +2050,10 @@ export default function ManagerPortal({ onLogout, auth }) {
   }, [hasFullInsights, teamInsightSourceRows, teamInsightsRows, teamTotals.submittedCount]);
   const pendingManagerReviewCount = useMemo(() => {
     if (hasFullInsights) {
-      return teamInsightsRows.filter((s) => isSubmittedStatus(s.status) && !s.managerSubmitted).length;
+      return teamInsightsRows.filter((s) => isPendingManagerReviewRow(s)).length;
     }
     if (Number.isFinite(teamTotals.pendingManagerReviewCount)) return Number(teamTotals.pendingManagerReviewCount);
-    return teamInsightSourceRows.filter((s) => isSubmittedStatus(s.status) && !s.managerSubmitted).length;
+    return teamInsightSourceRows.filter((s) => isPendingManagerReviewRow(s)).length;
   }, [hasFullInsights, teamInsightSourceRows, teamInsightsRows, teamTotals.pendingManagerReviewCount]);
 
   /* ── employee list for review queue popover ── */
@@ -1977,19 +2080,27 @@ export default function ManagerPortal({ onLogout, auth }) {
     return Array.from(seen.values());
   }, [teamInsightSourceRows, teamSubs]);
 
-  const filteredQueueEmployees = useMemo(() => {
-    const q = String(queueSearch || "").trim().toLowerCase();
+  const sidebarQueueEmployees = useMemo(() => {
+    const mode = String(filter || "").toUpperCase();
     let list = queueEmployeeList;
-    if (queueView === "submitted") list = list.filter((e) => e.submitted);
-    else if (queueView === "pending") list = list.filter((e) => e.pendingReview);
+    if (mode === "EMPLOYEE_SUBMITTED") list = list.filter((e) => e.submitted);
+    else if (mode === "MANAGER_REVIEWED" || mode === "SUBMITTED") list = list.filter((e) => e.managerSubmitted);
+    else if (mode === "PENDING_MANAGER_REVIEW") list = list.filter((e) => e.pendingReview);
+    const q = String(teamSearch || "").trim().toLowerCase();
     if (!q) return list;
-    return list.filter((e) => e.name.toLowerCase().includes(q) || e.email.toLowerCase().includes(q) || e.id.toLowerCase().includes(q));
-  }, [queueEmployeeList, queueView, queueSearch]);
+    return list.filter(
+      (e) =>
+        e.name.toLowerCase().includes(q) ||
+        e.email.toLowerCase().includes(q) ||
+        e.id.toLowerCase().includes(q)
+    );
+  }, [filter, queueEmployeeList, teamSearch]);
 
   const filteredTeamSubs = useMemo(() => {
     const mode = String(filter || "").toUpperCase();
-    const pending = teamSubs.filter((s) => !s.managerSubmitted);
-    const submittedByManager = teamSubs.filter((s) => s.managerSubmitted);
+    const managerReviewed = teamSubs.filter((s) => s.managerSubmitted);
+    const pendingManagerReview = teamSubs.filter((s) => isPendingManagerReviewRow(s));
+    const employeeSubmitted = teamSubs.filter((s) => isSubmittedStatus(s.status));
 
     const matchesSearch = (row) => {
       const q = String(teamSearch || "").trim().toLowerCase();
@@ -2000,9 +2111,10 @@ export default function ManagerPortal({ onLogout, auth }) {
       return name.includes(q) || email.includes(q) || id.includes(q);
     };
 
-    let base = pending;
-    if (mode === "SUBMITTED") base = submittedByManager;
+    let base = pendingManagerReview;
     if (mode === "ALL") base = teamSubs;
+    if (mode === "EMPLOYEE_SUBMITTED") base = employeeSubmitted;
+    if (mode === "SUBMITTED" || mode === "MANAGER_REVIEWED") base = managerReviewed;
 
     return base.filter(matchesSearch);
   }, [filter, teamSearch, teamSubs]);
@@ -2027,155 +2139,6 @@ export default function ManagerPortal({ onLogout, auth }) {
     }),
     [reloadTeam, teamCursor, teamCursorStack, teamLoading, teamNextCursor]
   );
-
-  const managerInsights = useMemo(() => {
-    const submittedRows = teamInsightSourceRows.filter((row) => isSubmittedStatus(row?.status));
-    const reviewedRows = submittedRows.filter((row) => row?.managerSubmitted);
-    const pendingRows = submittedRows.filter((row) => !row?.managerSubmitted);
-    const rejectedRows = teamInsightSourceRows.filter((row) => String(row?.status || "").toUpperCase().includes("NEEDS_REVIEW"));
-
-    const reviewedCoverage = submittedRows.length
-      ? Math.round((reviewedRows.length / submittedRows.length) * 100)
-      : 0;
-    const pendingCoverage = submittedRows.length
-      ? Math.round((pendingRows.length / submittedRows.length) * 100)
-      : 0;
-
-    const turnaroundHours = reviewedRows
-      .map((row) => {
-        const start = new Date(row?.submittedAt || row?.updatedAt || "");
-        const end = new Date(row?.managerSubmittedAt || row?.updatedAt || "");
-        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
-        const deltaHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-        return Number.isFinite(deltaHours) && deltaHours >= 0 ? deltaHours : null;
-      })
-      .filter((v) => typeof v === "number");
-    const avgTurnaroundHours = turnaroundHours.length
-      ? Math.round((turnaroundHours.reduce((sum, v) => sum + v, 0) / turnaroundHours.length) * 10) / 10
-      : 0;
-
-    const pendingPreview = pendingRows
-      .slice(0, 5)
-      .map((row) => ({
-        id: String(row?.employee?.id || "—"),
-        name: String(row?.employee?.name || "Unknown"),
-      }));
-
-    const queueFunnel = [
-      { id: "submitted", label: "Submitted", value: submittedRows.length, colorClass: "bg-blue-500" },
-      { id: "reviewed", label: "Reviewed", value: reviewedRows.length, colorClass: "bg-emerald-500" },
-      { id: "pending", label: "Pending", value: pendingRows.length, colorClass: "bg-amber-500" },
-      { id: "rejected", label: "Rejected", value: rejectedRows.length, colorClass: "bg-rose-500" },
-    ];
-    const maxFunnel = Math.max(1, ...queueFunnel.map((item) => item.value));
-
-    return {
-      reviewedCoverage,
-      pendingCoverage,
-      avgTurnaroundHours,
-      pendingPreview,
-      queueFunnel,
-      maxFunnel,
-      rejectedCount: rejectedRows.length,
-    };
-  }, [teamInsightSourceRows]);
-
-  const managerGranularity = useMemo(() => {
-    const streamMap = new Map();
-    const bandMap = new Map();
-    const topSignals = [];
-
-    const getScore = (row) => {
-      const payload = row?.payload && typeof row.payload === "object" ? row.payload : {};
-      const managerEval =
-        row?.raw?.managerEvaluation && typeof row.raw.managerEvaluation === "object"
-          ? row.raw.managerEvaluation
-          : row?.raw?.payload?.managerEvaluation && typeof row.raw.payload.managerEvaluation === "object"
-            ? row.raw.payload.managerEvaluation
-            : null;
-
-      const kpiSource = managerEval?.kpiRatings ?? payload?.kpiRatings;
-      const valueSource = managerEval?.webknotValueRatings ?? payload?.webknotValueRatings;
-      const values = [];
-
-      if (kpiSource && typeof kpiSource === "object") {
-        for (const v of Object.values(kpiSource)) {
-          const n = typeof v === "number" ? v : Number.parseFloat(String(v ?? ""));
-          if (Number.isFinite(n) && n >= 1 && n <= 5) values.push(n);
-        }
-      }
-      if (valueSource && typeof valueSource === "object") {
-        for (const v of Object.values(valueSource)) {
-          const n = typeof v === "number" ? v : Number.parseFloat(String(v ?? ""));
-          if (Number.isFinite(n) && n >= 1 && n <= 5) values.push(n);
-        }
-      }
-      if (!values.length) return null;
-      return Math.round((values.reduce((sum, x) => sum + x, 0) / values.length) * 10) / 10;
-    };
-
-    for (const row of teamInsightSourceRows) {
-      const employeeRaw =
-        row?.raw?.employee && typeof row.raw.employee === "object"
-          ? row.raw.employee
-          : row?.raw?.reportee && typeof row.raw.reportee === "object"
-            ? row.raw.reportee
-            : {};
-      const stream = String(employeeRaw?.stream || row?.raw?.stream || "Unassigned").trim() || "Unassigned";
-      const band = String(employeeRaw?.band || row?.raw?.band || "Unassigned").trim() || "Unassigned";
-      const submitted = isSubmittedStatus(row?.status);
-      const reviewed = Boolean(row?.managerSubmitted);
-
-      const streamStats = streamMap.get(stream) || { total: 0, submitted: 0, reviewed: 0 };
-      streamStats.total += 1;
-      if (submitted) streamStats.submitted += 1;
-      if (reviewed) streamStats.reviewed += 1;
-      streamMap.set(stream, streamStats);
-
-      const bandStats = bandMap.get(band) || { total: 0, submitted: 0, reviewed: 0 };
-      bandStats.total += 1;
-      if (submitted) bandStats.submitted += 1;
-      if (reviewed) bandStats.reviewed += 1;
-      bandMap.set(band, bandStats);
-
-      const score = getScore(row);
-      if (score != null) {
-        topSignals.push({
-          id: String(row?.employee?.id || "—"),
-          name: String(row?.employee?.name || "Unknown"),
-          band,
-          stream,
-          score,
-        });
-      }
-    }
-
-    const streamRows = Array.from(streamMap.entries())
-      .map(([name, stats]) => ({
-        name,
-        total: stats.total,
-        submittedRate: stats.total ? Math.round((stats.submitted / stats.total) * 100) : 0,
-        reviewedRate: stats.total ? Math.round((stats.reviewed / stats.total) * 100) : 0,
-      }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 6);
-
-    const bandRows = Array.from(bandMap.entries())
-      .map(([name, stats]) => ({
-        name,
-        total: stats.total,
-        submittedRate: stats.total ? Math.round((stats.submitted / stats.total) * 100) : 0,
-        reviewedRate: stats.total ? Math.round((stats.reviewed / stats.total) * 100) : 0,
-      }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 6);
-
-    const topEmployees = topSignals
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5);
-
-    return { streamRows, bandRows, topEmployees };
-  }, [teamInsightSourceRows]);
 
   const account = useMemo(() => {
     const name =
@@ -2242,7 +2205,7 @@ export default function ManagerPortal({ onLogout, auth }) {
     if (!String(selfReviewingManagerId || "").trim()) {
       showToast({
         title: "Select reviewer",
-        message: "Choose the super manager who will review your self review.",
+        message: "Choose the super admin who will review your self review.",
         tone: "error",
       });
       return;
@@ -2308,7 +2271,7 @@ export default function ManagerPortal({ onLogout, auth }) {
           reopenedForResubmission: false,
         })
       );
-      showToast({ title: "Submitted", message: "Self review sent to your super manager for evaluation." });
+      showToast({ title: "Submitted", message: "Self review sent to your selected super admin for review." });
     } catch (err) {
       showToast({ title: "Submit failed", message: err?.message || "Please try again.", tone: "error" });
     } finally {
@@ -2319,20 +2282,9 @@ export default function ManagerPortal({ onLogout, auth }) {
   function validateManagerReview(action) {
     if (!selectedRow) return { ok: false, message: "No submission selected." };
     const reviewAction = String(action || "").trim().toUpperCase();
-    const expectedIds = Object.keys(selectedRow?.payload?.kpiRatings || {});
+    const expectedIds = selectedReviewKpiIds;
     const normalizedRatings = {};
-    const expectedValueIds = Array.from(
-      new Set([
-        ...Object.keys(
-          selectedRow?.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object"
-            ? selectedRow.payload.webknotValueRatings
-            : {}
-        ),
-        ...(Array.isArray(selectedRow?.payload?.webknotValues)
-          ? selectedRow.payload.webknotValues.map((x) => String(x || "").trim())
-          : []),
-      ].filter(Boolean))
-    );
+    const expectedValueIds = selectedReviewValueIds;
     const normalizedValueRatings = {};
 
     for (const id of expectedIds) {
@@ -2393,10 +2345,8 @@ export default function ManagerPortal({ onLogout, auth }) {
 
     const employeePayload = selectedRow.payload || {};
     const reviewedAt = new Date().toISOString();
-    const employeeKpiRatings = normalizeSelfKpiRatings(employeePayload.kpiRatings || {});
-    const employeeValueRatings = normalizeSelfValueRatings(
-      employeePayload.webknotValueRatings ?? employeePayload.webknotValues
-    );
+    const employeeKpiRatings = resolveSubmissionKpiRatings(selectedRow);
+    const employeeValueRatings = resolveSubmissionValueRatings(selectedRow);
     const employeeValueEntries = Object.entries(employeeValueRatings);
     const employeeCertifications = normalizeCertificationsForState(employeePayload.certifications);
     const cycleMeta = buildCycleMeta(m);
@@ -2514,7 +2464,13 @@ export default function ManagerPortal({ onLogout, auth }) {
     <AppShell
       isSidebarOpen={isSidebarOpen}
       setIsSidebarOpen={setIsSidebarOpen}
-      maxWidth={activeTab === "notes" || activeTab === "drive" ? "max-w-[1600px]" : "max-w-7xl"}
+      maxWidth={
+        activeTab === "notes" || activeTab === "drive"
+          ? "max-w-[1600px]"
+          : activeTab === "settings"
+            ? "max-w-3xl"
+            : "max-w-7xl"
+      }
       sidebar={
         <PortalSidebar
           isOpen={isSidebarOpen}
@@ -2524,7 +2480,8 @@ export default function ManagerPortal({ onLogout, auth }) {
           portalTag="Lead your team's reviews"
           navGroups={MANAGER_NAV_GROUPS}
           showThemeToggle
-          onSettingsClick={() => setSettingsOpen(true)}
+          onSettingsClick={() => setActiveTab("settings")}
+          settingsActive={activeTab === "settings"}
         />
       }
       topbar={
@@ -2537,6 +2494,7 @@ export default function ManagerPortal({ onLogout, auth }) {
         <button
           type="button"
           onClick={() => {
+              unlockNotificationSound();
               const nextOpen = !notificationsOpen;
               setNotificationsOpen(nextOpen);
               if (nextOpen) reloadNotifications({ silent: true }).catch(() => {});
@@ -2655,6 +2613,8 @@ export default function ManagerPortal({ onLogout, auth }) {
         <div className="w-full min-w-0">
         {activeTab === "account" ? (
           <UserProfilePage auth={auth} roleLabel={account.role} onBack={() => setActiveTab("team")} />
+        ) : activeTab === "settings" ? (
+          <ManagerSettingsPanel />
         ) : activeTab === "notes" ? (
           <PortalNotesWorkspace
             portal="manager"
@@ -2705,8 +2665,9 @@ export default function ManagerPortal({ onLogout, auth }) {
                       title="Filter"
                     >
                       <option value="PENDING_MANAGER_REVIEW">Pending manager review</option>
-                      <option value="SUBMITTED">Submitted</option>
-                      <option value="ALL">All</option>
+                      <option value="EMPLOYEE_SUBMITTED">Employee submitted</option>
+                      <option value="MANAGER_REVIEWED">Manager reviewed</option>
+                      <option value="ALL">All reportees</option>
                     </select>
                     <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
                   </div>
@@ -2729,14 +2690,14 @@ export default function ManagerPortal({ onLogout, auth }) {
                 reloadTeam({ cursor: teamCursor ?? null, pageAction: "stay" }).catch(() => {});
                 reloadTeamInsights().catch(() => {});
               }}
-              disabled={teamLoading || teamInsightsLoading}
+              disabled={teamLoading}
               className={[
                 "rt-btn-ghost transition-all",
-                teamLoading || teamInsightsLoading ? "opacity-60 cursor-not-allowed" : "",
+                teamLoading ? "opacity-60 cursor-not-allowed" : "",
               ].join("")}
               title="Refresh"
             >
-              <RefreshCw size={18} /> {teamLoading || teamInsightsLoading ? "Loading…" : "Refresh"}
+              <RefreshCw size={18} /> {teamLoading ? "Loading…" : "Refresh"}
             </button>
           </div>
         </PortalPageHeader>
@@ -2755,154 +2716,22 @@ export default function ManagerPortal({ onLogout, auth }) {
           </div>
         ) : null}
 
-        {activeTab === "team" ? (
+        {activeTab === "self-review" ? (
           <div className="rt-portal-hero mb-6">
             <div className="relative z-10">
-              <div className="rt-kicker mb-2">Team overview</div>
-              <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-[rgb(var(--text))]">
-                Your review queue
-              </h2>
-              <p className="mt-1 text-sm text-[rgb(var(--muted))] max-w-2xl">
-                Open each submission, add manager scores, and approve or send back before the window closes.
-              </p>
-              <div className="rt-portal-stat-grid mt-6">
-                <div className="rt-portal-stat-card">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Reportees</div>
-                  <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-[rgb(var(--text))]">
-                    <Users size={18} className="text-[rgb(var(--primary))]" />
-                    {reporteeCount}
-                  </div>
-                </div>
-                <div className="rt-portal-stat-card">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Submitted</div>
-                  <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-emerald-600 dark:text-emerald-300">
-                    <CheckCircle2 size={18} />
-                    {submittedCount}
-                  </div>
-                </div>
-                <div className="rt-portal-stat-card">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Pending review</div>
-                  <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-amber-600 dark:text-amber-300">
-                    <Clock size={18} />
-                    {pendingManagerReviewCount}
-                  </div>
-                </div>
-                <div className="rt-portal-stat-card">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Review coverage</div>
-                  <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-[rgb(var(--text))]">
-                    <TrendingUp size={18} className="text-[rgb(var(--muted))]" />
-                    {managerInsights.reviewedCoverage}%
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : activeTab === "self-review" ? (
-          <div className="rt-portal-hero mb-6">
-            <div className="relative z-10">
-              <div className="rt-kicker mb-2">Manager self-review</div>
+              <div className="rt-kicker mb-2">Leadership self-review</div>
               <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-[rgb(var(--text))]">
                 Your monthly submission
               </h2>
               <p className="mt-1 text-sm text-[rgb(var(--muted))] max-w-2xl">
-                Complete your own KPIs, values, and self-review for this cycle — same flow as your team members.
+                Complete your band and department KPIs, rate all Webknot values, choose a super admin reviewer, then submit.
               </p>
             </div>
           </div>
         ) : null}
 
       <AnimatePresence mode="wait">
-      {activeTab === "team" && queueView ? (
-        <motion.section
-          key={`queue-${queueView}`}
-          initial={{ opacity: 0, x: 30 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -30 }}
-          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-          className="max-w-5xl mx-auto mt-10"
-        >
-          <button
-            type="button"
-            onClick={() => { setQueueView(null); setQueueSearch(""); }}
-            className="rt-btn-ghost text-sm gap-2 mb-6"
-          >
-            <ArrowLeft size={16} /> Back to Team Submissions
-          </button>
-
-          <div className="rt-panel rounded-2xl overflow-hidden">
-            <div className="p-6 sm:p-8 border-b border-[rgb(var(--border))]">
-              <div className="flex items-center gap-3 mb-1">
-                {queueView === "reportees" ? <Users size={20} className="text-blue-500" /> : queueView === "submitted" ? <CheckCircle2 size={20} className="text-emerald-500" /> : <Clock size={20} className="text-amber-500" />}
-                <h2 className="text-xl font-bold tracking-tight text-[rgb(var(--text))]">
-                  {queueView === "reportees" ? "All Reportees" : queueView === "submitted" ? "Submitted" : "Pending Manager Review"}
-                </h2>
-                <span className="ml-auto text-sm font-mono text-[rgb(var(--muted))]">
-                  {filteredQueueEmployees.length} {filteredQueueEmployees.length === 1 ? "employee" : "employees"}
-                </span>
-              </div>
-              <p className="text-sm text-[rgb(var(--muted))]">
-                {queueView === "reportees"
-                  ? "All employees reporting to you in the current cycle."
-                  : queueView === "submitted"
-                    ? "Employees who have submitted their self-review."
-                    : "Submissions awaiting your review."}
-              </p>
-              <div className="relative mt-5">
-                <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
-                <input
-                  type="text"
-                  value={queueSearch}
-                  onChange={(e) => setQueueSearch(e.target.value)}
-                  placeholder="Search by name, email, or ID…"
-                  className="w-full rt-input py-2.5 pl-10 pr-4 text-sm rounded-xl"
-                  autoFocus
-                />
-              </div>
-            </div>
-
-            <div className="divide-y divide-[rgb(var(--border))]">
-              {filteredQueueEmployees.length > 0 ? filteredQueueEmployees.map((emp) => (
-                <button
-                  key={emp.id}
-                  type="button"
-                  onClick={() => {
-                    const matchRow = teamSubs.find((s) => String(s?.employee?.id || "") === emp.id);
-                    if (matchRow) setReviewModal({ open: true, row: matchRow });
-                  }}
-                  className="w-full text-left px-6 sm:px-8 py-4 hover:bg-[rgb(var(--surface-2)/.4)] transition-colors group flex items-center justify-between gap-4"
-                >
-                  <div className="flex items-center gap-4 min-w-0 flex-1">
-                    <div className="h-10 w-10 rounded-full bg-[rgb(var(--surface-2))] flex items-center justify-center flex-shrink-0">
-                      <UserCircle2 size={20} className="text-[rgb(var(--muted))]" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold text-[rgb(var(--text))] truncate group-hover:text-blue-500 transition-colors">{emp.name}</div>
-                      <div className="text-xs text-[rgb(var(--muted))] truncate mt-0.5">
-                        <span className="font-mono">{emp.id}</span> · {emp.email}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    <span className={[
-                      "text-[10px] font-semibold uppercase px-2.5 py-1 rounded-full border",
-                      emp.managerSubmitted
-                        ? "bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20"
-                        : emp.submitted
-                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20"
-                          : "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20",
-                    ].join(" ")}>
-                      {emp.managerSubmitted ? "Reviewed" : emp.submitted ? "Submitted" : "Pending"}
-                    </span>
-                    <ChevronRight size={14} className="text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))] transition-colors" />
-                  </div>
-                </button>
-              )) : (
-                <div className="text-sm text-[rgb(var(--muted))] text-center py-12">No employees found.</div>
-              )}
-            </div>
-          </div>
-        </motion.section>
-      ) : activeTab === "team" ? (
+      {activeTab === "team" ? (
         <motion.section
           key="team-tab"
           initial={{ opacity: 0, y: 14 }}
@@ -2911,150 +2740,13 @@ export default function ManagerPortal({ onLogout, auth }) {
           transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
         >
         <PortalWorkflowFrame>
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-          {(teamLoading && teamSubs.length === 0) || (teamInsightsLoading && teamInsightSourceRows.length === 0) ? (
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+          {teamLoading && teamSubs.length === 0 ? (
             <div className="xl:col-span-3 rt-panel-subtle rounded-lg p-6 text-sm text-[rgb(var(--muted))] animate-pulse">
-              Loading team submissions and manager insights…
+              Loading team submissions…
             </div>
           ) : null}
-          <div className="xl:col-span-3">
-            <ManagerCalibrationPanel teamRows={teamInsightSourceRows.length ? teamInsightSourceRows : teamSubs} />
-          </div>
-          <section className="xl:col-span-3 rt-panel p-6 sm:p-7">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="rounded-lg p-2 bg-emerald-500/10 text-emerald-500"><Target size={16} /></div>
-              <div>
-                <h2 className="font-bold tracking-tight text-[rgb(var(--text))]">Manager Insights</h2>
-                <p className="text-xs text-[rgb(var(--muted))] mt-0.5">Queue health, review velocity, and actionable pending load.</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-4">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Review Coverage</div>
-                <div className="mt-2 text-2xl font-bold text-[rgb(var(--text))]">{managerInsights.reviewedCoverage}%</div>
-              </div>
-              <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-4">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Pending Queue</div>
-                <div className="mt-2 text-2xl font-bold text-[rgb(var(--text))]">{managerInsights.pendingCoverage}%</div>
-              </div>
-              <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-4">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Avg Review Time</div>
-                <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-[rgb(var(--text))]">
-                  <Clock3 size={16} className="text-[rgb(var(--muted))]" />
-                  {managerInsights.avgTurnaroundHours}h
-                </div>
-              </div>
-              <div className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2)/.3)] p-4">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Reject Signals</div>
-                <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-[rgb(var(--text))]">
-                  <TrendingUp size={16} className="text-[rgb(var(--muted))]" />
-                  {managerInsights.rejectedCount}
-                </div>
-              </div>
-            </div>
-            <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="rt-panel-subtle p-4 rounded-lg">
-                <div className="rt-kicker">Queue Funnel</div>
-                <div className="mt-4 space-y-3">
-                  {managerInsights.queueFunnel.map((item) => (
-                    <div key={item.id} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs text-[rgb(var(--muted))]">
-                        <span>{item.label}</span>
-                        <span className="font-mono text-[rgb(var(--text))]">{item.value}</span>
-                      </div>
-                      <div className="h-2 rounded-full bg-[rgb(var(--surface-3))] overflow-hidden">
-                        <div
-                          className={`h-full ${item.colorClass}`}
-                          style={{ width: `${Math.round((item.value / managerInsights.maxFunnel) * 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="rt-panel-subtle p-4 rounded-lg">
-                <div className="rt-kicker">Pending Preview</div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {managerInsights.pendingPreview.length ? (
-                    managerInsights.pendingPreview.map((emp) => (
-                      <span
-                        key={`pending:${emp.id}`}
-                        className="inline-flex items-center gap-2 rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-1.5 text-xs"
-                      >
-                        <span className="font-semibold text-[rgb(var(--text))]">{emp.name}</span>
-                        <span className="font-mono text-[rgb(var(--muted))]">{emp.id}</span>
-                      </span>
-                    ))
-                  ) : (
-                    <div className="text-sm text-emerald-700 dark:text-emerald-300">No pending employee reviews.</div>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="mt-6 grid grid-cols-1 xl:grid-cols-3 gap-4">
-              <div className="rt-panel-subtle p-4 rounded-lg">
-                <div className="rt-kicker">Stream Granularity</div>
-                <div className="mt-3 space-y-2">
-                  {managerGranularity.streamRows.length ? (
-                    managerGranularity.streamRows.map((row) => (
-                      <div key={`stream:${row.name}`} className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-[rgb(var(--text))]">{row.name}</span>
-                          <span className="font-mono text-[rgb(var(--muted))]">{row.total}</span>
-                        </div>
-                        <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">
-                          Submitted {row.submittedRate}% • Reviewed {row.reviewedRate}%
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-sm text-[rgb(var(--muted))]">No stream metadata available.</div>
-                  )}
-                </div>
-              </div>
-              <div className="rt-panel-subtle p-4 rounded-lg">
-                <div className="rt-kicker">Band Granularity</div>
-                <div className="mt-3 space-y-2">
-                  {managerGranularity.bandRows.length ? (
-                    managerGranularity.bandRows.map((row) => (
-                      <div key={`band:${row.name}`} className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-[rgb(var(--text))]">{row.name}</span>
-                          <span className="font-mono text-[rgb(var(--muted))]">{row.total}</span>
-                        </div>
-                        <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">
-                          Submitted {row.submittedRate}% • Reviewed {row.reviewedRate}%
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-sm text-[rgb(var(--muted))]">No band metadata available.</div>
-                  )}
-                </div>
-              </div>
-              <div className="rt-panel-subtle p-4 rounded-lg">
-                <div className="rt-kicker">Top Employee Signals</div>
-                <div className="mt-3 space-y-2">
-                  {managerGranularity.topEmployees.length ? (
-                    managerGranularity.topEmployees.map((row, idx) => (
-                      <div key={`signal:${row.id}:${idx}`} className="rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2">
-                        <div className="flex items-center justify-between gap-2 text-xs">
-                          <span className="font-semibold text-[rgb(var(--text))] truncate">{row.name}</span>
-                          <span className="font-mono text-[rgb(var(--text))]">{row.score.toFixed(1)}</span>
-                        </div>
-                        <div className="mt-1 text-[11px] text-[rgb(var(--muted))]">
-                          {row.stream} • {row.band}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-sm text-[rgb(var(--muted))]">No scored submissions available yet.</div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
-          <section className="xl:col-span-2 rt-panel overflow-hidden">
+          <section className="xl:col-span-2 rt-panel overflow-hidden order-1">
             <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
               <div className="rt-section-header">
                 <h2 className="rt-section-title">Team Submissions</h2>
@@ -3186,35 +2878,89 @@ export default function ManagerPortal({ onLogout, auth }) {
             </div>
           </section>
 
-          <section className="rt-panel p-8">
+          <section className="xl:col-span-1 rt-panel p-6 sm:p-7 order-2">
             <h2 className="rt-section-title">Review Queue</h2>
             <p className="rt-section-subtitle mt-1">
-              Click a card to view employee details.
+              Filter the table or open a review directly — nothing is hidden behind another page.
             </p>
-            <div className="rt-portal-stat-grid mt-5">
+
+            <div className="mt-5 flex flex-col gap-2">
               {[
-                { key: "reportees", label: "Reportees", count: reporteeCount, icon: <Users size={18} className="text-blue-500" /> },
-                { key: "submitted", label: "Submitted", count: submittedCount, icon: <CheckCircle2 size={18} className="text-emerald-500" /> },
-                { key: "pending", label: "Pending review", count: pendingManagerReviewCount, icon: <Clock size={18} className="text-amber-500" /> },
-              ].map((card) => (
-                <button
-                  key={card.key}
-                  type="button"
-                  onClick={() => { setQueueView(card.key); setQueueSearch(""); }}
-                  className="rt-portal-stat-card text-left transition-all hover:border-[rgb(var(--accent))]/35 hover:shadow-md group"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">{card.label}</div>
-                      <div className="mt-2 text-2xl font-bold text-[rgb(var(--text))]">{card.count}</div>
+                { key: "ALL", label: "All reportees", count: reporteeCount, icon: <Users size={16} className="text-blue-500" /> },
+                { key: "EMPLOYEE_SUBMITTED", label: "Employee submitted", count: submittedCount, icon: <CheckCircle2 size={16} className="text-emerald-500" /> },
+                { key: "PENDING_MANAGER_REVIEW", label: "Pending your review", count: pendingManagerReviewCount, icon: <Clock size={16} className="text-amber-500" /> },
+              ].map((card) => {
+                const active = String(filter || "").toUpperCase() === card.key;
+                return (
+                  <button
+                    key={card.key}
+                    type="button"
+                    onClick={() => setFilter(card.key)}
+                    className={[
+                      "w-full rounded-xl border px-4 py-3 text-left transition-all",
+                      active
+                        ? "border-[rgb(var(--accent))]/40 bg-[rgb(var(--accent-soft))] shadow-sm"
+                        : "border-[rgb(var(--border))] bg-[rgb(var(--surface))] hover:border-[rgb(var(--border-strong))] hover:bg-[rgb(var(--surface-2))]/60",
+                    ].join(" ")}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {card.icon}
+                        <span className="text-sm font-medium text-[rgb(var(--text))] truncate">{card.label}</span>
+                      </div>
+                      <span className="text-xl font-bold tabular-nums text-[rgb(var(--text))] shrink-0">{card.count}</span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {card.icon}
-                      <ChevronRight size={14} className="text-[rgb(var(--muted))] group-hover:text-[rgb(var(--text))] transition-colors" />
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-5 border-t border-[rgb(var(--border))] pt-5">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                Quick access
+              </div>
+              <div className="mt-3 space-y-2 max-h-[min(420px,52vh)] overflow-y-auto pr-1">
+                {sidebarQueueEmployees.length ? sidebarQueueEmployees.map((emp) => {
+                  const matchRow = teamSubs.find((s) => String(s?.employee?.id || "") === emp.id);
+                  return (
+                    <div
+                      key={emp.id}
+                      className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-[rgb(var(--text))] truncate">{emp.name}</div>
+                          <div className="text-[11px] text-[rgb(var(--muted))] truncate mt-0.5">
+                            <span className="font-mono">{emp.id}</span>
+                            {emp.email ? ` · ${emp.email}` : ""}
+                          </div>
+                        </div>
+                        <span className={[
+                          "shrink-0 text-[10px] font-semibold uppercase px-2 py-1 rounded-full border",
+                          emp.managerSubmitted
+                            ? "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20"
+                            : emp.submitted
+                              ? "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 border-emerald-500/25"
+                              : "bg-amber-500/10 text-amber-800 dark:text-amber-200 border-amber-500/25",
+                        ].join(" ")}>
+                          {emp.managerSubmitted ? "Reviewed" : emp.submitted ? "Submitted" : "Pending"}
+                        </span>
+                      </div>
+                      {matchRow ? (
+                        <button
+                          type="button"
+                          onClick={() => setReviewModal({ open: true, row: matchRow })}
+                          className="mt-3 rt-btn-ghost text-xs gap-1.5 w-full justify-center"
+                        >
+                          <Eye size={13} /> Review submission
+                        </button>
+                      ) : null}
                     </div>
-                  </div>
-                </button>
-              ))}
+                  );
+                }) : (
+                  <div className="text-sm text-[rgb(var(--muted))] py-4 text-center">No employees in this filter.</div>
+                )}
+              </div>
             </div>
           </section>
           </div>
@@ -3255,8 +3001,8 @@ export default function ManagerPortal({ onLogout, auth }) {
               <div className="relative flex flex-col gap-3">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div>
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Super manager review</div>
-                    <div className="text-sm font-semibold text-[rgb(var(--text))]">You are reviewed as a reportee by your selected super manager.</div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Super admin review</div>
+                    <div className="text-sm font-semibold text-[rgb(var(--text))]">Your selected super admin reviews this in Admin Submissions.</div>
                   </div>
                   <span className={[
                     "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wider",
@@ -3275,7 +3021,7 @@ export default function ManagerPortal({ onLogout, auth }) {
             ) : null}
             {!selfReviewLocked && selfNeedsResubmission ? (
               <div className="mt-5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-200">
-                Your super manager requested changes. Please update your self review and submit again.
+                Your super admin requested changes. Please update your self review and submit again.
                 {selfLatestReviewComment ? (
                   <div className="mt-2 text-xs font-mono text-amber-900 dark:text-amber-100 break-words">
                     Feedback: {selfLatestReviewComment}
@@ -3296,27 +3042,27 @@ export default function ManagerPortal({ onLogout, auth }) {
 
             <div className="mt-6 rt-panel-subtle rounded-lg p-4">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
-                Super manager reviewer
+                Super admin reviewer
               </label>
               <p className="mt-1 text-xs text-[rgb(var(--muted))] leading-relaxed">
-                Select who will review you this cycle. They will see your submission in their Team queue like any other reportee.
+                Select who will review you this cycle. They will see your submission in Admin Submissions.
               </p>
               <select
                 className="rt-input w-full mt-3"
                 value={selfReviewingManagerId}
-                disabled={selfReviewLocked || superManagersLoading}
+                disabled={selfReviewLocked || superAdminReviewersLoading}
                 onChange={(e) => setSelfReviewingManagerId(e.target.value)}
               >
-                <option value="">{superManagersLoading ? "Loading managers…" : "Choose super manager…"}</option>
-                {superManagerOptions.map((m) => (
+                <option value="">{superAdminReviewersLoading ? "Loading super admins…" : "Choose super admin…"}</option>
+                {superAdminReviewerOptions.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}{m.email ? ` (${m.email})` : ""}
                   </option>
                 ))}
               </select>
-              {!superManagersLoading && superManagerOptions.length === 0 ? (
+              {!superAdminReviewersLoading && superAdminReviewerOptions.length === 0 ? (
                 <p className="mt-2 text-xs text-amber-700 dark:text-amber-200">
-                  No other managers found. Ask HR to register your super manager in the employee directory.
+                  No super admin reviewers found. Ask HR to register Super Admin portal roles in the employee directory.
                 </p>
               ) : null}
             </div>
@@ -3545,8 +3291,8 @@ export default function ManagerPortal({ onLogout, auth }) {
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">KPI Ratings (Employee)</div>
                     <div className="mt-2 space-y-2">
-                      {Object.keys(selectedRow.payload?.kpiRatings || {}).length ? (
-                        Object.entries(selectedRow.payload.kpiRatings).map(([id, v]) => (
+                      {selectedReviewKpiIds.length ? (
+                        Object.entries(selectedEmployeeKpiRatings).map(([id, v]) => (
                           <div key={id} className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
                               <div className="text-sm text-[rgb(var(--text))] truncate">{kpiIndex?.[id]?.title || id}</div>
@@ -3554,14 +3300,13 @@ export default function ManagerPortal({ onLogout, auth }) {
                                 <div className="text-[10px] text-[rgb(var(--muted))] font-mono">Weight: {kpiIndex[id].weight}</div>
                               ) : null}
                             </div>
-                            <div className="text-sm font-mono text-blue-200">{Number(v).toFixed(1)}</div>
+                            <div className="text-sm font-mono text-[rgb(var(--text))] text-right">
+                              <div>{formatPerformanceRating(v)}</div>
+                            </div>
                           </div>
                         ))
                       ) : (
-                        <div className="flex items-center justify-between gap-3 text-sm text-[rgb(var(--text))]">
-                          <span className="truncate">Defaulted (no self rating)</span>
-                          <span className="font-mono text-blue-200">2</span>
-                        </div>
+                        <div className="text-sm text-[rgb(var(--muted))]">No employee KPI ratings recorded.</div>
                       )}
                     </div>
                   </div>
@@ -3569,13 +3314,13 @@ export default function ManagerPortal({ onLogout, auth }) {
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Webknot Values (Employee)</div>
                     <div className="mt-2 space-y-2">
-                      {selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object" && Object.keys(selectedRow.payload.webknotValueRatings).length ? (
-                        Object.entries(selectedRow.payload.webknotValueRatings)
+                      {Object.keys(selectedEmployeeValueRatings).length ? (
+                        Object.entries(selectedEmployeeValueRatings)
                           .sort(([a], [b]) => String(a).localeCompare(String(b), undefined, { numeric: true }))
                           .map(([id, rating]) => (
                             <div key={String(id || "")} className="flex items-center justify-between gap-4">
                               <div className="text-sm text-[rgb(var(--text))] truncate">{valueLabelIndex[String(id)] || String(id || "")}</div>
-                              <div className="text-sm font-mono text-blue-200">{rating != null ? Number(rating).toFixed(1) : "—"}</div>
+                              <div className="text-sm font-mono text-[rgb(var(--text))] text-right">{formatPerformanceRating(rating)}</div>
                             </div>
                           ))
                       ) : Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
@@ -3585,10 +3330,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                           </div>
                         ))
                       ) : (
-                        <div className="flex items-center justify-between gap-3 text-sm text-[rgb(var(--text))]">
-                          <span className="truncate">Defaulted (no self rating)</span>
-                          <span className="font-mono text-blue-200">2.0</span>
-                        </div>
+                        <div className="text-sm text-[rgb(var(--muted))]">No employee value ratings recorded.</div>
                       )}
                     </div>
                   </div>
@@ -3634,13 +3376,13 @@ export default function ManagerPortal({ onLogout, auth }) {
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Webknot Values (Employee Reference)</div>
                     <div className="mt-2 space-y-2">
-                      {selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object" && Object.keys(selectedRow.payload.webknotValueRatings).length ? (
-                        Object.entries(selectedRow.payload.webknotValueRatings)
+                      {Object.keys(selectedEmployeeValueRatings).length ? (
+                        Object.entries(selectedEmployeeValueRatings)
                           .sort(([a], [b]) => String(a).localeCompare(String(b), undefined, { numeric: true }))
                           .map(([id, rating]) => (
                             <div key={`emp-ref-${String(id || "")}`} className="flex items-center justify-between gap-4 text-[13px]">
                               <div className="text-[rgb(var(--muted))] truncate">{valueLabelIndex[String(id)] || String(id || "")}</div>
-                              <div className="font-mono text-[rgb(var(--text))]">{rating != null ? Number(rating).toFixed(1) : "—"}</div>
+                              <div className="font-mono text-[rgb(var(--text))] text-right">{formatPerformanceRating(rating)}</div>
                             </div>
                           ))
                       ) : Array.isArray(selectedRow.payload?.webknotValues) && selectedRow.payload.webknotValues.length ? (
@@ -3658,9 +3400,12 @@ export default function ManagerPortal({ onLogout, auth }) {
 
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">KPI Ratings (Manager)</div>
+                    <p className="mt-2 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
+                      Rating scale: {performanceRatingScaleText()}
+                    </p>
                     <div className="mt-2 space-y-3">
-                      {Object.keys(selectedRow.payload?.kpiRatings || {}).length ? (
-                        Object.entries(selectedRow.payload.kpiRatings).map(([id]) => {
+                      {selectedReviewKpiIds.length ? (
+                        selectedReviewKpiIds.map((id) => {
                           const current = managerRatings?.[id];
                           const display =
                             typeof current === "number" && Number.isFinite(current) ? current : (current ?? "");
@@ -3669,28 +3414,33 @@ export default function ManagerPortal({ onLogout, auth }) {
                               <div className="text-sm text-[rgb(var(--text))]">
                                 {kpiIndex?.[id]?.title || id}
                               </div>
-                              <input
-                                type="number"
-                                min={1}
-                                max={5}
-                                step={0.1}
-                                value={display}
-                                onChange={(e) => {
-                                  const raw = String(e.target.value ?? "").trim();
-                                  const parsed = raw === "" ? null : Number.parseFloat(raw);
-                                  setManagerRatings((prev) => {
-                                    const next = { ...(prev || {}) };
-                                    if (parsed == null || !Number.isFinite(parsed)) {
-                                      delete next[id];
+                              <div className="flex flex-col items-end gap-1">
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={5}
+                                  step={0.1}
+                                  value={display}
+                                  onChange={(e) => {
+                                    const raw = String(e.target.value ?? "").trim();
+                                    const parsed = raw === "" ? null : Number.parseFloat(raw);
+                                    setManagerRatings((prev) => {
+                                      const next = { ...(prev || {}) };
+                                      if (parsed == null || !Number.isFinite(parsed)) {
+                                        delete next[id];
+                                        return next;
+                                      }
+                                      next[id] = Math.round(parsed * 10) / 10;
                                       return next;
-                                    }
-                                    next[id] = Math.round(parsed * 10) / 10;
-                                    return next;
-                                  });
-                                }}
-                                className="rt-input w-28 py-2 px-3 text-sm"
-                                placeholder="1-5"
-                              />
+                                    });
+                                  }}
+                                  className="rt-input w-28 py-2 px-3 text-sm"
+                                  placeholder="1-5"
+                                />
+                                {performanceRatingLabel(current) ? (
+                                  <span className="text-[10px] text-[rgb(var(--muted))]">{formatPerformanceRating(current)}</span>
+                                ) : null}
+                              </div>
                             </div>
                           );
                         })
@@ -3703,30 +3453,8 @@ export default function ManagerPortal({ onLogout, auth }) {
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Webknot Value Ratings (Manager)</div>
                     <div className="mt-2 space-y-3">
-                      {Array.from(
-                        new Set([
-                          ...Object.keys(
-                            selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object"
-                              ? selectedRow.payload.webknotValueRatings
-                              : {}
-                          ),
-                          ...(Array.isArray(selectedRow.payload?.webknotValues)
-                            ? selectedRow.payload.webknotValues.map((x) => String(x || "").trim())
-                            : []),
-                        ].filter(Boolean))
-                      ).length ? (
-                        Array.from(
-                          new Set([
-                            ...Object.keys(
-                              selectedRow.payload?.webknotValueRatings && typeof selectedRow.payload.webknotValueRatings === "object"
-                                ? selectedRow.payload.webknotValueRatings
-                                : {}
-                            ),
-                            ...(Array.isArray(selectedRow.payload?.webknotValues)
-                              ? selectedRow.payload.webknotValues.map((x) => String(x || "").trim())
-                              : []),
-                          ].filter(Boolean))
-                        )
+                      {selectedReviewValueIds.length ? (
+                        selectedReviewValueIds
                           .sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }))
                           .map((id) => {
                             const current = managerValueRatings?.[id];
@@ -3782,9 +3510,9 @@ export default function ManagerPortal({ onLogout, auth }) {
                         disabled={savingReview}
                         context={{
                           employeeName: selectedRow.employee?.name,
-                          employeeKpiRatings: selectedRow.payload?.kpiRatings || {},
+                          employeeKpiRatings: selectedEmployeeKpiRatings,
                           managerKpiRatings: managerRatings,
-                          employeeValueRatings: selectedRow.payload?.webknotValueRatings || {},
+                          employeeValueRatings: selectedEmployeeValueRatings,
                           managerValueRatings: managerValueRatings,
                           rejectFeedback:
                             selectedRow.raw?.managerReview?.comments ||
@@ -3921,7 +3649,6 @@ export default function ManagerPortal({ onLogout, auth }) {
       ) : null}
 
     </AppShell>
-    <PortalSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
     <Toast toast={toast} onDismiss={() => setToast(null)} durationMs={2800} />
     </>

@@ -4,11 +4,10 @@ import { normalizeSubmissionWindow, resolveSubmissionAccess } from "../utils/sub
 import { getAuthHeader } from "./auth";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, toHttpError, withCsrfHeaders } from "./http";
 import { fetchSubmissionCycleByKey } from "./monthly-submissions";
+import { currentReviewCycleKey } from "../utils/reviewCycles";
 
 function monthCycleKey(date = new Date()) {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  return `${yyyy}-${mm}`;
+  return currentReviewCycleKey(date) || "";
 }
 
 function normalizeScope(role) {

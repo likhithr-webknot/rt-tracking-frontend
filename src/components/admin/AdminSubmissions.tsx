@@ -1,10 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, RefreshCw, User, X, XCircle } from "lucide-react";
+import { CheckCircle2, User, X, XCircle } from "lucide-react";
 import {
   fetchAdminAllSubmissions,
   fetchSubmissionCycles,
   formatYearMonth,
   normalizeMonthlySubmission,
+  resolveSubmissionKpiRatings,
+  resolveSubmissionValueRatings,
+  resolveManagerKpiRatings,
+  resolveManagerValueRatings,
   fetchMonthlySubmissionScoreBreakdown,
   submitAdminReviewDecision,
 } from "../../api/monthly-submissions";
@@ -25,6 +29,20 @@ import {
   submissionMatchesStatusFilter,
   SUBMISSION_STATUS_FILTER_OPTIONS,
 } from "../../utils/submissionStatus";
+import { isHrPortalUser } from "../../utils/hrRatingsFilter";
+import { isSuperAdminPortalUser } from "../../utils/portalAccess";
+import { formatPerformanceRating } from "../../utils/ratingLabels";
+
+function resolveAssignedSuperAdminReviewerId(item) {
+  const sub = item?.submission ?? item?.raw ?? {};
+  const payload = sub?.payload && typeof sub.payload === "object" ? sub.payload : sub;
+  return String(
+    payload.reviewingManagerId ??
+    payload.managerId ??
+    sub.reviewingManagerId ??
+    ""
+  ).trim();
+}
 
 function formatMonthLabel(monthKey) {
   const m = normalizeYearMonth(monthKey);
@@ -59,10 +77,11 @@ function formatDateTimeLabel(raw) {
   }
 }
 
-function computeLocalScoreBreakdown(submission) {
+function computeLocalScoreBreakdown(submission, raw) {
+  const source = { payload: submission, raw: raw ?? submission?.raw };
   return computeSubmissionScoreBreakdown({
-    managerKpiRatings: submission?.managerEvaluation?.kpiRatings,
-    managerWebknotValueRatings: submission?.managerEvaluation?.webknotValueRatings,
+    managerKpiRatings: resolveManagerKpiRatings(source),
+    managerWebknotValueRatings: resolveManagerValueRatings(source),
     certifications: submission?.certifications,
     recognitionsCount: submission?.recognitionsCount,
     techShowcase: submission?.techShowcase,
@@ -126,22 +145,27 @@ function normalizeAdminSubmissions(data, employeeLookup) {
         ""
       ).trim().toUpperCase();
       const rawReviewStatus = String(submission?.reviewStatus ?? payload?.reviewStatus ?? obj?.reviewStatus ?? status).trim().toUpperCase() || "—";
-      /* After resubmission, stale rejection managerReview / adminReview
-         objects may still be present in the server response.  We ignore
-         them when reviewStatus has been reset to SUBMITTED.               */
-      const isResubmitted = status === "SUBMITTED" && (rawReviewStatus.includes("REJECT") || rawReviewStatus.includes("NEEDS_REVIEW"));
-      /* Show "SUBMITTED" instead of stale rejection status after resubmission */
-      const reviewStatus = isResubmitted ? "SUBMITTED" : rawReviewStatus;
       const rawManagerReviewAction = String(
         submission?.managerReview?.action || obj?.managerReview?.action || payload?.managerReview?.action || ""
       ).trim().toUpperCase();
+      const rawAdminReviewAction = String(
+        submission?.adminReview?.action || obj?.adminReview?.action || payload?.adminReview?.action || ""
+      ).trim().toUpperCase();
+      /* After employee resubmits, reviewStatus becomes SUBMITTED but stale
+         reject objects may linger — treat that as a fresh submission. */
+      const isResubmitted =
+        status === "SUBMITTED" &&
+        rawReviewStatus === "SUBMITTED" &&
+        (rawManagerReviewAction === "REJECT" || rawAdminReviewAction === "REJECT");
+      const reviewStatus = isResubmitted ? "SUBMITTED" : rawReviewStatus;
       const staleManagerReject = isResubmitted && rawManagerReviewAction === "REJECT";
+      const needsManagerRework = rawReviewStatus === "NEEDS_MANAGER_REVIEW";
       const hasManagerEvaluation = Boolean(
         submission?.managerEvaluation ||
         obj?.managerEvaluation ||
         payload?.managerEvaluation
       );
-      const managerReady = staleManagerReject
+      const managerReady = needsManagerRework || staleManagerReject
         ? false
         : Boolean(
             hasManagerEvaluation ||
@@ -199,7 +223,7 @@ function normalizeAdminSubmissions(data, employeeLookup) {
     });
 }
 
-export default function AdminSubmissions({ onLogout, employees: employeesProp }) {
+export default function AdminSubmissions({ onLogout, employees: employeesProp, auth = null }) {
   const [month, setMonth] = useState(() => formatYearMonth(new Date()));
   const [statusFilter, setStatusFilter] = useState("all");
   const [onlyManagerSubmitted, setOnlyManagerSubmitted] = useState(false);
@@ -275,12 +299,21 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
   }, [month, statusFilter]);
 
   const visibleItems = useMemo(() => {
+    const viewerId = String(auth?.employeeId ?? auth?.empId ?? auth?.id ?? "").trim();
+    const restrictAssignedSelfReviews = isSuperAdminPortalUser(auth) && !isHrPortalUser(auth);
     return items.filter((it) => {
       if (onlyManagerSubmitted && !it.managerReady) return false;
       if (statusFilter !== "all" && !submissionMatchesStatusFilter(it, statusFilter)) return false;
+      if (restrictAssignedSelfReviews) {
+        const type = String(it.submissionType || it.entryType || "").toUpperCase();
+        if (type.includes("MANAGER_SELF")) {
+          const assigned = resolveAssignedSuperAdminReviewerId(it);
+          if (assigned && assigned !== viewerId) return false;
+        }
+      }
       return true;
     });
-  }, [items, onlyManagerSubmitted, statusFilter]);
+  }, [auth, items, onlyManagerSubmitted, statusFilter]);
 
   const statusStats = useMemo(() => {
     const counts = { submitted: 0, awaiting: 0, managerDone: 0, returned: 0, approved: 0 };
@@ -301,6 +334,50 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
     return type.includes("MANAGER_SELF");
   }, [reviewModal?.item]);
 
+  const reviewModalEmployeeKpiRatings = useMemo(() => {
+    if (!reviewModal?.item) return {};
+    return resolveSubmissionKpiRatings({
+      payload: reviewModal.item.submission,
+      raw: reviewModal.item.submission?.raw ?? reviewModal.item.raw,
+    });
+  }, [reviewModal?.item]);
+
+  const reviewModalEmployeeValueRatings = useMemo(() => {
+    if (!reviewModal?.item) return {};
+    return resolveSubmissionValueRatings({
+      payload: reviewModal.item.submission,
+      raw: reviewModal.item.submission?.raw ?? reviewModal.item.raw,
+    });
+  }, [reviewModal?.item]);
+
+  const reviewModalManagerKpiRatings = useMemo(() => {
+    if (!reviewModal?.item) return {};
+    return resolveManagerKpiRatings({
+      payload: reviewModal.item.submission,
+      raw: reviewModal.item.submission?.raw ?? reviewModal.item.raw,
+    });
+  }, [reviewModal?.item]);
+
+  const reviewModalManagerValueRatings = useMemo(() => {
+    if (!reviewModal?.item) return {};
+    return resolveManagerValueRatings({
+      payload: reviewModal.item.submission,
+      raw: reviewModal.item.submission?.raw ?? reviewModal.item.raw,
+    });
+  }, [reviewModal?.item]);
+
+  const reviewModalManagerComments = useMemo(() => {
+    if (!reviewModal?.item) return "";
+    const sub = reviewModal.item.submission ?? {};
+    const raw = sub?.raw ?? reviewModal.item.raw ?? {};
+    return String(
+      sub?.managerReview?.comments ??
+      raw?.managerSelfReviewEvalComments ??
+      sub?.managerEvaluation?.comments ??
+      ""
+    ).trim();
+  }, [reviewModal?.item]);
+
   useEffect(() => {
     if (!reviewModal.open || !reviewModal.item?.submission) {
       setScoreBreakdown(null);
@@ -310,6 +387,10 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
     }
 
     const controller = new AbortController();
+    const ratingSource = {
+      payload: reviewModal.item.submission,
+      raw: reviewModal.item.submission?.raw ?? reviewModal.item.raw,
+    };
     const payload = {
       month: reviewModal.item.month,
       cycleKey: reviewModal.item.submission?.cycleKey,
@@ -318,8 +399,8 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
       submissionType: reviewModal.item.submission?.submissionType ?? reviewModal.item.submissionType,
       targetRole: reviewModal.item.submission?.targetRole,
       certifications: reviewModal.item.submission?.certifications,
-      kpiRatings: reviewModal.item.submission?.managerEvaluation?.kpiRatings,
-      webknotValueRatings: reviewModal.item.submission?.managerEvaluation?.webknotValueRatings,
+      kpiRatings: resolveManagerKpiRatings(ratingSource),
+      webknotValueRatings: resolveManagerValueRatings(ratingSource),
       recognitionsCount: reviewModal.item.submission?.recognitionsCount,
       techShowcase: reviewModal.item.submission?.techShowcase,
     };
@@ -334,7 +415,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
       .catch((err) => {
         if (controller.signal.aborted) return;
         setScoreBreakdownError(err?.message || "Failed to load score breakdown.");
-        setScoreBreakdown(computeLocalScoreBreakdown(reviewModal.item.submission));
+        setScoreBreakdown(computeLocalScoreBreakdown(reviewModal.item.submission, reviewModal.item.raw));
       })
       .finally(() => {
         if (!controller.signal.aborted) setScoreBreakdownLoading(false);
@@ -346,7 +427,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
   const scoringBreakdown = useMemo(() => {
     if (scoreBreakdown) return scoreBreakdown;
     if (!reviewModal.item?.submission) return null;
-    return computeLocalScoreBreakdown(reviewModal.item.submission);
+    return computeLocalScoreBreakdown(reviewModal.item.submission, reviewModal.item.raw);
   }, [reviewModal.item?.submission, scoreBreakdown]);
 
   const [scoreWeightPercents, setScoreWeightPercents] = useState(() => getResolvedScoreWeights().percents);
@@ -516,18 +597,6 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
               Manager submitted only
             </span>
           </label>
-
-          <button
-            onClick={() => reload()}
-            disabled={loading}
-            className={[
-              "rt-btn-ghost transition-all",
-              loading ? "opacity-60 cursor-not-allowed" : "",
-            ].join("")}
-            title="Refresh"
-          >
-            <RefreshCw size={18} /> {loading ? "Loading…" : "Refresh"}
-          </button>
         </div>
       </AdminPageHeader>
 
@@ -595,7 +664,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                     </span>
                     {String(it.submissionType || it.entryType || "").toUpperCase().includes("MANAGER_SELF") ? (
                       <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
-                        Super manager
+                        Super admin
                       </div>
                     ) : null}
                   </td>
@@ -674,7 +743,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
               <div className="mt-3 flex flex-wrap gap-2">
                 {reviewModalIsManagerSelf ? (
                   <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/20">
-                    Super manager path
+                    Super admin review
                   </span>
                 ) : null}
                 {reviewModal.item.submission?.managerReview?.reviewedBy ? (
@@ -724,11 +793,27 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                     <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Self Review</div>
                     <div className="mt-2 whitespace-pre-wrap">{String(reviewModal.item.submission?.selfReviewText || "—")}</div>
                   </div>
+                  {Array.isArray(reviewModal.item.submission?.projectIds) &&
+                  reviewModal.item.submission.projectIds.length ? (
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Selected Projects</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {reviewModal.item.submission.projectIds.map((projectId) => (
+                          <span
+                            key={String(projectId)}
+                            className="inline-flex rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-1 text-xs"
+                          >
+                            {String(projectId)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div className="rt-panel-subtle rounded-md p-3 space-y-2">
                       <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Employee KPI Ratings</div>
-                      {Object.entries(reviewModal.item.submission?.kpiRatings || {}).length ? (
-                        Object.entries(reviewModal.item.submission.kpiRatings).map(([kpiId, rating]) => (
+                      {Object.entries(reviewModalEmployeeKpiRatings).length ? (
+                        Object.entries(reviewModalEmployeeKpiRatings).map(([kpiId, rating]) => (
                           <div key={kpiId} className="flex items-center justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <div className="text-sm truncate">{kpiLabel(kpiId)}</div>
@@ -737,16 +822,13 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                           </div>
                         ))
                       ) : (
-                        <div className="flex items-center justify-between gap-2 text-sm text-[rgb(var(--text))]">
-                          <span className="truncate">Defaulted (no self rating)</span>
-                          <span className="font-mono">2.0</span>
-                        </div>
+                        <div className="text-xs text-[rgb(var(--muted))]">No employee KPI ratings recorded.</div>
                       )}
                     </div>
                     <div className="rt-panel-subtle rounded-md p-3 space-y-2">
                       <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Employee Values Ratings</div>
-                      {Object.entries(reviewModal.item.submission?.webknotValueRatings || {}).length ? (
-                        Object.entries(reviewModal.item.submission.webknotValueRatings).map(([valueId, rating]) => (
+                      {Object.entries(reviewModalEmployeeValueRatings).length ? (
+                        Object.entries(reviewModalEmployeeValueRatings).map(([valueId, rating]) => (
                           <div key={valueId} className="flex items-center justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <div className="text-sm truncate">{valueLabel(valueId)}</div>
@@ -755,10 +837,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                           </div>
                         ))
                       ) : (
-                        <div className="flex items-center justify-between gap-2 text-sm text-[rgb(var(--text))]">
-                          <span className="truncate">Defaulted (no self rating)</span>
-                          <span className="font-mono">2.0</span>
-                        </div>
+                        <div className="text-xs text-[rgb(var(--muted))]">No employee value ratings recorded.</div>
                       )}
                     </div>
                   </div>
@@ -812,10 +891,10 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                     <div className="rt-panel-subtle rounded-lg p-4 space-y-2">
                       <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Self Review</div>
                       <p className="text-sm text-[rgb(var(--muted))]">
-                        This entry is the manager&apos;s own self review. Admins review and approve directly; there is no separate manager evaluation layer.
+                        This entry is a manager or admin self review. The assigned super admin reviews and approves directly in this queue.
                       </p>
                       <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
-                        Super manager path
+                        Super admin review
                       </div>
                     </div>
                   ) : (
@@ -825,13 +904,13 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                         <div>
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Ratings</div>
                           <div className="mt-2 space-y-1">
-                            {Object.entries(reviewModal.item.submission?.managerEvaluation?.kpiRatings || {}).length ? (
-                              Object.entries(reviewModal.item.submission.managerEvaluation.kpiRatings).map(([kpiId, rating]) => (
+                            {Object.entries(reviewModalManagerKpiRatings).length ? (
+                              Object.entries(reviewModalManagerKpiRatings).map(([kpiId, rating]) => (
                                 <div key={kpiId} className="flex items-center justify-between gap-2">
                                   <div className="flex-1 min-w-0">
                                     <div className="truncate">{kpiLabel(kpiId)}</div>
                                   </div>
-                                  <span className="font-mono">{Number(rating).toFixed(1)}</span>
+                                  <span className="font-mono">{formatPerformanceRating(rating)}</span>
                                 </div>
                               ))
                             ) : (
@@ -842,13 +921,13 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                         <div>
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Value Ratings</div>
                           <div className="mt-2 space-y-1">
-                            {Object.entries(reviewModal.item.submission?.managerEvaluation?.webknotValueRatings || {}).length ? (
-                              Object.entries(reviewModal.item.submission.managerEvaluation.webknotValueRatings).map(([valueId, rating]) => (
+                            {Object.entries(reviewModalManagerValueRatings).length ? (
+                              Object.entries(reviewModalManagerValueRatings).map(([valueId, rating]) => (
                                 <div key={valueId} className="flex items-center justify-between gap-2">
                                   <div className="flex-1 min-w-0">
                                     <div className="truncate">{valueLabel(valueId)}</div>
                                   </div>
-                                  <span className="font-mono">{Number(rating).toFixed(1)}</span>
+                                  <span className="font-mono">{formatPerformanceRating(rating)}</span>
                                 </div>
                               ))
                             ) : (
@@ -856,10 +935,10 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp })
                             )}
                           </div>
                         </div>
-                        {String(reviewModal.item.submission?.managerReview?.comments || "").trim() ? (
+                        {reviewModalManagerComments ? (
                           <div>
                             <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Comments</div>
-                            <div className="mt-2 whitespace-pre-wrap">{String(reviewModal.item.submission?.managerReview?.comments || "")}</div>
+                            <div className="mt-2 whitespace-pre-wrap">{reviewModalManagerComments}</div>
                           </div>
                         ) : null}
                       </div>

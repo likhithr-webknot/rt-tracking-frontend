@@ -10,7 +10,6 @@ type AdminPageHeaderProps = {
   className?: string;
 };
 
-/** Admin pages use the same accent header as employee/manager portals. */
 export default function AdminPageHeader({
   title,
   subtitle,
@@ -39,10 +38,11 @@ type AdminPageShellProps = {
 export function AdminPageShell({
   children,
   className = "",
-  maxWidth = "max-w-7xl",
+  maxWidth = "",
 }: AdminPageShellProps) {
+  const layoutClass = maxWidth ? `${maxWidth} mx-auto w-full` : "w-full";
   return (
-    <PortalWorkflowFrame className={["w-full animate-in fade-in duration-500", maxWidth, className].filter(Boolean).join(" ")}>
+    <PortalWorkflowFrame className={[layoutClass, className].filter(Boolean).join(" ")}>
       {children}
     </PortalWorkflowFrame>
   );

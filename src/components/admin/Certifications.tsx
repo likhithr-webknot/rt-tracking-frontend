@@ -7,7 +7,9 @@ import EntityCsvToolbar from "../shared/EntityCsvToolbar";
 import { exportCertificationsCsv } from "../../utils/entityCsvExport";
 import ConfirmDialog from "../shared/ConfirmDialog";
 import ModalOverlay from "../shared/ModalOverlay";
+import ListPaginationBar from "../shared/ListPaginationBar";
 import CursorPagination from "../shared/CursorPagination";
+import { useClientPagination } from "../../hooks/useClientPagination";
 
 function extractCertificationName(raw) {
   if (typeof raw === "string") return raw.trim();
@@ -95,6 +97,11 @@ export default function Certifications({
     if (!q) return catalog;
     return catalog.filter((item) => item.name.toLowerCase().includes(q));
   }, [catalog, query]);
+  const listPagination = useClientPagination(filteredCatalog, {
+    pageSize: 20,
+    pageSizeOptions: [20, 50, 100],
+    resetKey: query,
+  });
   const listedCount = useMemo(
     () => catalog.filter((item) => Boolean(item?.listed)).length,
     [catalog]
@@ -178,7 +185,7 @@ export default function Certifications({
         </div>
 
         {/* ── Desktop table ── */}
-        <div className="rt-panel overflow-hidden hidden lg:block">
+        <div className="pulse-surface overflow-hidden hidden lg:block">
           <table className="w-full text-left">
             <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
               <tr>
@@ -188,7 +195,7 @@ export default function Certifications({
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgb(var(--border))]">
-              {filteredCatalog.map((item) => (
+              {listPagination.slice.map((item) => (
                 <tr key={String(item.rowKey)} className="hover:bg-[rgb(var(--surface-2))]/50 transition-colors group">
                   <td className="px-6 py-4">
                     <div className="font-semibold text-[rgb(var(--text))] tracking-tight">{item.name}</div>
@@ -271,11 +278,24 @@ export default function Certifications({
               ) : null}
             </tbody>
           </table>
+          {listPagination.show ? (
+            <ListPaginationBar
+              rangeLabel={listPagination.rangeLabel}
+              page={listPagination.page}
+              maxPage={listPagination.maxPage}
+              pageSize={listPagination.pageSize}
+              pageSizeOptions={listPagination.pageSizeOptions}
+              loading={catalogLoading}
+              onPageChange={listPagination.setPage}
+              onPageSizeChange={listPagination.setPageSize}
+            />
+          ) : null}
         </div>
 
         {/* ── Mobile cards ── */}
-        <div className="lg:hidden space-y-3">
-          {filteredCatalog.map((item) => (
+        <div className="pulse-surface overflow-hidden lg:hidden">
+          <div className="space-y-3 p-4">
+          {listPagination.slice.map((item) => (
             <div key={String(item.rowKey)} className="rt-panel p-4 flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="font-semibold text-[rgb(var(--text))] tracking-tight truncate">{item.name}</div>
@@ -337,7 +357,22 @@ export default function Certifications({
             </div>
           ))}
           {filteredCatalog.length === 0 ? (
-            <div className="rt-panel p-8 text-center text-[rgb(var(--muted))] text-sm">No certifications to show.</div>
+            <div className="rounded-xl border border-dashed border-[rgb(var(--border))] p-8 text-center text-[rgb(var(--muted))] text-sm">
+              No certifications to show.
+            </div>
+          ) : null}
+          </div>
+          {listPagination.show ? (
+            <ListPaginationBar
+              rangeLabel={listPagination.rangeLabel}
+              page={listPagination.page}
+              maxPage={listPagination.maxPage}
+              pageSize={listPagination.pageSize}
+              pageSizeOptions={listPagination.pageSizeOptions}
+              loading={catalogLoading}
+              onPageChange={listPagination.setPage}
+              onPageSizeChange={listPagination.setPageSize}
+            />
           ) : null}
         </div>
       </section>
@@ -528,7 +563,7 @@ export default function Certifications({
       />
 
       {pager ? (
-        <div className="pt-4">
+        <div className="pt-2">
           <CursorPagination
             canPrev={Boolean(pager.canPrev)}
             canNext={Boolean(pager.canNext)}

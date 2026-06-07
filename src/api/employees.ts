@@ -2,6 +2,8 @@ import type { ApiOptions } from "../types/api-options";
 import { formatEmployeeBandCode, formatEmployeeDesignation } from "./band-stream-directory";
 import type { PromotionBandType } from "../utils/careerPromotion";
 import { getAuthHeader } from "./auth";
+import { isSuperAdminEmployee } from "../utils/portalAccess";
+import { formatPortalRoleLabel, resolvePortalRoleLabel } from "../utils/portalRole";
 import { todayWebtrakDate, toWebtrakDate } from "../utils/webtrakDate";
 import {
   buildApiUrl,
@@ -72,6 +74,20 @@ export function normalizeEmployees(data) {
     const dbId = String(e.id ?? e.userId ?? e.user_id ?? "").trim();
     const primaryId = empId || dbId || `EMP_${i}`;
     const userIdRaw = String(e.userId ?? e.user_id ?? e.appUserId ?? e.accountId ?? "").trim();
+
+    const rawDesignation = String(e.designation ?? e.title ?? e.jobTitle ?? "").trim();
+    const rawRoleField = String(e.role ?? "").trim();
+    const portalRole =
+      resolvePortalRoleLabel(
+        e.empRole,
+        e.portalRole,
+        formatPortalRoleLabel(rawRoleField) ? rawRoleField : null,
+        e.userRole,
+      ) || "Employee";
+    const jobTitle =
+      rawDesignation ||
+      (rawRoleField && !formatPortalRoleLabel(rawRoleField) ? rawRoleField : "");
+
     return {
       id: primaryId,
       /** Webtrak path key for PUT/DELETE — always the HR empId when the API provides it. */
@@ -80,16 +96,14 @@ export function normalizeEmployees(data) {
       userId: userIdRaw && userIdRaw !== primaryId ? userIdRaw : dbId && dbId !== primaryId ? dbId : "",
       name: rawName || nameFromEmail(e.email ?? e.employeeEmail ?? e.mail) || "Unknown",
       email: String(e.email ?? e.employeeEmail ?? e.mail ?? ""),
-      role: String(e.empRole ?? e.portalRole ?? e.role ?? e.userRole ?? "Employee"),
-      empRole: String(e.empRole ?? e.portalRole ?? e.role ?? e.userRole ?? "Employee"),
+      role: portalRole,
+      empRole: portalRole,
       userType: String(e.userType ?? e.type ?? "").trim(),
       workMode: String(e.workMode ?? "").trim(),
       phoneNumber: String(e.phoneNumber ?? e.phone ?? "").trim(),
       designation:
-        formatEmployeeDesignation(
-          e.designation ?? e.title ?? e.jobTitle ?? e.empRole ?? "",
-          e.band ?? e.level ?? "",
-        ) || String(e.designation ?? e.title ?? e.jobTitle ?? e.empRole ?? "").trim(),
+        formatEmployeeDesignation(jobTitle, e.band ?? e.level ?? "") ||
+        jobTitle,
       band: formatEmployeeBandCode(e.band ?? e.level ?? "") || String(e.band ?? e.level ?? "B4").trim() || "B4",
       stream: String(e.department ?? e.stream ?? e.context ?? ""),
       project: String(e.project ?? e.projectName ?? e.account ?? e.client ?? ""),
@@ -122,7 +136,9 @@ export function normalizeEmployees(data) {
  * when the API sends ROLE_* enums, title case, or non-standard labels.
  */
 export function resolveRoleStatsBucket(empLike) {
-  const raw = String(empLike?.empRole ?? empLike?.role ?? empLike?.userRole ?? "").trim();
+  const raw = String(
+    empLike?.empRole ?? empLike?.portalRole ?? empLike?.userRole ?? empLike?.role ?? "",
+  ).trim();
   const key = raw.toLowerCase().replace(/^role_/, "");
   if (key === "admin" || key.includes("admin")) return "admin";
   if (key === "manager" || key.includes("manager")) return "manager";
@@ -194,9 +210,9 @@ export async function fetchEmployees({ limit = null, cursor = null, signal } = {
   // Prefer paged employees/users first. Avoid paginated employee-profile here — many stacks return
   // only the current user for that route, which makes the directory look like a single-employee org.
   const endpoints = [
-    `/api/v1/employee-profile?${pageQ}`,
     `/api/v1/employees?${pageQ}`,
     `/api/v1/users?${pageQ}`,
+    `/api/v1/employee-profile?${pageQ}`,
     `/api/v1/employees?${offsetQ}`,
     `/api/v1/employees`,
   ];
@@ -247,7 +263,7 @@ export function toWebtrakUserCreatePayload(payload) {
   const email = String(p.email ?? "").trim().toLowerCase();
   const portalRole = String(p.empRole ?? p.portalRole ?? p.role ?? "Employee").trim() || "Employee";
   const department = String(p.stream ?? p.department ?? "").trim() || null;
-  const designation = String(p.designation ?? "").trim() || portalRole;
+  const designation = String(p.designation ?? p.jobTitle ?? "").trim();
   const userType = (String(p.userType ?? "FULLTIME").trim().toUpperCase() || "FULLTIME");
   const workMode = (String(p.workMode ?? "HYBRID").trim().toUpperCase() || "HYBRID");
   const startDate =
@@ -332,7 +348,7 @@ export function toWebtrakUserProfileUpdatePayload(payload) {
   const p = payload && typeof payload === "object" ? payload : {};
   const name = String(p.name ?? p.employeeName ?? "").trim();
   const email = String(p.email ?? "").trim().toLowerCase();
-  const portalRole = String(p.portalRole ?? p.empRole ?? p.role ?? "").trim();
+  const portalRole = String(p.portalRole ?? p.empRole ?? "").trim();
   const designation = String(p.designation ?? p.jobTitle ?? "").trim();
   const department = String(p.department ?? p.stream ?? "").trim();
   const phoneNumber = String(p.phoneNumber ?? p.phone ?? "").trim();
@@ -664,6 +680,23 @@ export function normalizeManagers(data) {
     };
   });
 }
+export function normalizeSuperAdminReviewers(data) {
+  return normalizeEmployees(data)
+    .filter((emp) => isSuperAdminEmployee(emp))
+    .map((emp) => ({
+      id: String(emp?.id ?? emp?.empId ?? emp?.employeeId ?? "").trim(),
+      name: String(emp?.name ?? "").trim() || String(emp?.email ?? "").trim() || "Super Admin",
+      email: String(emp?.email ?? "").trim(),
+    }))
+    .filter((row) => Boolean(row.id));
+}
+
+/** Super Admin portal accounts eligible to review manager/admin self-reviews. */
+export async function fetchSuperAdminReviewers({ signal } = {} as ApiOptions) {
+  const rows = await fetchEmployees({ signal });
+  return normalizeSuperAdminReviewers(rows);
+}
+
 export async function fetchManagers({ signal } = {} as ApiOptions) {
   const auth = getAuthHeader();
   const endpoints = [
