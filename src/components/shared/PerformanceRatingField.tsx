@@ -65,15 +65,19 @@ export function DecimalPerformanceRatingInput({
   value,
   onChange,
   disabled = false,
-  className = "rt-input w-28 py-2 px-3 text-sm",
+  className = "rt-input w-full max-w-[6.5rem] py-2 px-3 text-sm text-center tabular-nums",
   placeholder = "1.0 – 5.0",
-  showLabel = true,
+  showLabel = false,
 }: DecimalInputProps) {
   const parsed = parseDecimalPerformanceRating(value);
   const display = parsed == null ? "" : String(parsed);
+  const ratingTitle =
+    parsed != null && performanceRatingLabel(parsed)
+      ? formatPerformanceRating(parsed)
+      : "Enter a score from 1.0 to 5.0";
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="w-full max-w-[6.5rem]">
       <input
         type="number"
         min={1}
@@ -81,6 +85,8 @@ export function DecimalPerformanceRatingInput({
         step={0.1}
         value={display}
         disabled={disabled}
+        title={ratingTitle}
+        aria-label={ratingTitle}
         onWheel={preventWheelInputChange}
         onChange={(e) => {
           const raw = String(e.target.value ?? "").trim();
@@ -90,7 +96,9 @@ export function DecimalPerformanceRatingInput({
         placeholder={placeholder}
       />
       {showLabel && parsed != null && performanceRatingLabel(parsed) ? (
-        <span className="text-[10px] text-[rgb(var(--muted))]">{formatPerformanceRating(parsed)}</span>
+        <span className="mt-1 block text-center text-[10px] leading-tight text-[rgb(var(--muted))]">
+          {performanceRatingLabel(parsed)}
+        </span>
       ) : null}
     </div>
   );

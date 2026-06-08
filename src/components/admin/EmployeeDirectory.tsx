@@ -61,21 +61,17 @@ import {
   normalizePromotionErrorMessage,
 } from "../../utils/careerPromotion";
 
-function portalRoleBadgeClass(role) {
+function portalRoleVariant(role) {
   const r = String(role ?? "Employee").trim() || "Employee";
-  if (r === "Super Admin" || r === "Admin") {
-    return "bg-amber-500/10 text-amber-800 dark:text-amber-200 border-amber-500/25";
-  }
-  if (r === "HR") {
-    return "bg-violet-500/10 text-violet-800 dark:text-violet-200 border-violet-500/25";
-  }
-  if (r === "Finance") {
-    return "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 border-emerald-500/25";
-  }
-  if (r === "Manager") {
-    return "bg-blue-500/10 text-blue-800 dark:text-blue-200 border-blue-500/25";
-  }
-  return "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]";
+  if (r === "Super Admin" || r === "Admin") return "admin";
+  if (r === "HR") return "hr";
+  if (r === "Finance") return "finance";
+  if (r === "Manager") return "manager";
+  return "employee";
+}
+
+function portalRoleClass(role) {
+  return `rt-portal-role rt-portal-role--${portalRoleVariant(role)}`;
 }
 
 /** Small label when account status is not active (so admins see inactive users in the list). */
@@ -83,7 +79,7 @@ function RoleBadge({ role }) {
   const r = String(role ?? "Employee").trim() || "Employee";
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold whitespace-nowrap ${portalRoleBadgeClass(r)}`}
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold whitespace-nowrap ${portalRoleClass(r)}`}
     >
       {r}
     </span>
@@ -131,9 +127,9 @@ function PortalRoleCell({
       disabled={saving}
       onChange={(e) => onChange(emp, e.target.value)}
       className={[
-        "h-7 min-w-[8.75rem] shrink-0 cursor-pointer rounded-full border px-2.5 pr-7 text-[11px] font-semibold outline-none transition",
+        "rt-portal-role-select h-7 min-w-[8.75rem] shrink-0 cursor-pointer rounded-full border px-2.5 pr-7 text-[11px] font-semibold outline-none transition",
         "focus:ring-2 focus:ring-[rgb(var(--accent))]/20 disabled:cursor-not-allowed disabled:opacity-60",
-        portalRoleBadgeClass(roleLabel),
+        portalRoleClass(roleLabel),
       ].join(" ")}
       aria-label={`Portal role for ${emp?.name || emp?.id || "employee"}`}
     >

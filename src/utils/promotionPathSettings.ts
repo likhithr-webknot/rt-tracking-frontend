@@ -102,12 +102,29 @@ export function setCachedPromotionPaths(config: PromotionPathsConfig) {
   return cachedPaths;
 }
 
+function isAbortError(err: unknown, signal?: AbortSignal) {
+  return (
+    Boolean(signal?.aborted) ||
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (typeof err === "object" &&
+      err !== null &&
+      "name" in err &&
+      (err as { name?: string }).name === "AbortError") ||
+    String((err as { message?: string })?.message || "")
+      .toLowerCase()
+      .includes("aborted")
+  );
+}
+
 export async function ensurePromotionPathsLoaded({ signal } = {} as { signal?: AbortSignal }) {
   if (cachedPaths) return cachedPaths;
   if (loadPromise) return loadPromise;
   loadPromise = fetchPromotionPaths({ signal })
     .then((config) => setCachedPromotionPaths(config))
-    .catch(() => getCachedPromotionPaths())
+    .catch((err) => {
+      if (isAbortError(err, signal)) throw err;
+      return getCachedPromotionPaths();
+    })
     .finally(() => {
       loadPromise = null;
     });

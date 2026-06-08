@@ -13,6 +13,16 @@ import {
 } from "../../utils/promotionPathSettings";
 import { SectionCard, FieldLabel } from "../shared/settings/SettingsLayout";
 
+function isAbortError(err, signal) {
+  return (
+    signal?.aborted ||
+    err?.name === "AbortError" ||
+    String(err?.message || "")
+      .toLowerCase()
+      .includes("aborted")
+  );
+}
+
 function PathLadder({ path }) {
   if (!path?.length) {
     return <p className="text-xs text-[rgb(var(--muted))]">No bands configured.</p>;
@@ -139,6 +149,7 @@ export default function PromotionPathSettings({ onToast }) {
     setLoading(true);
     try {
       const config = await fetchPromotionPaths({ signal });
+      if (signal?.aborted) return;
       const tech = sanitizePromotionPath(config.techPath, DEFAULT_TECH_PROMOTION_PATH);
       const nonTech = sanitizePromotionPath(config.nonTechPath, DEFAULT_NON_TECH_PROMOTION_PATH);
       setTechPath(tech);
@@ -148,6 +159,7 @@ export default function PromotionPathSettings({ onToast }) {
       setSavedSnapshot(snapshot);
       setDirty(false);
     } catch (err) {
+      if (isAbortError(err, signal)) return;
       onToast?.({
         title: "Could not load promotion paths",
         message: err?.message || "Using defaults until the server responds.",
@@ -162,7 +174,7 @@ export default function PromotionPathSettings({ onToast }) {
       setSavedSnapshot(JSON.stringify(fallback));
       setDirty(false);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [onToast]);
 
@@ -170,7 +182,9 @@ export default function PromotionPathSettings({ onToast }) {
     const ac = new AbortController();
     refresh({ signal: ac.signal }).catch(() => {});
     return () => ac.abort();
-  }, [refresh]);
+    // Intentionally mount-only: avoid re-fetch loops when parent re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const snapshot = JSON.stringify({ techPath, nonTechPath });

@@ -7,6 +7,7 @@ import {
   normalizeMonthlySubmission,
   resolveSubmissionKpiRatings,
   resolveSubmissionValueRatings,
+  resolveSubmissionValueComments,
   resolveManagerKpiRatings,
   resolveManagerValueRatings,
   fetchMonthlySubmissionScoreBreakdown,
@@ -41,6 +42,76 @@ import { isHrPortalUser } from "../../utils/hrRatingsFilter";
 import { isSuperAdminPortalUser } from "../../utils/portalAccess";
 import { formatPerformanceRating, parseDecimalPerformanceRating } from "../../utils/ratingLabels";
 import { DecimalPerformanceRatingInput } from "../shared/PerformanceRatingField";
+
+function sortedCriterionIds(...maps) {
+  const ids = new Set();
+  for (const map of maps) {
+    if (!map || typeof map !== "object") continue;
+    for (const key of Object.keys(map)) {
+      const id = String(key || "").trim();
+      if (id) ids.add(id);
+    }
+  }
+  return Array.from(ids).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+function formatRatingSubmissionText(rating) {
+  if (rating == null || rating === "") return "";
+  return formatPerformanceRating(rating);
+}
+
+function formatValueSubmissionText({ rating, comment }) {
+  const parts = [];
+  const ratingText = formatRatingSubmissionText(rating);
+  if (ratingText) parts.push(`Self-rating: ${ratingText}`);
+  const commentText = String(comment ?? "").trim();
+  if (commentText) parts.push(commentText);
+  return parts.join("\n\n");
+}
+
+function SubmissionReadBox({ value, emptyLabel = "No submission provided." }) {
+  const text = String(value ?? "").trim();
+  return (
+    <textarea
+      readOnly
+      rows={3}
+      value={text || emptyLabel}
+      tabIndex={-1}
+      aria-readonly="true"
+      className="mt-1 w-full resize-none rounded-md border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-2 text-sm leading-relaxed text-[rgb(var(--text))]"
+    />
+  );
+}
+
+function SubmittedCriterionCard({ label, submissionText }) {
+  return (
+    <div className="rounded-lg border border-[rgb(var(--border))]/80 bg-[rgb(var(--surface))] px-3 py-3 space-y-2">
+      <p className="text-sm font-medium leading-relaxed text-[rgb(var(--text))] break-words">{label}</p>
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Submission</div>
+        <SubmissionReadBox value={submissionText} />
+      </div>
+    </div>
+  );
+}
+
+function ReviewCriterionCard({ label, submissionText, children }) {
+  return (
+    <div className="rounded-lg border border-[rgb(var(--border))]/80 bg-[rgb(var(--surface))] px-3 py-3 space-y-3">
+      <p className="text-sm font-medium leading-relaxed text-[rgb(var(--text))] break-words">{label}</p>
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Submission</div>
+        <SubmissionReadBox value={submissionText} />
+      </div>
+      {children ? (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">Final score</div>
+          <div className="sm:justify-self-end">{children}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function formatMonthLabel(monthKey) {
   const m = normalizeYearMonth(monthKey);
@@ -269,6 +340,12 @@ function normalizeAdminSubmissions(data, employeeLookup) {
       const reviewStatus = isResubmitted ? "SUBMITTED" : rawReviewStatus;
       const staleManagerReject = isResubmitted && rawManagerReviewAction === "REJECT";
       const needsManagerRework = rawReviewStatus === "NEEDS_MANAGER_REVIEW";
+      const isManagerSelf = submissionType === "MANAGER_SELF_REVIEW";
+      const managerSelfSubmitted = isManagerSelf && Boolean(
+        submittedAt ||
+        status === "SUBMITTED" ||
+        reviewStatus === "SUBMITTED"
+      );
       const hasManagerEvaluation = Boolean(
         submission?.managerEvaluation ||
         obj?.managerEvaluation ||
@@ -294,12 +371,6 @@ function normalizeAdminSubmissions(data, employeeLookup) {
       /* After resubmission the reviewStatus becomes "SUBMITTED" but the
          server may still carry the old adminReview.  Clear the stale badge. */
       const adminAction = (isResubmitted && rawAdminAction === "REJECT") ? null : rawAdminAction;
-      const isManagerSelf = submissionType === "MANAGER_SELF_REVIEW";
-      const managerSelfSubmitted = isManagerSelf && Boolean(
-        submittedAt ||
-        status === "SUBMITTED" ||
-        reviewStatus === "SUBMITTED"
-      );
       const entryType = isManagerSelf
         ? "Manager Self Review"
         : hasManagerEvaluation
@@ -491,6 +562,14 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
     });
   }, [reviewModal?.item]);
 
+  const reviewModalEmployeeValueComments = useMemo(() => {
+    if (!reviewModal?.item) return {};
+    return resolveSubmissionValueComments({
+      payload: reviewModal.item.submission,
+      raw: reviewModal.item.submission?.raw ?? reviewModal.item.raw,
+    });
+  }, [reviewModal?.item]);
+
   const reviewModalManagerKpiRatings = useMemo(() => {
     if (!reviewModal?.item) return {};
     return resolveManagerKpiRatings({
@@ -506,6 +585,32 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
       raw: reviewModal.item.submission?.raw ?? reviewModal.item.raw,
     });
   }, [reviewModal?.item]);
+
+  const reviewModalKpiCriterionIds = useMemo(
+    () =>
+      sortedCriterionIds(
+        reviewModalEmployeeKpiRatings,
+        reviewModalManagerKpiRatings,
+        reviewEditableKpiRatings
+      ),
+    [reviewModalEmployeeKpiRatings, reviewModalManagerKpiRatings, reviewEditableKpiRatings]
+  );
+
+  const reviewModalValueCriterionIds = useMemo(
+    () =>
+      sortedCriterionIds(
+        reviewModalEmployeeValueRatings,
+        reviewModalEmployeeValueComments,
+        reviewModalManagerValueRatings,
+        reviewEditableValueRatings
+      ),
+    [
+      reviewModalEmployeeValueRatings,
+      reviewModalEmployeeValueComments,
+      reviewModalManagerValueRatings,
+      reviewEditableValueRatings,
+    ]
+  );
 
   const reviewModalManagerComments = useMemo(() => {
     if (!reviewModal?.item) return "";
@@ -966,7 +1071,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
         <ModalOverlay
           open={reviewModal.open}
           onClose={closeReview}
-          maxWidth="max-w-5xl"
+          maxWidth="max-w-6xl"
           zIndex={70}
           header={
             <div>
@@ -1053,37 +1158,42 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                       </div>
                     </div>
                   ) : null}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="rt-panel-subtle rounded-md p-3 space-y-2">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
                       <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
-                        {reviewModalIsManagerSelf ? "Manager KPI self-ratings" : "Employee KPI Ratings"}
+                        {reviewModalIsManagerSelf ? "Manager KPI self-ratings" : "Employee KPI ratings"}
                       </div>
-                      {Object.entries(reviewModalEmployeeKpiRatings).length ? (
-                        Object.entries(reviewModalEmployeeKpiRatings).map(([kpiId, rating]) => (
-                          <div key={kpiId} className="flex items-center justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm truncate">{kpiLabel(kpiId)}</div>
-                            </div>
-                            <span className="font-mono text-sm">{formatPerformanceRating(rating)}</span>
-                          </div>
-                        ))
+                      {reviewModalKpiCriterionIds.length ? (
+                        <div className="space-y-2">
+                          {reviewModalKpiCriterionIds.map((kpiId) => (
+                            <SubmittedCriterionCard
+                              key={kpiId}
+                              label={kpiLabel(kpiId)}
+                              submissionText={formatRatingSubmissionText(reviewModalEmployeeKpiRatings?.[kpiId])}
+                            />
+                          ))}
+                        </div>
                       ) : (
                         <div className="text-xs text-[rgb(var(--muted))]">No employee KPI ratings recorded.</div>
                       )}
                     </div>
-                    <div className="rt-panel-subtle rounded-md p-3 space-y-2">
+                    <div className="space-y-2">
                       <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
-                        {reviewModalIsManagerSelf ? "Manager value self-ratings" : "Employee Values Ratings"}
+                        {reviewModalIsManagerSelf ? "Manager value self-ratings" : "Employee value ratings"}
                       </div>
-                      {Object.entries(reviewModalEmployeeValueRatings).length ? (
-                        Object.entries(reviewModalEmployeeValueRatings).map(([valueId, rating]) => (
-                          <div key={valueId} className="flex items-center justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <div className="text-sm truncate">{valueLabel(valueId)}</div>
-                            </div>
-                            <span className="font-mono text-sm">{formatPerformanceRating(rating)}</span>
-                          </div>
-                        ))
+                      {reviewModalValueCriterionIds.length ? (
+                        <div className="space-y-2 max-h-[min(24rem,50vh)] overflow-y-auto pr-1">
+                          {reviewModalValueCriterionIds.map((valueId) => (
+                            <SubmittedCriterionCard
+                              key={valueId}
+                              label={valueLabel(valueId)}
+                              submissionText={formatValueSubmissionText({
+                                rating: reviewModalEmployeeValueRatings?.[valueId],
+                                comment: reviewModalEmployeeValueComments?.[valueId],
+                              })}
+                            />
+                          ))}
+                        </div>
                       ) : (
                         <div className="text-xs text-[rgb(var(--muted))]">No employee value ratings recorded.</div>
                       )}
@@ -1161,12 +1271,15 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                           Final KPI scores (decimals allowed)
                         </div>
                         <div className="mt-2 space-y-2">
-                          {Object.entries(reviewEditableKpiRatings).length ? (
-                            Object.entries(reviewEditableKpiRatings).map(([kpiId, rating]) => (
-                              <div key={kpiId} className="flex items-center justify-between gap-3">
-                                <div className="flex-1 min-w-0 truncate">{kpiLabel(kpiId)}</div>
+                          {reviewModalKpiCriterionIds.length ? (
+                            reviewModalKpiCriterionIds.map((kpiId) => (
+                              <ReviewCriterionCard
+                                key={kpiId}
+                                label={kpiLabel(kpiId)}
+                                submissionText={formatRatingSubmissionText(reviewModalEmployeeKpiRatings?.[kpiId])}
+                              >
                                 <DecimalPerformanceRatingInput
-                                  value={rating}
+                                  value={reviewEditableKpiRatings?.[kpiId]}
                                   disabled={reviewModalSuperAdminEvalLocked || managerSelfEvalBusy}
                                   onChange={(next) => {
                                     setReviewEditableKpiRatings((prev) => {
@@ -1180,7 +1293,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                                     });
                                   }}
                                 />
-                              </div>
+                              </ReviewCriterionCard>
                             ))
                           ) : (
                             <div className="text-xs text-[rgb(var(--muted))]">No KPI ratings to review.</div>
@@ -1191,13 +1304,19 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                         <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
                           Final value scores (decimals allowed)
                         </div>
-                        <div className="mt-2 space-y-2">
-                          {Object.entries(reviewEditableValueRatings).length ? (
-                            Object.entries(reviewEditableValueRatings).map(([valueId, rating]) => (
-                              <div key={valueId} className="flex items-center justify-between gap-3">
-                                <div className="flex-1 min-w-0 truncate">{valueLabel(valueId)}</div>
+                        <div className="mt-2 space-y-2 max-h-[min(24rem,50vh)] overflow-y-auto pr-1">
+                          {reviewModalValueCriterionIds.length ? (
+                            reviewModalValueCriterionIds.map((valueId) => (
+                              <ReviewCriterionCard
+                                key={valueId}
+                                label={valueLabel(valueId)}
+                                submissionText={formatValueSubmissionText({
+                                  rating: reviewModalEmployeeValueRatings?.[valueId],
+                                  comment: reviewModalEmployeeValueComments?.[valueId],
+                                })}
+                              >
                                 <DecimalPerformanceRatingInput
-                                  value={rating}
+                                  value={reviewEditableValueRatings?.[valueId]}
                                   disabled={reviewModalSuperAdminEvalLocked || managerSelfEvalBusy}
                                   onChange={(next) => {
                                     setReviewEditableValueRatings((prev) => {
@@ -1211,7 +1330,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                                     });
                                   }}
                                 />
-                              </div>
+                              </ReviewCriterionCard>
                             ))
                           ) : (
                             <div className="text-xs text-[rgb(var(--muted))]">No value ratings to review.</div>
@@ -1289,14 +1408,15 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                         <div>
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager KPI Ratings</div>
                           <div className="mt-2 space-y-2">
-                            {Object.entries(reviewEditableKpiRatings).length ? (
-                              Object.entries(reviewEditableKpiRatings).map(([kpiId, rating]) => (
-                                <div key={kpiId} className="flex items-center justify-between gap-2">
-                                  <div className="flex-1 min-w-0">
-                                    <div className="truncate">{kpiLabel(kpiId)}</div>
-                                  </div>
+                            {reviewModalKpiCriterionIds.length ? (
+                              reviewModalKpiCriterionIds.map((kpiId) => (
+                                <ReviewCriterionCard
+                                  key={kpiId}
+                                  label={kpiLabel(kpiId)}
+                                  submissionText={formatRatingSubmissionText(reviewModalEmployeeKpiRatings?.[kpiId])}
+                                >
                                   <DecimalPerformanceRatingInput
-                                    value={rating}
+                                    value={reviewEditableKpiRatings?.[kpiId]}
                                     onChange={(next) => {
                                       setReviewEditableKpiRatings((prev) => {
                                         const updated = { ...(prev || {}) };
@@ -1309,7 +1429,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                                       });
                                     }}
                                   />
-                                </div>
+                                </ReviewCriterionCard>
                               ))
                             ) : (
                               <div className="text-xs text-[rgb(var(--muted))]">No manager KPI ratings.</div>
@@ -1318,15 +1438,19 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                         </div>
                         <div>
                           <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">Manager Value Ratings</div>
-                          <div className="mt-2 space-y-2">
-                            {Object.entries(reviewEditableValueRatings).length ? (
-                              Object.entries(reviewEditableValueRatings).map(([valueId, rating]) => (
-                                <div key={valueId} className="flex items-center justify-between gap-2">
-                                  <div className="flex-1 min-w-0">
-                                    <div className="truncate">{valueLabel(valueId)}</div>
-                                  </div>
+                          <div className="mt-2 space-y-2 max-h-[min(24rem,50vh)] overflow-y-auto pr-1">
+                            {reviewModalValueCriterionIds.length ? (
+                              reviewModalValueCriterionIds.map((valueId) => (
+                                <ReviewCriterionCard
+                                  key={valueId}
+                                  label={valueLabel(valueId)}
+                                  submissionText={formatValueSubmissionText({
+                                    rating: reviewModalEmployeeValueRatings?.[valueId],
+                                    comment: reviewModalEmployeeValueComments?.[valueId],
+                                  })}
+                                >
                                   <DecimalPerformanceRatingInput
-                                    value={rating}
+                                    value={reviewEditableValueRatings?.[valueId]}
                                     onChange={(next) => {
                                       setReviewEditableValueRatings((prev) => {
                                         const updated = { ...(prev || {}) };
@@ -1339,7 +1463,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                                       });
                                     }}
                                   />
-                                </div>
+                                </ReviewCriterionCard>
                               ))
                             ) : (
                               <div className="text-xs text-[rgb(var(--muted))]">No manager value ratings.</div>

@@ -470,35 +470,58 @@ export default function SettingsPanel({
     superSettings?.reviewCycleNovEndMonth,
   ]);
 
-  function onSaveSuper(e) {
+  const settingsHasUnsaved = isSuperAdmin ? superHasUnsaved || adminHasUnsaved : adminHasUnsaved;
+
+  function onSaveAll(e) {
     e?.preventDefault?.();
-    const weightCheck = validateScoreWeightPercents(superSettings);
-    if (!weightCheck.ok) {
+    const willSaveSuper = isSuperAdmin && superHasUnsaved;
+    const willSaveAdmin = adminHasUnsaved;
+    if (!willSaveSuper && !willSaveAdmin) return;
+
+    if (willSaveSuper) {
+      const weightCheck = validateScoreWeightPercents(superSettings);
+      if (!weightCheck.ok) {
+        setToast({
+          title: "Scoring weights invalid",
+          message: weightCheck.message,
+          tone: "error",
+        });
+        return;
+      }
+      saveSuperSettings();
+    }
+    if (willSaveAdmin) {
+      saveAdminSettings();
+    }
+
+    if (willSaveSuper && willSaveAdmin) {
       setToast({
-        title: "Scoring weights invalid",
-        message: weightCheck.message,
-        tone: "error",
+        title: "Settings saved",
+        message: "Platform and operational settings updated.",
       });
       return;
     }
-    saveSuperSettings();
-    setToast({ title: "Platform settings saved", message: "Super admin configuration updated." });
+    if (willSaveSuper) {
+      setToast({ title: "Platform settings saved", message: "Super admin configuration updated." });
+      return;
+    }
+    setToast({
+      title: "Admin settings saved",
+      message: "Operational policies and console preferences updated.",
+    });
   }
 
-  function onResetSuper() {
-    resetSuperSettings();
-    setToast({ title: "Platform defaults restored", message: "Super admin settings were reset." });
-  }
-
-  function onSaveAdmin(e) {
-    e?.preventDefault?.();
-    saveAdminSettings();
-    setToast({ title: "Admin settings saved", message: "Operational policies and console preferences updated." });
-  }
-
-  function onResetAdmin() {
+  function onResetAll() {
+    if (isSuperAdmin) {
+      resetSuperSettings();
+    }
     resetAdminSettings();
-    setToast({ title: "Admin defaults restored", message: "Operational settings were reset." });
+    setToast({
+      title: "Defaults restored",
+      message: isSuperAdmin
+        ? "Platform and operational settings were reset."
+        : "Operational settings were reset.",
+    });
   }
 
   async function handleCreateServerSetting() {
@@ -983,14 +1006,6 @@ export default function SettingsPanel({
         </div>
       </SectionCard>
             </SettingsGroup>
-
-            <SettingsFooter
-              hasUnsaved={superHasUnsaved}
-              onSave={onSaveSuper}
-              onReset={onResetSuper}
-              saveLabel="Save platform settings"
-              resetLabel="Reset platform defaults"
-            />
           </>
         ) : null}
 
@@ -1425,11 +1440,11 @@ export default function SettingsPanel({
         </SettingsGroup>
 
         <SettingsFooter
-          hasUnsaved={adminHasUnsaved}
-          onSave={onSaveAdmin}
-          onReset={onResetAdmin}
-          saveLabel="Save admin settings"
-          resetLabel="Reset admin defaults"
+          hasUnsaved={settingsHasUnsaved}
+          onSave={onSaveAll}
+          onReset={onResetAll}
+          saveLabel="Save settings"
+          resetLabel="Reset defaults"
         />
       </SettingsPage>
 

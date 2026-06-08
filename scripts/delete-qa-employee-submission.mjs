@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /**
- * Delete QA Employee One's monthly submission for the current month (or SEED_MONTH).
+ * Delete QA Employee One's monthly submission(s).
+ *
+ * By default deletes ALL submissions for the QA employee. Set SEED_MONTH=YYYY-MM to
+ * delete only that month.
  *
  * Usage:
  *   SEED_ADMIN_EMAIL=likhith.r@webknot.in \
@@ -193,7 +196,7 @@ async function main() {
   const baseUrl = String(process.env.SEED_API_BASE_URL || "http://localhost:8080").trim().replace(/\/+$/, "");
   const adminEmail = String(process.env.SEED_ADMIN_EMAIL || "likhith.r@webknot.in").trim();
   const adminPassword = String(process.env.SEED_ADMIN_PASSWORD || "WebknotQA#Test1").trim();
-  const month = String(process.env.SEED_MONTH || formatYearMonth()).trim();
+  const monthFilter = String(process.env.SEED_MONTH || "").trim();
 
   const client = new ApiClient(baseUrl);
   await client.login(adminEmail, adminPassword);
@@ -210,40 +213,53 @@ async function main() {
   }
 
   const empKey = String(qaEmployee.empId ?? qaEmployee.employeeId ?? qaEmployee.id ?? "").trim();
+  const qaUserId = String(qaEmployee.id ?? qaEmployee.userId ?? "").trim();
   console.log(`Found ${QA_EMPLOYEE_EMAIL} (${empKey})`);
 
-  const listRes = await client.request(`/api/v1/admin/monthly-submissions?month=${encodeURIComponent(month)}`);
+  const listPath = monthFilter
+    ? `/api/v1/admin/monthly-submissions?month=${encodeURIComponent(monthFilter)}`
+    : "/api/v1/admin/monthly-submissions";
+  const listRes = await client.request(listPath);
   const submissions = extractSubmissions(listRes);
-  const match = submissions.find((row) => {
+  const matches = submissions.filter((row) => {
     const email = String(row.email ?? row.employeeEmail ?? "").trim().toLowerCase();
     const empId = String(row.empId ?? row.employeeId ?? row.subjectEmployeeId ?? "").trim();
     const userId = String(row.userId ?? "").trim();
-    return (
-      email === QA_EMPLOYEE_EMAIL ||
-      empId === empKey ||
-      userId === String(qaEmployee.id ?? qaEmployee.userId ?? "").trim()
-    );
+    return email === QA_EMPLOYEE_EMAIL || empId === empKey || (qaUserId && userId === qaUserId);
   });
 
-  if (!match) {
-    console.log(`No submission found for ${QA_EMPLOYEE_EMAIL} in ${month}.`);
+  if (!matches.length) {
+    console.log(
+      monthFilter
+        ? `No submission found for ${QA_EMPLOYEE_EMAIL} in ${monthFilter}.`
+        : `No submissions found for ${QA_EMPLOYEE_EMAIL}.`,
+    );
     return;
   }
 
-  const submissionId = match.id ?? match.submissionId;
-  console.log(`Deleting submission id=${submissionId} for month=${month}…`);
+  console.log(
+    monthFilter
+      ? `Deleting ${matches.length} submission(s) for ${monthFilter}…`
+      : `Deleting ${matches.length} submission(s) for ${QA_EMPLOYEE_EMAIL}…`,
+  );
 
-  try {
-    await client.request(`/api/v1/admin/monthly-submissions/${encodeURIComponent(String(submissionId))}`, {
-      method: "DELETE",
-    });
-    console.log("Deleted successfully.");
-  } catch (err) {
-    if (err.status === 404 || err.status === 405) {
-      console.error("DELETE endpoint unavailable — restart backend after pulling latest changes.");
+  for (const match of matches) {
+    const submissionId = match.id ?? match.submissionId;
+    const month = match.month ?? match.monthKey ?? monthFilter ?? "unknown";
+    console.log(`  id=${submissionId} month=${month}`);
+    try {
+      await client.request(`/api/v1/admin/monthly-submissions/${encodeURIComponent(String(submissionId))}`, {
+        method: "DELETE",
+      });
+    } catch (err) {
+      if (err.status === 404 || err.status === 405) {
+        console.error("DELETE endpoint unavailable — restart backend after pulling latest changes.");
+      }
+      throw err;
     }
-    throw err;
   }
+
+  console.log("Deleted successfully.");
 }
 
 main().catch((err) => {
