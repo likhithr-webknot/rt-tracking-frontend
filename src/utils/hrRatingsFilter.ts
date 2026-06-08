@@ -13,6 +13,22 @@ export function isHrRoleValue(value) {
   return raw === "hr" || raw.includes("human resources") || raw.includes("human_resource");
 }
 
+function isAdminRoleValue(value) {
+  const raw = normalizeRoleToken(value);
+  if (!raw) return false;
+  return (
+    raw === "admin" ||
+    raw === "super admin" ||
+    raw === "superadmin" ||
+    (raw.includes("super") && raw.includes("admin")) ||
+    raw.includes("admin")
+  );
+}
+
+function isProtectedPeerRoleForHr(value) {
+  return isHrRoleValue(value) || isAdminRoleValue(value);
+}
+
 export function resolveRawDirectoryRole(auth) {
   const obj = auth && typeof auth === "object" ? auth : {};
   const claims = obj?.claims && typeof obj.claims === "object" ? obj.claims : {};
@@ -65,7 +81,12 @@ export function shouldHideHrPeerRating(viewerAuth, ratingRow = {}) {
       "",
   );
   const reviewerLabel = String(ratingRow?.reviewer ?? ratingRow?.reviewerName ?? "").trim();
-  if (!isHrRoleValue(raterRole) && !isHrRoleValue(reviewerLabel)) return false;
+  if (
+    !isProtectedPeerRoleForHr(raterRole) &&
+    !isProtectedPeerRoleForHr(reviewerLabel)
+  ) {
+    return false;
+  }
   if (viewerEmail && raterEmail && viewerEmail === raterEmail) return false;
   return true;
 }
@@ -78,7 +99,7 @@ export function filterHrPeerProjectRatings(viewerAuth, ratings = []) {
   return (Array.isArray(ratings) ? ratings : []).filter((row) => {
     if (!isHrPortalUser(viewerAuth)) return true;
     const raterRole = String(row?.raterRole ?? row?.reviewerRole ?? row?.role ?? "").trim();
-    if (!isHrRoleValue(raterRole)) return true;
+    if (!isProtectedPeerRoleForHr(raterRole)) return true;
     const viewerEmail = String(viewerAuth?.email ?? "").trim().toLowerCase();
     const raterEmail = String(row?.raterEmail ?? row?.reviewerEmail ?? "").trim().toLowerCase();
     if (viewerEmail && raterEmail && viewerEmail === raterEmail) return true;

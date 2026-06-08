@@ -314,16 +314,168 @@ export function buildCycleMonthOptions(monthValue) {
   }));
 }
 
+function unwrapAdminReview(adminReview) {
+  if (!adminReview || typeof adminReview !== "object") return null;
+  if (adminReview.adminReview && typeof adminReview.adminReview === "object") {
+    return adminReview.adminReview;
+  }
+  return adminReview;
+}
+
+function resolveAdminReviewAction(meta) {
+  const obj = meta && typeof meta === "object" ? meta : {};
+  const adminReview = unwrapAdminReview(obj.adminReview);
+  return String(adminReview?.action || "").trim().toUpperCase();
+}
+
 export function isResubmissionRequested(meta) {
   const obj = meta && typeof meta === "object" ? meta : {};
   const reviewStatus = String(obj.reviewStatus || obj.status || "").trim().toUpperCase();
   const managerAction = String(obj.managerReview?.action || "").trim().toUpperCase();
-  const adminAction = String(obj.adminReview?.action || "").trim().toUpperCase();
+  const adminAction = resolveAdminReviewAction(obj);
 
   if (reviewStatus === "NEEDS_MANAGER_REVIEW") return false;
+  if (obj.resubmissionRequested) return true;
   if (obj.reopenedForResubmission) return true;
   if (reviewStatus === "NEEDS_REVIEW" || reviewStatus === "REJECT") return true;
   if (managerAction === "REJECT") return true;
-  if (adminAction === "REJECT") return true;
+  if (adminAction === "REJECT" || adminAction.includes("REJECT")) return true;
+  if (String(obj.managerSelfReviewEvalComments || "").trim()) {
+    return reviewStatus === "NEEDS_REVIEW" || Boolean(obj.reopenedForResubmission);
+  }
   return false;
+}
+
+/** Who sent the employee submission back for changes — "ADMIN" | "MANAGER" | null */
+export function resolveResubmissionActor(meta) {
+  const obj = meta && typeof meta === "object" ? meta : {};
+  if (!isResubmissionRequested(obj)) return null;
+
+  const reviewStatusUpper = String(obj.reviewStatus || obj.status || "").trim().toUpperCase();
+  const adminReview = unwrapAdminReview(obj.adminReview);
+  const adminAction = String(adminReview?.action || "").trim().toUpperCase();
+  const adminTarget = String(adminReview?.target || "").trim().toUpperCase();
+  const managerAction = String(obj.managerReview?.action || "").trim().toUpperCase();
+
+  if (
+    adminAction === "REJECT" ||
+    adminAction === "REJECT_EMPLOYEE" ||
+    (adminAction.includes("REJECT") && adminTarget !== "MANAGER")
+  ) {
+    return "ADMIN";
+  }
+  if (obj.adminSubmittedAt && reviewStatusUpper === "NEEDS_REVIEW") return "ADMIN";
+  if (adminReview?.comments && reviewStatusUpper === "NEEDS_REVIEW" && !managerAction.includes("REJECT")) {
+    return "ADMIN";
+  }
+
+  if (managerAction.includes("REJECT")) return "MANAGER";
+  if (reviewStatusUpper === "NEEDS_REVIEW") {
+    return managerAction.includes("REJECT") ? "MANAGER" : "ADMIN";
+  }
+  return null;
+}
+
+export function resolveResubmissionComment(meta, actor = null) {
+  const obj = meta && typeof meta === "object" ? meta : {};
+  const resolvedActor = actor || resolveResubmissionActor(obj);
+  const adminReview = unwrapAdminReview(obj.adminReview);
+  const manager = String(
+    obj.managerReview?.comments ||
+      obj.managerSelfReviewEvalComments ||
+      ""
+  ).trim();
+  const admin = String(adminReview?.comments || "").trim();
+  if (resolvedActor === "ADMIN") return admin || manager || "";
+  if (resolvedActor === "MANAGER") return manager || admin || "";
+  return admin || manager || "";
+}
+
+export function resolveResubmissionActorLabel(meta, actor = null) {
+  const resolved = actor || resolveResubmissionActor(meta);
+  if (resolved === "ADMIN") {
+    const adminReview = unwrapAdminReview(meta?.adminReview);
+    return String(adminReview?.reviewedBy || "").trim() || "Admin";
+  }
+  if (resolved === "MANAGER") {
+    return String(meta?.managerReview?.reviewedBy || "").trim() || "Manager";
+  }
+  return null;
+}
+
+function readSubmissionPayload(source) {
+  if (!source || typeof source !== "object") return {};
+  if (source.payload && typeof source.payload === "object") return source.payload;
+  if (source.raw?.payload && typeof source.raw.payload === "object") return source.raw.payload;
+  return source;
+}
+
+/** Super admins selected by a manager for their self review (supports legacy single id). */
+export function resolveReviewingSuperAdminIds(source) {
+  const payload = readSubmissionPayload(source);
+  const ids = [];
+  const push = (value) => {
+    const text = String(value ?? "").trim();
+    if (!text || ids.includes(text)) return;
+    ids.push(text);
+  };
+  if (Array.isArray(payload.reviewingManagerIds)) {
+    payload.reviewingManagerIds.forEach(push);
+  }
+  if (Array.isArray(payload.reviewingManagers)) {
+    for (const entry of payload.reviewingManagers) {
+      push(entry?.id ?? entry?.employeeId ?? entry?.empId);
+    }
+  }
+  push(payload.reviewingManagerId);
+  if (
+    !ids.length &&
+    payload.managerId &&
+    payload.subjectEmployeeId &&
+    String(payload.managerId).trim() !== String(payload.subjectEmployeeId).trim()
+  ) {
+    push(payload.managerId);
+  }
+  return ids;
+}
+
+export function isAssignedSuperAdminReviewer(item, viewerId) {
+  const viewer = String(viewerId ?? "").trim();
+  const ids = resolveReviewingSuperAdminIds(item?.submission ?? item?.raw ?? item);
+  if (!ids.length) return true;
+  if (!viewer) return false;
+  return ids.includes(viewer);
+}
+
+/** Manager submitted their self review for the cycle (awaiting super admin). */
+export function isManagerSelfSubmissionSubmitted(meta) {
+  if (!meta || typeof meta !== "object") return false;
+  const reviewStatus = String(meta.reviewStatus || meta.status || "").trim().toUpperCase();
+  const status = String(meta.status || "").trim().toUpperCase();
+  if (meta.submittedAt) return true;
+  if (reviewStatus === "SUBMITTED" || reviewStatus === "MANAGER_SUBMITTED") return true;
+  if (status === "SUBMITTED" || status === "MANAGER_REVIEWED") return true;
+  return false;
+}
+
+/** Backend rejects draft saves once a submission is in review; ignore as a benign race. */
+export function isDraftSaveBlockedByReviewStateMessage(message) {
+  const normalized = String(message || "").trim().toLowerCase();
+  return (
+    normalized.includes("cannot save draft after submission") ||
+    normalized.includes("submission is locked") ||
+    normalized.includes("submission is in review")
+  );
+}
+
+/** Manager self review locks for the month once the manager submits. */
+export function isManagerSelfReviewLocked(meta) {
+  if (!meta || typeof meta !== "object") return false;
+  if (isResubmissionRequested(meta)) return false;
+
+  const reviewStatus = String(meta.reviewStatus || meta.status || "").trim().toUpperCase();
+  const adminAction = String(meta.adminReview?.action || "").trim().toUpperCase();
+  if (reviewStatus.includes("APPROVED") || adminAction === "APPROVE") return true;
+
+  return isManagerSelfSubmissionSubmitted(meta);
 }

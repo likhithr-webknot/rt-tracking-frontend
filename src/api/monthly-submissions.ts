@@ -224,6 +224,38 @@ export function resolveManagerValueRatings(source) {
   );
 }
 
+export function resolveSubmissionValueComments(source) {
+  const { raw, payload, submission } = resolveSubmissionPayloadRoots(source);
+  const direct =
+    submission?.webknotValueComments ??
+    payload?.webknotValueComments ??
+    raw?.webknotValueComments;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+    const out = {};
+    for (const [key, value] of Object.entries(direct)) {
+      const id = String(key || "").trim();
+      const comment = String(value ?? "").trim();
+      if (id && comment) out[id] = comment;
+    }
+    if (Object.keys(out).length) return out;
+  }
+
+  const responses =
+    submission?.webknotValueResponses ??
+    payload?.webknotValueResponses ??
+    raw?.webknotValueResponses;
+  const out = {};
+  if (Array.isArray(responses)) {
+    for (const item of responses) {
+      if (!item || typeof item !== "object") continue;
+      const id = String(item.valueId ?? item.webknotValueId ?? item.id ?? "").trim();
+      const comment = String(item.comment ?? item.valueComment ?? item.note ?? "").trim();
+      if (id && comment) out[id] = comment;
+    }
+  }
+  return out;
+}
+
 function toRequestPayload(payload) {
   const source = payload && typeof payload === "object" ? payload : {};
   const month = normalizeYearMonth(source.monthKey ?? source.month) || String(source.monthKey ?? source.month ?? "").trim();
@@ -286,14 +318,39 @@ function toRequestPayload(payload) {
     source.valueRatings ??
     source.webknotValues
   );
+  const normalizedValueComments =
+    source.webknotValueComments && typeof source.webknotValueComments === "object"
+      ? source.webknotValueComments
+      : {};
+  const responseCommentsById = new Map();
+  if (Array.isArray(source.webknotValueResponses)) {
+    for (const item of source.webknotValueResponses) {
+      if (!item || typeof item !== "object") continue;
+      const id = String(item.valueId ?? item.webknotValueId ?? item.id ?? "").trim();
+      const comment = String(item.comment ?? item.valueComment ?? "").trim();
+      if (id && comment) responseCommentsById.set(id, comment);
+    }
+  }
   const valuePairs = Object.entries(normalizedValues);
   next.webknotValues = valuePairs.map(([valueId]) => String(valueId || "").trim());
   next.webknotValueRatings = Object.fromEntries(valuePairs);
-  next.webknotValueResponses = valuePairs.map(([valueId, rating]) => ({
-    valueId: String(valueId || "").trim(),
-    webknotValueId: String(valueId || "").trim(),
-    rating,
-  }));
+  next.webknotValueResponses = valuePairs.map(([valueId, rating]) => {
+    const id = String(valueId || "").trim();
+    const comment = String(normalizedValueComments?.[id] ?? responseCommentsById.get(id) ?? "").trim() || undefined;
+    return {
+      valueId: id,
+      webknotValueId: id,
+      rating,
+      ...(comment ? { comment } : {}),
+    };
+  });
+  const commentsOut = {};
+  for (const [valueId] of valuePairs) {
+    const id = String(valueId || "").trim();
+    const comment = String(normalizedValueComments?.[id] ?? responseCommentsById.get(id) ?? "").trim();
+    if (comment) commentsOut[id] = comment;
+  }
+  if (Object.keys(commentsOut).length) next.webknotValueComments = commentsOut;
   if (!Array.isArray(next.kpiRatings)) next.kpiRatings = [];
   if (!Array.isArray(next.certifications)) next.certifications = [];
   if (!Array.isArray(next.webknotValueResponses)) next.webknotValueResponses = [];
@@ -366,11 +423,20 @@ export function normalizeMonthlySubmission(data) {
       /* ignore */
     }
   }
+  const serverReviewStatusUpper = String(obj?.reviewStatus ?? status ?? "").trim().toUpperCase();
+  const serverReopenedForResubmission = Boolean(obj?.reopenedForResubmission);
   if (obj.adminReviewJson && typeof obj.adminReviewJson === "string") {
     try {
       const adm = JSON.parse(obj.adminReviewJson);
       if (adm && typeof adm === "object") {
-        payload.adminReview = payload.adminReview ?? adm;
+        if (adm.adminReview && typeof adm.adminReview === "object") {
+          payload.adminReview = payload.adminReview ?? adm.adminReview;
+        } else if (adm.action) {
+          payload.adminReview = payload.adminReview ?? adm;
+        }
+        if (adm.reopenedForResubmission != null) {
+          payload.reopenedForResubmission = adm.reopenedForResubmission;
+        }
       }
     } catch {
       /* ignore */
@@ -388,6 +454,7 @@ export function normalizeMonthlySubmission(data) {
     ? (payload.webknotValues ?? payload.values)
     : [];
   const webknotValueRatings = resolveSubmissionValueRatings({ raw: obj, payload });
+  const webknotValueComments = resolveSubmissionValueComments({ raw: obj, payload });
   const webknotValues = Array.from(
     new Set([
       ...rawWebknotValues
@@ -446,7 +513,7 @@ export function normalizeMonthlySubmission(data) {
   const adminEvaluation =
     (payload?.adminEvaluation && typeof payload.adminEvaluation === "object" ? payload.adminEvaluation : null) ??
     (obj?.adminEvaluation && typeof obj.adminEvaluation === "object" ? obj.adminEvaluation : null);
-  const reviewStatusRaw = payload?.reviewStatus ?? obj?.reviewStatus ?? status ?? "";
+  const reviewStatusRaw = obj?.reviewStatus ?? status ?? payload?.reviewStatus ?? "";
   const reviewStatus = String(reviewStatusRaw || "").trim() || null;
   const managerSubmittedAt =
     payload?.managerSubmittedAt ??
@@ -461,6 +528,7 @@ export function normalizeMonthlySubmission(data) {
     obj?.adminReviewedAt ??
     null;
   const managerFallbackComment = String(
+    obj?.managerSelfReviewEvalComments ??
     payload?.managerComments ??
     payload?.managerNotes ??
     payload?.managerComment ??
@@ -524,11 +592,14 @@ export function normalizeMonthlySubmission(data) {
   const reviewStatusUpper = String(reviewStatus || "").toUpperCase();
   const rawManagerAction = String(managerReview?.action ?? "").trim().toUpperCase();
   const rawAdminAction = String(adminReview?.action ?? "").trim().toUpperCase();
-  /* Fresh employee resubmit: reviewStatus is SUBMITTED again but stale reject
-     objects may still be attached from the prior cycle. */
+  /* Fresh employee resubmit: server reviewStatus is SUBMITTED again but stale reject
+     objects may still be attached from the prior cycle. Never treat NEEDS_REVIEW /
+     reopened rows as stale — payloadJson often still says SUBMITTED. */
   const isResubmittedStatus =
-    reviewStatusUpper === "SUBMITTED" &&
+    serverReviewStatusUpper === "SUBMITTED" &&
     statusUpper === "SUBMITTED" &&
+    !serverReopenedForResubmission &&
+    serverReviewStatusUpper !== "NEEDS_REVIEW" &&
     (rawManagerAction === "REJECT" || rawAdminAction === "REJECT");
   const effectiveReviewStatus = isResubmittedStatus ? "SUBMITTED" : reviewStatus;
   const effectiveReviewStatusUpper = String(effectiveReviewStatus || "").toUpperCase();
@@ -546,9 +617,10 @@ export function normalizeMonthlySubmission(data) {
   const reopenedForResubmission = Boolean(
     isResubmittedStatus
       ? false
-      : (payload?.reopenedForResubmission ??
-         obj?.reopenedForResubmission ??
-         effectiveReviewStatusUpper === "NEEDS_REVIEW")
+      : (serverReopenedForResubmission ||
+          obj?.reopenedForResubmission ||
+          payload?.reopenedForResubmission ||
+          effectiveReviewStatusUpper === "NEEDS_REVIEW")
   );
   const resubmissionRequested = Boolean(
     !needsManagerRework &&
@@ -611,6 +683,7 @@ export function normalizeMonthlySubmission(data) {
     kpiRatings,
     webknotValues,
     webknotValueRatings,
+    webknotValueComments,
     recognitionsCount,
     techShowcase,
     projectIds,
@@ -777,6 +850,51 @@ function pickSubmissionRowForMonth(list, monthKey) {
   );
 }
 
+/** Resolve numeric monthly-submission id from a manager team row or review payload. */
+export function resolveSubmissionIdFromRow(source) {
+  if (!source || typeof source !== "object") return "";
+  const candidates = [
+    source.submissionId,
+    source.id,
+    source.submissionID,
+    source.raw?.submissionId,
+    source.raw?.id,
+    source.raw?.submissionID,
+    source.payload?.submissionId,
+    source.payload?.id,
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate ?? "").trim();
+    if (text && /^\d+$/.test(text)) return text;
+  }
+  return "";
+}
+
+async function resolveManagerReviewSubmissionId(payload, { signal } = {} as ApiOptions) {
+  const direct = resolveSubmissionIdFromRow(payload);
+  if (direct) return direct;
+
+  const employeeId = String(payload?.subjectEmployeeId ?? payload?.employeeId ?? "").trim();
+  const monthKey = normalizeYearMonth(payload?.monthKey ?? payload?.month) || String(payload?.month ?? "").trim();
+  const uid = sanitizeEmployeeIdForApi(employeeId);
+  if (!uid || !/^\d+$/.test(uid) || !monthKey) return "";
+
+  const auth = getAuthHeader();
+  const qs = new URLSearchParams();
+  qs.set("month", monthKey);
+  qs.set("submissionType", String(payload?.submissionType ?? "EMPLOYEE_MONTHLY_SUBMISSION").trim() || "EMPLOYEE_MONTHLY_SUBMISSION");
+  const res = await fetch(buildApiUrl(`/api/v1/monthly-submissions/user/${encodeURIComponent(uid)}?${qs.toString()}`), {
+    signal,
+    credentials: "include",
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+  if (!res.ok) return "";
+  const raw = await res.json().catch(() => ({}));
+  const list = unwrapGenericArray(raw);
+  const picked = pickSubmissionRowForMonth(list, monthKey);
+  return resolveSubmissionIdFromRow(picked ?? list[0] ?? null);
+}
+
 export async function submitMonthlySubmission(payload, { signal } = {} as ApiOptions) {
   const auth = getAuthHeader();
   const preparedPayload = toRequestPayload(payload);
@@ -789,18 +907,18 @@ export async function submitMonthlySubmission(payload, { signal } = {} as ApiOpt
     ...(auth ? { Authorization: auth } : {}),
   };
 
-  const submissionIdRaw = payload?.submissionId ?? payload?.id ?? payload?.submissionID ?? null;
-  const submissionId = submissionIdRaw != null ? String(submissionIdRaw).trim() : "";
-
   const actorRole = String(payload?.actorRole ?? "").trim().toUpperCase();
   const targetRole = String(payload?.targetRole ?? "").trim().toUpperCase();
   const hasManagerReview = Boolean(payload?.managerReview || payload?.managerEvaluation || payload?.managerSubmittedAt);
+  const wantsManagerReviewEndpoint =
+    actorRole === "MANAGER" && targetRole === "EMPLOYEE" && hasManagerReview;
 
-  const isManagerEmployeeReview =
-    actorRole === "MANAGER" &&
-    targetRole === "EMPLOYEE" &&
-    hasManagerReview &&
-    Boolean(submissionId);
+  let submissionId = resolveSubmissionIdFromRow(payload);
+  if (!submissionId && wantsManagerReviewEndpoint) {
+    submissionId = await resolveManagerReviewSubmissionId(payload, { signal });
+  }
+
+  const isManagerEmployeeReview = wantsManagerReviewEndpoint && Boolean(submissionId);
 
   const requestCandidates = isManagerEmployeeReview
     ? [
@@ -881,6 +999,9 @@ export async function submitMonthlySubmission(payload, { signal } = {} as ApiOpt
   }
 
   if (lastErr) throw lastErr;
+  if (wantsManagerReviewEndpoint && !submissionId) {
+    throw new Error("Could not resolve submission id for manager review. Refresh the page and try again.");
+  }
   throw new Error("Monthly submission endpoint not found.");
 }
 
@@ -1015,24 +1136,92 @@ export async function fetchAdminAllSubmissions({ month, status, signal } = {} as
 export async function fetchAssignedManagerSelfReviews(month, reviewerId, { signal } = {} as ApiOptions) {
   const reviewerKey = String(reviewerId ?? "").trim();
   if (!reviewerKey) return [];
+  const { resolveReviewingSuperAdminIds } = await import("../utils/reviewCycles");
   const items = await fetchAdminAllSubmissions({ month, signal });
   return items.filter((item) => {
     const normalized = normalizeMonthlySubmission(item);
     const type = String(normalized?.submissionType ?? item?.submissionType ?? "").trim().toUpperCase();
     if (!type.includes("MANAGER_SELF")) return false;
-    const payload =
-      normalized?.payload && typeof normalized.payload === "object"
-        ? normalized.payload
-        : {};
-    const assigned = String(
-      payload.reviewingManagerId ??
-      payload.managerId ??
-      normalized?.managerId ??
-      item?.managerId ??
-      ""
-    ).trim();
-    return assigned === reviewerKey;
+    const assignedIds = resolveReviewingSuperAdminIds(normalized ?? item);
+    return assignedIds.includes(reviewerKey);
   });
+}
+
+/** Super admin saves manager-style scores and comments on a manager self review. */
+export async function submitSuperAdminManagerSelfEval(
+  {
+    submissionId,
+    kpiRatings = {},
+    webknotValueRatings = {},
+    comments = "",
+    reviewedBy = null,
+    reviewStatus = "MANAGER_SUBMITTED",
+  },
+  { signal } = {} as ApiOptions,
+) {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const id = String(submissionId ?? "").trim();
+  if (!id) throw new Error("submissionId is required.");
+
+  const auth = getAuthHeader();
+  await ensureCsrfCookie({
+    signal,
+    headers: auth ? { Authorization: auth } : undefined,
+  });
+  const reviewedAt = new Date().toISOString();
+  const trimmedComments = String(comments || "").trim();
+  const managerReviewJson = JSON.stringify({
+    managerEvaluation: {
+      kpiRatings,
+      webknotValueRatings,
+      comments: trimmedComments,
+      reviewedAt,
+      reviewedBy,
+    },
+    managerReview: {
+      action: "SUBMIT",
+      comments: trimmedComments,
+      reviewedAt,
+      reviewedBy,
+    },
+    reviewStatus,
+  });
+  const body = {
+    managerReviewJson,
+    managerSelfReviewEvalComments: trimmedComments || undefined,
+    managerSelfReviewEvalStatus: "SUBMITTED",
+    reviewStatus,
+  };
+  const baseHeaders = {
+    "Content-Type": "application/json",
+    ...(auth ? { Authorization: auth } : {}),
+  };
+  const path = `/api/v1/monthly-submissions/${encodeURIComponent(id)}/manager-review`;
+
+  let res = await fetch(buildApiUrl(path), {
+    method: "PUT",
+    signal,
+    credentials: "include",
+    headers: withCsrfHeaders(baseHeaders),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok && res.status === 403) {
+    await ensureCsrfCookie({
+      signal,
+      headers: auth ? { Authorization: auth } : undefined,
+      forceRefresh: true,
+    });
+    res = await fetch(buildApiUrl(path), {
+      method: "PUT",
+      signal,
+      credentials: "include",
+      headers: withCsrfHeaders(baseHeaders),
+      body: JSON.stringify(body),
+    });
+  }
+  if (!res.ok) throw await toHttpError(res);
+  const raw = await parseResponse(res, {});
+  return normalizeMonthlySubmission(raw) ?? raw;
 }
 
 function normalizeScoreBreakdown(raw, fallback = {}) {

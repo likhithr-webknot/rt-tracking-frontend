@@ -162,9 +162,9 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
   const activeTab = useMemo(() => {
     if (!VALID_TABS.has(resolvedTab)) return ADMIN_NOT_FOUND_TAB;
-    if (resolvedTab === "ratings-history" && !isSuperAdmin) return "dashboard";
+    if (resolvedTab === "ratings-history" && !isSuperAdmin && !isHrUser) return "dashboard";
     return resolvedTab;
-  }, [VALID_TABS, resolvedTab, isSuperAdmin]);
+  }, [VALID_TABS, resolvedTab, isHrUser, isSuperAdmin]);
 
   const setActiveTab = useCallback(
     (tab) => {
@@ -176,10 +176,10 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
   useEffect(() => {
     if (!VALID_TABS.has(resolvedTab)) return;
-    if (resolvedTab === "ratings-history" && !isSuperAdmin) {
+    if (resolvedTab === "ratings-history" && !isSuperAdmin && !isHrUser) {
       navigate("/admin", { replace: true });
     }
-  }, [VALID_TABS, resolvedTab, isSuperAdmin, navigate]);
+  }, [VALID_TABS, resolvedTab, isHrUser, isSuperAdmin, navigate]);
 
   const [toast, setToast] = useState(null);
   const showToast = useCallback((t) => setToast(next => ({ ...next, ...t })), []);
@@ -496,8 +496,13 @@ export default function AdminControlCenter({ onLogout, auth }) {
             <AdminSubmissions onLogout={onLogout} employees={employees} auth={auth} />
           )}
 
-          {activeTab === "ratings-history" && isSuperAdmin ? (
-            <RatingsHistoryWorkspace employees={employees} employeesLoading={employeesLoading} />
+          {activeTab === "ratings-history" && (isSuperAdmin || isHrUser) ? (
+            <RatingsHistoryWorkspace
+              auth={auth}
+              employees={employees}
+              employeesLoading={employeesLoading}
+              isHrView={isHrUser && !isSuperAdmin}
+            />
           ) : null}
 
           {activeTab === "directory" && (

@@ -8,6 +8,7 @@ export default function SubmissionStatusBadge({
   adminAction = null,
   submissionType = null,
   size = "md",
+  compact = false,
   showDescription = false,
   className = "",
 }) {
@@ -21,11 +22,15 @@ export default function SubmissionStatusBadge({
 
   const sizeClass =
     size === "sm" ? "text-[10px] px-2 py-0.5" : size === "lg" ? "text-xs px-3 py-1" : "";
+  const displayLabel = compact ? wf.shortLabel : wf.label;
 
   return (
     <div className={["inline-flex flex-col gap-1", className].filter(Boolean).join(" ")}>
-      <span className={["rt-badge uppercase", wf.badgeClass, sizeClass].join(" ")} title={wf.description}>
-        {wf.label}
+      <span
+        className={["rt-badge uppercase whitespace-nowrap", wf.badgeClass, sizeClass].join(" ")}
+        title={wf.description || wf.label}
+      >
+        {displayLabel}
       </span>
       {showDescription ? (
         <span className="text-[11px] text-[rgb(var(--muted))] max-w-xs">{wf.description}</span>

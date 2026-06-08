@@ -693,7 +693,31 @@ export function normalizeSuperAdminReviewers(data) {
 
 /** Super Admin portal accounts eligible to review manager/admin self-reviews. */
 export async function fetchSuperAdminReviewers({ signal } = {} as ApiOptions) {
-  const rows = await fetchEmployees({ signal });
+  const auth = getAuthHeader();
+  try {
+    const res = await fetch(buildApiUrl("/api/v1/portal/super-admin-reviewers"), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (res.ok) {
+      const raw = await parseResponse(res, {});
+      const rows = extractUsersArray(raw?.data ?? raw);
+      if (rows.length) return normalizeSuperAdminReviewers(rows);
+    }
+  } catch (err) {
+    if (err?.name === "AbortError") throw err;
+  }
+
+  const rows = [];
+  let cursor = null;
+  for (let page = 0; page < 200; page += 1) {
+    const data = await fetchEmployees({ cursor, limit: 100, signal });
+    const batch = Array.isArray(data?.items) ? data.items : [];
+    if (batch.length) rows.push(...batch);
+    if (!data?.nextCursor) break;
+    cursor = data.nextCursor;
+  }
   return normalizeSuperAdminReviewers(rows);
 }
 

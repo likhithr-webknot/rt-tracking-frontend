@@ -1,25 +1,52 @@
 /**
- * Career promotion ladders — kept in sync with webtrak
- * {@code com.webknot.webtrak.service.UserService#promoteUser}.
+ * Career promotion ladders — paths are loaded from the server
+ * ({@code PromotionSettingsService} / GET /api/v1/settings/promotion-paths).
  *
  * Each path is ordered lowest band (career start) → highest (max promotion).
  */
 
+import {
+  DEFAULT_NON_TECH_PROMOTION_PATH,
+  DEFAULT_TECH_PROMOTION_PATH,
+  ensurePromotionPathsLoaded,
+  getCachedPromotionPaths,
+} from "./promotionPathSettings";
+
 export type PromotionBandType = "TECH" | "NON_TECH" | "BOTH";
 
-/** Tech ladder (same order as backend). */
-export const TECH_PROMOTION_PATH = ["B8", "B7L", "B7H", "B6L", "B6H", "B6", "B5"] as const;
+/** @deprecated Use getTechPromotionPath() — kept for imports that expect a constant default. */
+export const TECH_PROMOTION_PATH = DEFAULT_TECH_PROMOTION_PATH;
 
-/** Non-tech ladder (same order as backend). */
-export const NON_TECH_PROMOTION_PATH = ["B8", "B7L", "B7H", "B6", "B5", "B4", "B3", "B2", "B1"] as const;
+/** @deprecated Use getNonTechPromotionPath() — kept for imports that expect a constant default. */
+export const NON_TECH_PROMOTION_PATH = DEFAULT_NON_TECH_PROMOTION_PATH;
 
-const TECH_SET = new Set<string>(TECH_PROMOTION_PATH);
+export function getTechPromotionPath(): readonly string[] {
+  return getCachedPromotionPaths().techPath;
+}
+
+export function getNonTechPromotionPath(): readonly string[] {
+  return getCachedPromotionPaths().nonTechPath;
+}
 
 /** Max band on tech track (single next step cannot go above this on tech ladder). */
-export const TECH_MAX_BAND = TECH_PROMOTION_PATH[TECH_PROMOTION_PATH.length - 1];
+export function getTechMaxBand() {
+  const path = getTechPromotionPath();
+  return path[path.length - 1] ?? null;
+}
 
 /** Max band on non-tech track. */
-export const NON_TECH_MAX_BAND = NON_TECH_PROMOTION_PATH[NON_TECH_PROMOTION_PATH.length - 1];
+export function getNonTechMaxBand() {
+  const path = getNonTechPromotionPath();
+  return path[path.length - 1] ?? null;
+}
+
+/** @deprecated Use getTechMaxBand() */
+export const TECH_MAX_BAND = DEFAULT_TECH_PROMOTION_PATH[DEFAULT_TECH_PROMOTION_PATH.length - 1];
+
+/** @deprecated Use getNonTechMaxBand() */
+export const NON_TECH_MAX_BAND = DEFAULT_NON_TECH_PROMOTION_PATH[DEFAULT_NON_TECH_PROMOTION_PATH.length - 1];
+
+export { ensurePromotionPathsLoaded };
 
 /**
  * Normalize directory/API band text to a Webtrak {@code Band} enum name when possible.
@@ -34,9 +61,10 @@ export function extractWebtrakBandCode(raw: unknown): string | null {
 }
 
 function resolvePathForBoth(currentCode: string): readonly string[] {
-  const tech = TECH_PROMOTION_PATH as readonly string[];
-  const nonTech = NON_TECH_PROMOTION_PATH as readonly string[];
-  let promotionPath: readonly string[] = TECH_SET.has(currentCode) ? tech : nonTech;
+  const tech = getTechPromotionPath();
+  const nonTech = getNonTechPromotionPath();
+  const techSet = new Set(tech);
+  let promotionPath: readonly string[] = techSet.has(currentCode) ? tech : nonTech;
   let idx = promotionPath.indexOf(currentCode);
   if (idx === -1 || idx === promotionPath.length - 1) {
     const fallbackPath = promotionPath === tech ? nonTech : tech;
@@ -50,8 +78,8 @@ export function resolvePromotionPath(
   currentCode: string | null,
 ): readonly string[] | null {
   if (!currentCode) return null;
-  if (bandType === "TECH") return TECH_PROMOTION_PATH;
-  if (bandType === "NON_TECH") return NON_TECH_PROMOTION_PATH;
+  if (bandType === "TECH") return getTechPromotionPath();
+  if (bandType === "NON_TECH") return getNonTechPromotionPath();
   return resolvePathForBoth(currentCode);
 }
 

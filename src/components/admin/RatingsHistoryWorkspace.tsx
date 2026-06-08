@@ -17,6 +17,7 @@ import {
   normalizeYearMonth,
   resolveSubmissionCycleKey,
 } from "../../utils/reviewCycles";
+import { filterEmployeesForRatingsHistory } from "../../utils/portalAccess";
 
 function isAbortError(err) {
   return err?.name === "AbortError" || String(err?.message || "").toLowerCase().includes("aborted");
@@ -95,8 +96,10 @@ function buildEmployeeHistory(submissions) {
 }
 
 export default function RatingsHistoryWorkspace({
+  auth = null,
   employees: employeesProp = [],
   employeesLoading = false,
+  isHrView = false,
 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -108,7 +111,10 @@ export default function RatingsHistoryWorkspace({
   const [toast, setToast] = useState(null);
   const requestIdRef = useRef(0);
 
-  const employees = Array.isArray(employeesProp) ? employeesProp : [];
+  const employees = useMemo(
+    () => filterEmployeesForRatingsHistory(auth, employeesProp),
+    [auth, employeesProp],
+  );
   const showToast = useCallback((next) => setToast(next), []);
 
   const loadSubmissions = useCallback(async ({ signal } = {}) => {
@@ -252,7 +258,11 @@ export default function RatingsHistoryWorkspace({
     <AdminPageShell>
       <AdminPageHeader
         title="Ratings history"
-        subtitle={`Super Admin view — current cycle (${currentCycleLabel}), all-time averages, and full monthly history.`}
+        subtitle={
+          isHrView
+            ? `HR view — employee and manager ratings only. Other HR and Super Admin profiles are hidden.`
+            : `Super Admin view — current cycle (${currentCycleLabel}), all-time averages, and full monthly history.`
+        }
       >
         <EntityCsvToolbar
           entityKey="ratings-history"

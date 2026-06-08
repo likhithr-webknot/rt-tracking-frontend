@@ -46,6 +46,7 @@ import {
   resolveManagerValueRatings,
   resolveSubmissionKpiRatings,
   resolveSubmissionValueRatings,
+  resolveSubmissionIdFromRow,
   saveMonthlyDraft,
   submitMonthlySubmission,
 } from "../../api/monthly-submissions";
@@ -53,7 +54,6 @@ import {
   fetchManagerReportees,
   fetchSuperAdminReviewers,
   normalizeEmployees,
-  normalizeSuperAdminReviewers,
 } from "../../api/employees";
 import { fetchEmployeePortalKpiDefinitions, normalizeCursorPage } from "../../api/employee-portal";
 import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions";
@@ -65,7 +65,15 @@ import {
   markNotificationAsRead,
 } from "../../api/notifications";
 import { getManagerSettings } from "../../utils/appSettings";
-import { buildCycleMeta, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles";
+import {
+  buildCycleMeta,
+  getCycleForMonth,
+  isDraftSaveBlockedByReviewStateMessage,
+  isManagerSelfReviewLocked,
+  isResubmissionRequested,
+  normalizeYearMonth,
+  resolveReviewingSuperAdminIds,
+} from "../../utils/reviewCycles";
 import { formatPerformanceRating, performanceRatingLabel, performanceRatingScaleText, parseIntegerPerformanceRating } from "../../utils/ratingLabels";
 import { IntegerPerformanceRatingSelect } from "../shared/PerformanceRatingField";
 
@@ -80,7 +88,6 @@ import ManagerSettingsPanel from "../shared/settings/ManagerSettingsPanel";
 import PortalPageHeader from "../shared/PortalPageHeader";
 import PortalWorkflowFrame from "../shared/PortalWorkflowFrame";
 import SubmissionWindowClosed from "../employee/SubmissionWindowClosed";
-import ManagerAiReviewAssist from "./ManagerAiReviewAssist";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
 import ResubmissionPlaybook from "../shared/ResubmissionPlaybook";
 import { captureRejectSnapshot } from "../../utils/resubmissionPlaybook";
@@ -95,6 +102,7 @@ import {
   markAllManagerNotificationsRead,
   markManagerNotificationRead,
   normalizeManagerNotificationPage,
+  resolveNotificationUserId,
   subscribeManagerNotificationsStream,
 } from "../../api/notifications";
 import { MANAGER_NAV_GROUPS, MANAGER_TAB_COPY } from "../../config/portalNavigation";
@@ -131,17 +139,105 @@ function isSubmittedStatus(status) {
   return s === "SUBMITTED" || s === "APPROVED" || s === "COMPLETED" || s === "FINAL";
 }
 
-function isPendingManagerReviewRow(row) {
-  const reviewStatus = String(
-    row?.raw?.reviewStatus ??
-    row?.payload?.reviewStatus ??
-    row?.submission?.reviewStatus ??
-    ""
+function resolveTeamRowReviewStatus(row) {
+  return String(
+    row?.reviewStatus ??
+      row?.raw?.reviewStatus ??
+      row?.payload?.reviewStatus ??
+      row?.submission?.reviewStatus ??
+      ""
   )
     .trim()
     .toUpperCase();
+}
+
+/** Employee resubmitted after reject — old managerReview.action may still be REJECT on the server. */
+function isStaleManagerRejectTeamRow(row) {
+  const status = String(row?.status || "").trim().toUpperCase();
+  const reviewStatus = resolveTeamRowReviewStatus(row);
+  const rawManagerAction = String(
+    row?.raw?.managerReview?.action ??
+      row?.payload?.managerReview?.action ??
+      ""
+  )
+    .trim()
+    .toUpperCase();
+  return status === "SUBMITTED" && reviewStatus === "SUBMITTED" && rawManagerAction === "REJECT";
+}
+
+/** Manager sent submission back — waiting on employee, not on manager review. */
+function isAwaitingEmployeeResubmission(row) {
+  const reviewStatus = resolveTeamRowReviewStatus(row);
+  if (reviewStatus === "NEEDS_REVIEW" || reviewStatus === "REJECT") return true;
+  if (isStaleManagerRejectTeamRow(row)) return false;
+  if (
+    Boolean(
+      row?.reopenedForResubmission ??
+        row?.raw?.reopenedForResubmission ??
+        row?.payload?.reopenedForResubmission
+    )
+  ) {
+    return true;
+  }
+  const managerAction = String(
+    row?.raw?.managerReview?.action ?? row?.payload?.managerReview?.action ?? ""
+  )
+    .trim()
+    .toUpperCase();
+  return managerAction === "REJECT";
+}
+
+function isPendingManagerReviewRow(row) {
+  if (isAwaitingEmployeeResubmission(row)) return false;
+  const reviewStatus = resolveTeamRowReviewStatus(row);
   if (reviewStatus === "NEEDS_MANAGER_REVIEW") return true;
   return isSubmittedStatus(row?.status) && !row?.managerSubmitted;
+}
+
+function isAdminReturnedManagerReviewRow(row) {
+  return resolveTeamRowReviewStatus(row) === "NEEDS_MANAGER_REVIEW";
+}
+
+function parseAdminReviewFromRow(row) {
+  const direct =
+    row?.adminReview ??
+    row?.submission?.adminReview ??
+    row?.raw?.adminReview ??
+    row?.payload?.adminReview ??
+    null;
+  if (direct && typeof direct === "object") return direct;
+
+  const jsonRaw =
+    row?.raw?.adminReviewJson ??
+    row?.submission?.raw?.adminReviewJson ??
+    row?.submission?.adminReviewJson;
+  if (typeof jsonRaw === "string" && jsonRaw.trim()) {
+    try {
+      const parsed = JSON.parse(jsonRaw);
+      return parsed?.adminReview && typeof parsed.adminReview === "object" ? parsed.adminReview : parsed;
+    } catch {
+      return null;
+    }
+  }
+  if (jsonRaw && typeof jsonRaw === "object") {
+    return jsonRaw?.adminReview && typeof jsonRaw.adminReview === "object" ? jsonRaw.adminReview : jsonRaw;
+  }
+  return null;
+}
+
+function resolveAdminReturnActor(row) {
+  const adminReview = parseAdminReviewFromRow(row);
+  return String(adminReview?.reviewedBy ?? adminReview?.reviewerName ?? "").trim() || null;
+}
+
+function resolveAdminReturnComment(row) {
+  const adminReview = parseAdminReviewFromRow(row);
+  return String(
+    adminReview?.comments ??
+    row?.raw?.adminComments ??
+    row?.payload?.adminComments ??
+    ""
+  ).trim() || null;
 }
 
 function normalizeCertificationsForState(input) {
@@ -254,10 +350,17 @@ function normalizeTeamSubmissions(data) {
         submissionId: submission?.id ?? (obj.submissionId ? String(obj.submissionId) : null),
         month: submission?.month ?? (typeof obj.month === "string" ? obj.month : null),
         status: submission?.status ?? (typeof obj.status === "string" ? obj.status : null),
+        reviewStatus:
+          submission?.reviewStatus ??
+          (typeof obj.reviewStatus === "string" ? obj.reviewStatus : null),
+        reopenedForResubmission: Boolean(
+          submission?.reopenedForResubmission ?? obj?.reopenedForResubmission
+        ),
         updatedAt: submission?.updatedAt ?? (obj.updatedAt ? String(obj.updatedAt) : null),
         submittedAt: submission?.submittedAt ?? (obj.submittedAt ? String(obj.submittedAt) : null),
         managerSubmitted,
         managerSubmittedAt,
+        adminReview: submission?.adminReview ?? null,
         employee: {
           id: employeeId == null ? "—" : String(employeeId),
           name: employeeName ? String(employeeName) : (email ? String(email) : "Unknown"),
@@ -537,17 +640,31 @@ function normalizeSelfValueRatings(input) {
   return out;
 }
 
-function resolveSelfReviewReviewerFromSubmission(normalized) {
-  if (!normalized || typeof normalized !== "object") return { id: "", name: "", email: "" };
+function resolveSelfReviewReviewersFromSubmission(normalized, options = []) {
+  const ids = resolveReviewingSuperAdminIds(normalized);
+  const optionById = new Map(
+    (Array.isArray(options) ? options : [])
+      .map((row) => [String(row?.id || "").trim(), row])
+      .filter(([id]) => id)
+  );
   const payload =
-    normalized.payload && typeof normalized.payload === "object"
+    normalized?.payload && typeof normalized.payload === "object"
       ? normalized.payload
-      : normalized;
-  return {
-    id: String(payload.reviewingManagerId ?? payload.managerId ?? "").trim(),
-    name: String(payload.reviewingManagerName ?? "").trim(),
-    email: String(payload.reviewingManagerEmail ?? "").trim(),
-  };
+      : normalized?.raw?.payload && typeof normalized.raw.payload === "object"
+        ? normalized.raw.payload
+        : normalized && typeof normalized === "object"
+          ? normalized
+          : {};
+  const fromPayload = Array.isArray(payload.reviewingManagers) ? payload.reviewingManagers : [];
+  return ids.map((id) => {
+    const fromOption = optionById.get(id);
+    const fromSaved = fromPayload.find((row) => String(row?.id || "").trim() === id);
+    return {
+      id,
+      name: String(fromOption?.name ?? fromSaved?.name ?? payload.reviewingManagerName ?? "").trim(),
+      email: String(fromOption?.email ?? fromSaved?.email ?? payload.reviewingManagerEmail ?? "").trim(),
+    };
+  });
 }
 
 function buildManagerSelfSubmissionPayload({
@@ -558,6 +675,7 @@ function buildManagerSelfSubmissionPayload({
   valueComments,
   allowedKpiIds,
   managerId,
+  reviewingManagers = [],
   reviewingManagerId = null,
   reviewingManagerName = null,
   reviewingManagerEmail = null,
@@ -596,6 +714,19 @@ function buildManagerSelfSubmissionPayload({
   }));
   const webknotValues = valueEntries.map(([id]) => String(id));
   const monthKey = normalizeYearMonth(month) || String(month || "").trim() || null;
+  const reviewerRows = (Array.isArray(reviewingManagers) ? reviewingManagers : [])
+    .map((row) => ({
+      id: String(row?.id || "").trim(),
+      name: String(row?.name || "").trim() || null,
+      email: String(row?.email || "").trim() || null,
+    }))
+    .filter((row) => row.id);
+  const reviewingManagerIds = reviewerRows.map((row) => row.id);
+  const primaryReviewer = reviewerRows[0] || {
+    id: String(reviewingManagerId || "").trim(),
+    name: String(reviewingManagerName || "").trim() || null,
+    email: String(reviewingManagerEmail || "").trim() || null,
+  };
 
   const next = {
     month: monthKey,
@@ -611,10 +742,12 @@ function buildManagerSelfSubmissionPayload({
     actorRole: "MANAGER",
     targetRole: "MANAGER",
     subjectEmployeeId: String(managerId || "").trim() || null,
-    reviewingManagerId: String(reviewingManagerId || "").trim() || null,
-    reviewingManagerName: String(reviewingManagerName || "").trim() || null,
-    reviewingManagerEmail: String(reviewingManagerEmail || "").trim() || null,
-    managerId: String(reviewingManagerId || "").trim() || null,
+    reviewingManagerIds,
+    reviewingManagers: reviewerRows,
+    reviewingManagerId: primaryReviewer.id || null,
+    reviewingManagerName: primaryReviewer.name || null,
+    reviewingManagerEmail: primaryReviewer.email || null,
+    managerId: String(managerId || "").trim() || null,
     selfReviewText: String(selfReviewText || ""),
     kpiRatings: kpiRatingsArray,
     webknotValues,
@@ -640,11 +773,6 @@ function isFinalSubmissionStatus(status, meta) {
   if (s === "SUBMITTED" || s === "APPROVED" || s === "COMPLETED" || s === "FINAL") return true;
   if (meta?.submittedAt) return true;
   return false;
-}
-
-function isManagerSelfReviewLocked(meta) {
-  if (!isFinalSubmissionStatus(meta?.status, meta)) return false;
-  return !isResubmissionRequested(meta);
 }
 
 function payloadHash(payload) {
@@ -766,7 +894,7 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [selfRatingValidationError, setSelfRatingValidationError] = useState("");
   const [hydratingSelfSubmission, setHydratingSelfSubmission] = useState(false);
   const [selfSubmissionMeta, setSelfSubmissionMeta] = useState(null);
-  const [selfReviewingManagerId, setSelfReviewingManagerId] = useState("");
+  const [selfReviewingManagerIds, setSelfReviewingManagerIds] = useState([]);
   const [superAdminReviewersLoading, setSuperAdminReviewersLoading] = useState(false);
   const [superAdminReviewerOptions, setSuperAdminReviewerOptions] = useState([]);
 
@@ -782,13 +910,12 @@ export default function ManagerPortal({ onLogout, auth }) {
   const notificationsLoadedRef = useRef(false);
   const notifiedEventKeysRef = useRef(new Set());
   const lastSavedSelfDraftHashRef = useRef("");
+  const selfDraftSaveGenerationRef = useRef(0);
 
   const [reviewModal, setReviewModal] = useState({ open: false, row: null });
 
-  /* ── quick reject dialog state ── */
-  const [quickRejectModal, setQuickRejectModal] = useState({ open: false, row: null });
-  const [quickRejectComment, setQuickRejectComment] = useState("");
-  const [quickRejectBusy, setQuickRejectBusy] = useState(false);
+  const [rejectArmed, setRejectArmed] = useState(false);
+  const managerNotesRef = useRef(null);
 
   /* ── project ratings state ── */
   const [mgrProjects, setMgrProjects] = useState([]);
@@ -982,32 +1109,28 @@ export default function ManagerPortal({ onLogout, auth }) {
     () => notifications.reduce((count, item) => (item?.read ? count : count + 1), 0),
     [notifications]
   );
-  const notificationUserId = useMemo(() => {
-    const candidates = [
-      managerId,
+  const notificationUserId = useMemo(
+    () => resolveNotificationUserId(
       auth?.id,
       auth?.userId,
-      auth?.employeeId,
-      auth?.empId,
       auth?.claims?.userId,
       auth?.claims?.uid,
+      managerId,
+      auth?.employeeId,
+      auth?.empId,
       auth?.claims?.sub,
-    ];
-    for (const candidate of candidates) {
-      const text = String(candidate ?? "").trim();
-      if (text) return text;
-    }
-    return "";
-  }, [
-    managerId,
-    auth?.claims?.sub,
-    auth?.claims?.uid,
-    auth?.claims?.userId,
-    auth?.empId,
-    auth?.employeeId,
-    auth?.id,
-    auth?.userId,
-  ]);
+    ),
+    [
+      managerId,
+      auth?.claims?.sub,
+      auth?.claims?.uid,
+      auth?.claims?.userId,
+      auth?.empId,
+      auth?.employeeId,
+      auth?.id,
+      auth?.userId,
+    ],
+  );
 
   const reloadNotifications = useCallback(async ({
     signal,
@@ -1205,115 +1328,7 @@ export default function ManagerPortal({ onLogout, auth }) {
     setManagerValueRatings({});
     setManagerNotes("");
     setSavingReview(false);
-  }
-
-  /* ── quick reject (from table action button) ── */
-  async function submitQuickReject() {
-    const row = quickRejectModal.row;
-    if (!row) return;
-    const comment = String(quickRejectComment || "").trim();
-    if (comment.length < 10) {
-      showToast({ title: "Too short", message: "Rejection comments must be at least 10 characters." });
-      return;
-    }
-    const empId = String(row.employee?.id || "").trim();
-    const m = String(row.month || month || "").trim();
-    if (!empId || !m) {
-      showToast({ title: "Missing data", message: "Employee id or month is missing." });
-      return;
-    }
-    setQuickRejectBusy(true);
-    try {
-      const employeePayload = row.payload || {};
-      const reviewedAt = new Date().toISOString();
-      const cycleMeta = buildCycleMeta(m);
-      const employeeKpiRatings = resolveSubmissionKpiRatings(row);
-      const employeeValueRatings = resolveSubmissionValueRatings(row);
-      const employeeValueEntries = Object.entries(employeeValueRatings);
-      const employeeCertifications = normalizeCertificationsForState(employeePayload.certifications);
-      const rejectSnapshot = captureRejectSnapshot({ submission: employeePayload, raw: row?.raw });
-      const payload = {
-        submissionId: row?.submissionId ?? row?.id ?? row?.raw?.submissionId ?? row?.raw?.id ?? null,
-        month: m,
-        monthKey: m,
-        cycleKey: cycleMeta.cycleKey,
-        cycleLabel: cycleMeta.cycleLabel,
-        cycleShortLabel: cycleMeta.cycleShortLabel,
-        cycleStartMonth: cycleMeta.cycleStartMonth,
-        cycleEndMonth: cycleMeta.cycleEndMonth,
-        cycleMonth: cycleMeta.month,
-        submissionType: row?.submissionType || "EMPLOYEE_MONTHLY_SUBMISSION",
-        actorRole: "MANAGER",
-        targetRole: "EMPLOYEE",
-        workflowStage: "MANAGER_REVIEW",
-        subjectEmployeeId: empId,
-        profileVerified: true,
-        employeeId: empId,
-        selfReviewText: String(employeePayload.selfReviewText || ""),
-        certifications: employeeCertifications,
-        webknotValues: employeeValueEntries.map(([valueId]) => String(valueId || "").trim()),
-        webknotValueRatings: Object.fromEntries(employeeValueEntries),
-        webknotValueResponses: employeeValueEntries.map(([valueId, rating]) => ({
-          valueId: String(valueId || "").trim(),
-          rating,
-        })),
-        recognitionsCount: Number(employeePayload.recognitionsCount || 0) || 0,
-        kpiRatings: Object.entries(employeeKpiRatings || {}).map(([kpiId, rating]) => ({
-          kpiId: String(kpiId || "").trim(),
-          rating,
-        })),
-        managerEvaluation: {
-          kpiRatings: {},
-          webknotValueRatings: {},
-          comments: comment,
-          reviewedAt,
-          reviewedBy: managerId || null,
-        },
-        managerReview: {
-          action: "REJECT",
-          comments: comment,
-          reviewedAt,
-          reviewedBy: managerId || null,
-        },
-        managerSubmittedAt: null,
-        managerComments: comment,
-        managerNotes: comment,
-        reviewStatus: "NEEDS_REVIEW",
-        reopenedForResubmission: true,
-        _rejectSnapshot: rejectSnapshot,
-      };
-      await submitMonthlySubmission(payload);
-      showToast({ title: "Rejected", message: "Sent back with comments for resubmission." });
-      setTeamSubs((prev) =>
-        prev.map((s) => {
-          const sameEmp = String(s?.employee?.id || "") === empId;
-          const sameMonth = String(s?.month || "") === m;
-          if (!sameEmp || !sameMonth) return s;
-          return {
-            ...s,
-            status: "NEEDS_REVIEW",
-            updatedAt: reviewedAt,
-            managerSubmitted: false,
-            raw: {
-              ...(s.raw && typeof s.raw === "object" ? s.raw : {}),
-              managerReview: payload.managerReview,
-              managerEvaluation: payload.managerEvaluation,
-              reviewStatus: "NEEDS_REVIEW",
-              reopenedForResubmission: true,
-              _rejectSnapshot: rejectSnapshot,
-            },
-          };
-        })
-      );
-      setQuickRejectModal({ open: false, row: null });
-      setQuickRejectComment("");
-      await reloadTeam();
-      await reloadTeamInsights();
-    } catch (err) {
-      showToast({ title: "Reject failed", message: err?.message || "Please try again.", tone: "error" });
-    } finally {
-      setQuickRejectBusy(false);
-    }
+    setRejectArmed(false);
   }
 
   const selectedRow = reviewModal.open ? reviewModal.row : null;
@@ -1550,8 +1565,8 @@ export default function ManagerPortal({ onLogout, auth }) {
         const data = await fetchSuperAdminReviewers({ signal: controller.signal });
         if (!mounted) return;
         const selfKey = String(managerId || auth?.employeeId || "").trim();
-        const options = normalizeSuperAdminReviewers(data)
-          .filter((row) => row.id && row.id !== selfKey)
+        const options = (Array.isArray(data) ? data : [])
+          .filter((row) => String(row?.id || "").trim() && String(row.id).trim() !== selfKey)
           .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
         setSuperAdminReviewerOptions(options);
       } catch (err) {
@@ -1568,13 +1583,22 @@ export default function ManagerPortal({ onLogout, auth }) {
   }, [activeTab, auth?.employeeId, managerId]);
 
   const selfReviewerFields = useMemo(() => {
-    const selected = superAdminReviewerOptions.find((m) => String(m.id) === String(selfReviewingManagerId || "").trim());
+    const selected = selfReviewingManagerIds
+      .map((id) => superAdminReviewerOptions.find((m) => String(m.id) === String(id || "").trim()))
+      .filter(Boolean);
+    const reviewingManagers = selected.map((row) => ({
+      id: String(row.id || "").trim(),
+      name: String(row.name || "").trim() || null,
+      email: String(row.email || "").trim() || null,
+    }));
+    const primary = reviewingManagers[0] || null;
     return {
-      reviewingManagerId: String(selfReviewingManagerId || "").trim() || null,
-      reviewingManagerName: selected?.name || null,
-      reviewingManagerEmail: selected?.email || null,
+      reviewingManagers,
+      reviewingManagerId: primary?.id || null,
+      reviewingManagerName: primary?.name || null,
+      reviewingManagerEmail: primary?.email || null,
     };
-  }, [selfReviewingManagerId, superAdminReviewerOptions]);
+  }, [selfReviewingManagerIds, superAdminReviewerOptions]);
 
   const reloadTeam = useCallback(
     async ({ signal, cursor, pageAction = "stay", fromCursor = null } = {}) => {
@@ -1754,7 +1778,7 @@ export default function ManagerPortal({ onLogout, auth }) {
           setManagerSelfKpiRatings({});
           setManagerSelfValueRatings({});
           setManagerSelfValueComments({});
-          setSelfReviewingManagerId("");
+          setSelfReviewingManagerIds([]);
           const cleared = buildManagerSelfSubmissionPayload({
             month,
             selfReviewText: "",
@@ -1786,12 +1810,15 @@ export default function ManagerPortal({ onLogout, auth }) {
           reviewStatus: normalized.reviewStatus || null,
           managerReview: normalized.managerReview || null,
           managerSubmittedAt: normalized.managerSubmittedAt || null,
+          managerSelfReviewEvalComments:
+            normalized.raw?.managerSelfReviewEvalComments ?? normalized.managerReview?.comments ?? null,
           adminReview: normalized.adminReview || null,
           adminSubmittedAt: normalized.adminSubmittedAt || null,
           reopenedForResubmission: Boolean(normalized.reopenedForResubmission),
           resubmissionRequested: Boolean(normalized.resubmissionRequested),
           submittedAt: normalized.submittedAt || null,
           updatedAt: normalized.updatedAt || null,
+          raw: normalized.raw ?? null,
         });
         setManagerSelfReviewText(normalized.selfReviewText || "");
         setManagerSelfKpiRatings(nextKpis);
@@ -1806,24 +1833,32 @@ export default function ManagerPortal({ onLogout, auth }) {
               )
             : {};
         setManagerSelfValueComments(nextValueComments);
-        const reviewer = resolveSelfReviewReviewerFromSubmission(normalized);
-        setSelfReviewingManagerId(reviewer.id || "");
+        const reviewers = resolveSelfReviewReviewersFromSubmission(normalized, superAdminReviewerOptions);
+        setSelfReviewingManagerIds(reviewers.map((row) => row.id).filter(Boolean));
 
         const loaded = buildManagerSelfSubmissionPayload({
           month: normalized.month || month,
           selfReviewText: normalized.selfReviewText || "",
           kpiRatings: nextKpis,
           selectedValues: nextValues,
-            valueComments: nextValueComments,
+          valueComments: nextValueComments,
           allowedKpiIds: filteredSelfKpiIds,
           managerId,
-          reviewingManagerId: reviewer.id || null,
-          reviewingManagerName: reviewer.name || null,
-          reviewingManagerEmail: reviewer.email || null,
+          reviewingManagers: reviewers,
           reviewStatus: normalized.reviewStatus || "DRAFT",
           reopenedForResubmission: normalized.reopenedForResubmission,
         });
         lastSavedSelfDraftHashRef.current = payloadHash(loaded);
+        if (isManagerSelfReviewLocked({
+          reviewStatus: normalized.reviewStatus,
+          status: normalized.status,
+          submittedAt: normalized.submittedAt,
+          reopenedForResubmission: normalized.reopenedForResubmission,
+          resubmissionRequested: normalized.resubmissionRequested,
+          adminReview: normalized.adminReview,
+        })) {
+          selfDraftSaveGenerationRef.current += 1;
+        }
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!mounted) return;
@@ -1909,10 +1944,13 @@ export default function ManagerPortal({ onLogout, auth }) {
     const reviewStatus = String(selfSubmissionMeta?.reviewStatus || "DRAFT").trim().toUpperCase();
     const adminAction = String(selfSubmissionMeta?.adminReview?.action || "").trim().toUpperCase();
     const submittedAt = selfSubmissionMeta?.submittedAt || selfSubmissionMeta?.updatedAt || null;
+    const reviewerNames = selfReviewingManagerIds
+      .map((id) => superAdminReviewerOptions.find((m) => String(m.id) === String(id))?.name || id)
+      .filter(Boolean);
     const actor =
       selfSubmissionMeta?.adminReview?.reviewedBy ||
-      superAdminReviewerOptions.find((m) => m.id === selfReviewingManagerId)?.name ||
-      "Super Admin";
+      selfSubmissionMeta?.managerReview?.reviewedBy ||
+      (reviewerNames.length ? reviewerNames.join(", ") : "Super Admin");
     const needsChanges = Boolean(isResubmissionRequested(selfSubmissionMeta));
     if (needsChanges) {
       return {
@@ -1932,23 +1970,36 @@ export default function ManagerPortal({ onLogout, auth }) {
         timestamp: formatReviewTimestamp(selfSubmissionMeta?.adminReview?.reviewedAt || submittedAt),
       };
     }
-    if (reviewStatus.includes("SUBMITTED")) {
+    if (isManagerSelfReviewLocked(selfSubmissionMeta)) {
       return {
-        chip: adminAction ? `Review: ${adminAction}` : "Submitted",
-        chipClass: "bg-blue-500/15 text-blue-800 dark:text-blue-200 border-blue-500/30",
-        title: "Pending super admin review",
-        detail: "Your selected super admin reviews this in Admin Submissions. You can edit until they finalize unless locked.",
-        timestamp: formatReviewTimestamp(submittedAt),
+        chip: reviewStatus.includes("APPROVED") || adminAction === "APPROVE" ? "Approved" : "Submitted",
+        chipClass:
+          reviewStatus.includes("APPROVED") || adminAction === "APPROVE"
+            ? "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border-emerald-500/30"
+            : "bg-blue-500/15 text-blue-800 dark:text-blue-200 border-blue-500/30",
+        title:
+          reviewStatus.includes("APPROVED") || adminAction === "APPROVE"
+            ? "Approved by super admin"
+            : "Submitted — locked for this month",
+        detail:
+          reviewStatus.includes("APPROVED") || adminAction === "APPROVE"
+            ? actor
+              ? `${actor} approved your self review.`
+              : "Your super admin approved this self review."
+            : "Your self review is locked for this month. Your selected super admin will review and approve in Admin Submissions.",
+        timestamp: formatReviewTimestamp(
+          selfSubmissionMeta?.adminReview?.reviewedAt || submittedAt
+        ),
       };
     }
     return {
       chip: "Draft",
       chipClass: "bg-slate-500/10 text-slate-700 dark:text-slate-200 border-slate-500/20",
       title: "Draft in progress",
-      detail: "Choose your super admin reviewer, complete band KPIs and Webknot values, then submit.",
+      detail: "Choose one or more super admin reviewers, complete band KPIs and Webknot values, then submit.",
       timestamp: submittedAt ? formatReviewTimestamp(submittedAt) : "—",
     };
-  }, [selfSubmissionMeta, selfReviewingManagerId, superAdminReviewerOptions]);
+  }, [selfSubmissionMeta, selfReviewingManagerIds, superAdminReviewerOptions]);
 
   useEffect(() => {
     if (!String(month || "").trim()) return;
@@ -1976,11 +2027,19 @@ export default function ManagerPortal({ onLogout, auth }) {
     if (hash === lastSavedSelfDraftHashRef.current) return;
 
     const delayMs = getDraftAutosaveDelayMs();
+    const saveGeneration = selfDraftSaveGenerationRef.current;
     const id = window.setTimeout(async () => {
+      if (saveGeneration !== selfDraftSaveGenerationRef.current) return;
+      if (isManagerSelfReviewLocked(selfSubmissionMeta)) return;
+
+      if (saveGeneration !== selfDraftSaveGenerationRef.current) return;
+
       setManagerDraftError("");
       setManagerDraftSaving(true);
       try {
+        if (saveGeneration !== selfDraftSaveGenerationRef.current) return;
         const saved = await saveMonthlyDraft(payload);
+        if (saveGeneration !== selfDraftSaveGenerationRef.current) return;
         lastSavedSelfDraftHashRef.current = hash;
         const normalized = normalizeMonthlySubmission(saved);
         if (normalized) {
@@ -1998,7 +2057,12 @@ export default function ManagerPortal({ onLogout, auth }) {
           onLogout?.();
           return;
         }
-        setManagerDraftError(err?.message || "Failed to save draft.");
+        const message = err?.message || "Failed to save draft.";
+        if (isDraftSaveBlockedByReviewStateMessage(message)) {
+          lastSavedSelfDraftHashRef.current = hash;
+          return;
+        }
+        setManagerDraftError(message);
       } finally {
         setManagerDraftSaving(false);
       }
@@ -2101,13 +2165,15 @@ export default function ManagerPortal({ onLogout, auth }) {
       if (seen.has(empId)) continue;
       const status = String(s.status || "").trim().toUpperCase();
       const submitted = isSubmittedStatus(status);
-      const pendingReview = submitted && !s.managerSubmitted;
+      const pendingReview = isPendingManagerReviewRow(s);
+      const awaitingEmployee = isAwaitingEmployeeResubmission(s);
       seen.set(empId, {
         id: empId,
         name: s.employee?.name || s.employee?.email || empId,
         email: s.employee?.email || "—",
         submitted,
         pendingReview,
+        awaitingEmployee,
         managerSubmitted: Boolean(s.managerSubmitted),
         status,
       });
@@ -2231,8 +2297,10 @@ export default function ManagerPortal({ onLogout, auth }) {
       }
       showToast({ title: "Draft saved", message: "Manager self review saved." });
     } catch (err) {
-      setManagerDraftError(err?.message || "Please try again.");
-      showToast({ title: "Save failed", message: err?.message || "Please try again.", tone: "error" });
+      const message = err?.message || "Please try again.";
+      if (isDraftSaveBlockedByReviewStateMessage(message)) return;
+      setManagerDraftError(message);
+      showToast({ title: "Save failed", message, tone: "error" });
     } finally {
       setSavingSelfReview(false);
     }
@@ -2248,10 +2316,10 @@ export default function ManagerPortal({ onLogout, auth }) {
       showToast({ title: "Missing self review", message: "Write your self review before submitting." });
       return;
     }
-    if (!String(selfReviewingManagerId || "").trim()) {
+    if (!selfReviewingManagerIds.length) {
       showToast({
-        title: "Select reviewer",
-        message: "Choose the super admin who will review your self review.",
+        title: "Select reviewer(s)",
+        message: "Choose at least one super admin who will review your self review.",
         tone: "error",
       });
       return;
@@ -2271,6 +2339,7 @@ export default function ManagerPortal({ onLogout, auth }) {
       }),
       submittedAt: new Date().toISOString(),
     };
+    selfDraftSaveGenerationRef.current += 1;
     setSavingSelfReview(true);
     try {
       const res = await submitMonthlySubmission(payload);
@@ -2286,12 +2355,15 @@ export default function ManagerPortal({ onLogout, auth }) {
         reviewStatus: normalized?.reviewStatus ?? "SUBMITTED",
         managerReview: normalized?.managerReview ?? null,
         managerSubmittedAt: normalized?.managerSubmittedAt ?? null,
+        managerSelfReviewEvalComments:
+          normalized?.raw?.managerSelfReviewEvalComments ?? normalized?.managerReview?.comments ?? null,
         adminReview: normalized?.adminReview ?? null,
         adminSubmittedAt: normalized?.adminSubmittedAt ?? null,
         reopenedForResubmission: Boolean(normalized?.reopenedForResubmission),
         resubmissionRequested: Boolean(normalized?.resubmissionRequested),
         submittedAt: normalized?.submittedAt ?? payload.submittedAt ?? now,
         updatedAt: normalized?.updatedAt ?? now,
+        raw: normalized?.raw ?? selfSubmissionMeta?.raw ?? null,
       });
       const normalizedValueComments = (normalized?.webknotValueComments && typeof normalized.webknotValueComments === "object")
         ? normalized.webknotValueComments
@@ -2400,8 +2472,17 @@ export default function ManagerPortal({ onLogout, auth }) {
       reviewAction === "REJECT"
         ? captureRejectSnapshot({ submission: employeePayload, raw: selectedRow?.raw })
         : null;
+    const submissionId = resolveSubmissionIdFromRow(selectedRow);
+    if ((reviewAction === "SUBMIT" || reviewAction === "REJECT") && !submissionId) {
+      showToast({
+        title: "Missing submission",
+        message: "Could not resolve submission id. Refresh the team list and try again.",
+        tone: "error",
+      });
+      return;
+    }
     const payload = {
-      submissionId: selectedRow?.submissionId ?? selectedRow?.id ?? null,
+      submissionId,
       month: m,
       monthKey: m,
       cycleKey: cycleMeta.cycleKey,
@@ -2479,11 +2560,14 @@ export default function ManagerPortal({ onLogout, auth }) {
             if (!sameEmp || !sameMonth) return s;
             return {
               ...s,
-              status: "NEEDS_REVIEW",
+              status: "SUBMITTED",
+              reviewStatus: "NEEDS_REVIEW",
+              reopenedForResubmission: true,
               updatedAt: reviewedAt,
               managerSubmitted: false,
               raw: {
                 ...(s.raw && typeof s.raw === "object" ? s.raw : {}),
+                status: "SUBMITTED",
                 managerReview: payload.managerReview,
                 managerEvaluation: payload.managerEvaluation,
                 reviewStatus: "NEEDS_REVIEW",
@@ -2563,7 +2647,7 @@ export default function ManagerPortal({ onLogout, auth }) {
           </button>
 
           {notificationsOpen ? (
-            <div className="mt-3 w-[min(92vw,420px)] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] shadow-lg">
+            <div className="absolute right-0 z-[100] mt-3 w-[min(92vw,420px)] rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] shadow-lg">
               <div className="flex items-center justify-between border-b border-[rgb(var(--border))] px-4 py-3">
                 <div>
                   <div className="text-[11px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
@@ -2619,9 +2703,22 @@ export default function ManagerPortal({ onLogout, auth }) {
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
-                            Employee Submission
+                            {String(item.type || "").toUpperCase() === "MONTHLY_MANAGER_REVIEW_SUBMITTED"
+                              && String(item.title || "").toLowerCase().includes("return")
+                              ? "Review returned"
+                              : String(item.type || "").toUpperCase() === "MONTHLY_SELF_REVIEW_SUBMITTED"
+                                ? "Employee submission"
+                                : "Manager alert"}
                           </div>
                           <div className="mt-1 text-sm font-bold text-[rgb(var(--text))] break-words">{item.title}</div>
+                          {item.senderName &&
+                          String(item.type || "").toUpperCase() === "MONTHLY_MANAGER_REVIEW_SUBMITTED" &&
+                          String(item.title || item.message || "").toLowerCase().includes("return") ? (
+                            <div className="mt-1 text-xs text-[rgb(var(--muted))]">
+                              Returned by{" "}
+                              <span className="font-medium text-[rgb(var(--text))]">{item.senderName}</span>
+                            </div>
+                          ) : null}
                           {item.message ? (
                             <div className="mt-1 text-xs text-[rgb(var(--muted))] break-words">{item.message}</div>
                           ) : null}
@@ -2817,6 +2914,10 @@ export default function ManagerPortal({ onLogout, auth }) {
                   {filteredTeamSubs.map((s) => {
                     const status = String(s.status || "—").toUpperCase();
                     const isSubmitted = isSubmittedStatus(status);
+                    const awaitingEmployee = isAwaitingEmployeeResubmission(s);
+                    const adminReturned = isAdminReturnedManagerReviewRow(s);
+                    const returnedByAdmin = resolveAdminReturnActor(s);
+                    const pendingManager = isPendingManagerReviewRow(s);
                     const submittedWhen = s.submittedAt || s.updatedAt || "—";
                     return (
                       <motion.tr
@@ -2855,34 +2956,51 @@ export default function ManagerPortal({ onLogout, auth }) {
                           {formatSubmittedAt(submittedWhen)}
                         </td>
                         <td className="p-6">
-                          {s.managerSubmitted ? (
+                          {adminReturned ? (
+                            <div className="space-y-1">
+                              <span className="inline-flex text-[10px] font-semibold uppercase whitespace-nowrap px-3 py-1 rounded-lg border bg-amber-500/10 text-amber-800 dark:text-amber-200 border-amber-500/30">
+                                Returned by admin
+                              </span>
+                              {returnedByAdmin ? (
+                                <div className="text-xs text-[rgb(var(--muted))]">{returnedByAdmin}</div>
+                              ) : null}
+                            </div>
+                          ) : s.managerSubmitted ? (
                             <span className="text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20">
                               Submitted
                             </span>
-                          ) : (
+                          ) : awaitingEmployee ? (
+                            <span className="text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/20">
+                              Returned
+                            </span>
+                          ) : pendingManager ? (
                             <span className="text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20">
                               Pending
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]">
+                              —
                             </span>
                           )}
                         </td>
                         <td className="p-6 text-right px-8">
                           <div className="inline-flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setReviewModal({ open: true, row: s })}
-                              className="rt-btn-ghost transition-all text-xs gap-1.5"
-                              title="Review submission"
-                            >
-                              <Eye size={13} /> Review
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => { setQuickRejectModal({ open: true, row: s }); setQuickRejectComment(""); }}
-                              className="rt-btn-danger transition-all text-xs gap-1.5"
-                              title="Reject with comments"
-                            >
-                              <XCircle size={13} /> Reject
-                            </button>
+                            {pendingManager ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setReviewModal({ open: true, row: s })}
+                                  className="rt-btn-ghost transition-all text-xs gap-1.5"
+                                  title="Review submission"
+                                >
+                                  <Eye size={13} /> Review
+                                </button>
+                              </>
+                            ) : awaitingEmployee ? (
+                              <span className="text-[10px] text-[rgb(var(--muted))]">Awaiting employee</span>
+                            ) : s.managerSubmitted ? (
+                              <span className="text-[10px] text-[rgb(var(--muted))]">Review complete</span>
+                            ) : null}
                           </div>
                         </td>
                       </motion.tr>
@@ -2985,14 +3103,26 @@ export default function ManagerPortal({ onLogout, auth }) {
                           "shrink-0 text-[10px] font-semibold uppercase px-2 py-1 rounded-full border",
                           emp.managerSubmitted
                             ? "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20"
+                            : emp.awaitingEmployee
+                              ? "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/20"
+                            : emp.pendingReview
+                              ? "bg-amber-500/10 text-amber-800 dark:text-amber-200 border-amber-500/25"
                             : emp.submitted
                               ? "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 border-emerald-500/25"
                               : "bg-amber-500/10 text-amber-800 dark:text-amber-200 border-amber-500/25",
                         ].join(" ")}>
-                          {emp.managerSubmitted ? "Reviewed" : emp.submitted ? "Submitted" : "Pending"}
+                          {emp.managerSubmitted
+                            ? "Reviewed"
+                            : emp.awaitingEmployee
+                              ? "Returned"
+                              : emp.pendingReview
+                                ? "Pending"
+                                : emp.submitted
+                                  ? "Submitted"
+                                  : "Pending"}
                         </span>
                       </div>
-                      {matchRow ? (
+                      {matchRow && isPendingManagerReviewRow(matchRow) ? (
                         <button
                           type="button"
                           onClick={() => setReviewModal({ open: true, row: matchRow })}
@@ -3062,7 +3192,8 @@ export default function ManagerPortal({ onLogout, auth }) {
 
             {selfReviewLocked && !selfNeedsResubmission ? (
               <div className="mt-5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-700 dark:text-emerald-200">
-                This month is submitted and locked. You can submit once per month.
+                This month&apos;s self review is submitted and locked. Your super admin will review your ratings in Admin Submissions.
+                To edit again, they must reject and send it back with comments.
               </div>
             ) : null}
             {!selfReviewLocked && selfNeedsResubmission ? (
@@ -3099,29 +3230,60 @@ export default function ManagerPortal({ onLogout, auth }) {
 
             <div className="mt-6 rt-panel-subtle rounded-lg p-4">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
-                Super admin reviewer
+                Super admin reviewers
               </label>
               <p className="mt-1 text-xs text-[rgb(var(--muted))] leading-relaxed">
-                Select who will review you this cycle. They will see your submission in Admin Submissions.
+                Select one or more super admins for this cycle. Each selected reviewer sees your submission in Admin Submissions.
+                Once any of them saves their manager review, your self review locks until they reject and send it back.
               </p>
-              <select
-                className="rt-input w-full mt-3"
-                value={selfReviewingManagerId}
-                disabled={selfReviewLocked || superAdminReviewersLoading}
-                onChange={(e) => setSelfReviewingManagerId(e.target.value)}
-              >
-                <option value="">{superAdminReviewersLoading ? "Loading super admins…" : "Choose super admin…"}</option>
-                {superAdminReviewerOptions.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}{m.email ? ` (${m.email})` : ""}
-                  </option>
-                ))}
-              </select>
-              {!superAdminReviewersLoading && superAdminReviewerOptions.length === 0 ? (
-                <p className="mt-2 text-xs text-amber-700 dark:text-amber-200">
-                  No super admin reviewers found. Ask HR to register Super Admin portal roles in the employee directory.
-                </p>
-              ) : null}
+              <div className="mt-3 space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                {superAdminReviewersLoading ? (
+                  <div className="text-xs text-[rgb(var(--muted))]">Loading super admins…</div>
+                ) : superAdminReviewerOptions.length ? (
+                  superAdminReviewerOptions.map((m) => {
+                    const id = String(m.id || "").trim();
+                    const checked = selfReviewingManagerIds.includes(id);
+                    return (
+                      <label
+                        key={id}
+                        className={[
+                          "flex items-start gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors",
+                          checked
+                            ? "border-blue-500/40 bg-blue-500/5"
+                            : "border-[rgb(var(--border))] hover:border-[rgb(var(--muted))]",
+                          selfReviewLocked ? "opacity-70 cursor-not-allowed" : "",
+                        ].join(" ")}
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-1"
+                          checked={checked}
+                          disabled={selfReviewLocked || superAdminReviewersLoading}
+                          onChange={() => {
+                            if (selfReviewLocked) return;
+                            setSelfReviewingManagerIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(id)) next.delete(id);
+                              else next.add(id);
+                              return [...next];
+                            });
+                          }}
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-[rgb(var(--text))]">{m.name || id}</span>
+                          {m.email ? (
+                            <span className="block text-[11px] text-[rgb(var(--muted))] truncate">{m.email}</span>
+                          ) : null}
+                        </span>
+                      </label>
+                    );
+                  })
+                ) : (
+                  <p className="text-xs text-amber-700 dark:text-amber-200">
+                    No super admin reviewers found. Ask HR to register Super Admin portal roles in the employee directory.
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="mt-6 space-y-4">
@@ -3265,9 +3427,37 @@ export default function ManagerPortal({ onLogout, auth }) {
               <div className="mt-1 text-xs text-[rgb(var(--muted))]">
                 {String(selectedRow.month || month)}
               </div>
+              {isAdminReturnedManagerReviewRow(selectedRow) ? (
+                <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-200">
+                  Returned by {resolveAdminReturnActor(selectedRow) || "Admin"}
+                </div>
+              ) : null}
             </div>
           }
         >
+
+            {isAdminReturnedManagerReviewRow(selectedRow) ? (
+              <section className="rt-panel overflow-hidden mb-6">
+                <div className="border-b border-[rgb(var(--border))] bg-[rgb(var(--surface-2))]/50 px-5 py-4 sm:px-6">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                    Admin feedback
+                  </p>
+                  <h3 className="mt-1 text-base font-semibold text-[rgb(var(--text))]">
+                    Returned by {resolveAdminReturnActor(selectedRow) || "Admin"}
+                  </h3>
+                  <p className="mt-1 text-sm text-[rgb(var(--muted))]">
+                    Update your manager ratings and comments, then submit again.
+                  </p>
+                </div>
+                {resolveAdminReturnComment(selectedRow) ? (
+                  <div className="px-5 py-4 sm:px-6 sm:py-5">
+                    <blockquote className="rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-4 py-3.5 text-sm text-[rgb(var(--text))] whitespace-pre-wrap leading-relaxed break-words">
+                      {resolveAdminReturnComment(selectedRow)}
+                    </blockquote>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
 
             {String(selectedRow?.status || "").toUpperCase().includes("NEEDS_REVIEW") ||
             selectedRow?.raw?.reopenedForResubmission ? (
@@ -3493,31 +3683,30 @@ export default function ManagerPortal({ onLogout, auth }) {
                   </div>
 
                   <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">Manager Comments</div>
-                      <ManagerAiReviewAssist
-                        disabled={savingReview}
-                        context={{
-                          employeeName: selectedRow.employee?.name,
-                          employeeKpiRatings: selectedEmployeeKpiRatings,
-                          managerKpiRatings: managerRatings,
-                          employeeValueRatings: selectedEmployeeValueRatings,
-                          managerValueRatings: managerValueRatings,
-                          rejectFeedback:
-                            selectedRow.raw?.managerReview?.comments ||
-                            selectedRow.payload?.managerReview?.comments ||
-                            "",
-                        }}
-                        onApply={(text) => setManagerNotes(text)}
-                      />
+                    <div className="text-xs font-semibold uppercase tracking-widest text-[rgb(var(--muted))]">
+                      Manager Comments
                     </div>
-                    <textarea
-                      value={managerNotes}
-                      onChange={(e) => setManagerNotes(e.target.value)}
-                      rows={6}
-                      className="mt-2 rt-input p-4 text-sm resize-none"
-                      placeholder="Add review comments. Required when rejecting."
-                    />
+                    {rejectArmed || String(managerNotes || "").trim().length > 0 ? (
+                      <textarea
+                        ref={managerNotesRef}
+                        value={managerNotes}
+                        onChange={(e) => setManagerNotes(e.target.value)}
+                        rows={6}
+                        className="mt-2 rt-input p-4 text-sm resize-none"
+                        placeholder="Add rejection comments (min 10 characters)."
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="mt-2 w-full rounded-xl border border-dashed border-[rgb(var(--border))] bg-[rgb(var(--surface-1))] px-4 py-3 text-left text-sm text-[rgb(var(--muted))] hover:bg-[rgb(var(--surface-2))] transition-colors"
+                        onClick={() => {
+                          setRejectArmed(true);
+                          window.setTimeout(() => managerNotesRef.current?.focus?.(), 0);
+                        }}
+                      >
+                        Add a comment (required to reject)
+                      </button>
+                    )}
                   </div>
 
                   <div className="flex justify-end gap-3 flex-wrap pt-2">
@@ -3544,6 +3733,33 @@ export default function ManagerPortal({ onLogout, auth }) {
                     </button>
                     <button
                       type="button"
+                      onClick={() => {
+                        if (savingReview) return;
+                        if (!rejectArmed) {
+                          setRejectArmed(true);
+                          showToast({ title: "Add comments", message: "Enter rejection comments (min 10 characters) to reject." });
+                          window.setTimeout(() => managerNotesRef.current?.focus?.(), 0);
+                          return;
+                        }
+                        if (String(managerNotes || "").trim().length < 10) {
+                          showToast({ title: "Too short", message: "Rejection comments must be at least 10 characters." });
+                          window.setTimeout(() => managerNotesRef.current?.focus?.(), 0);
+                          return;
+                        }
+                        submitManagerReviewDecision("REJECT");
+                      }}
+                      disabled={savingReview}
+                      className={[
+                        "rt-btn-danger transition-all",
+                        savingReview
+                          ? "opacity-50 cursor-not-allowed"
+                          : "",
+                      ].join(" ")}
+                    >
+                      {savingReview ? "Rejecting…" : "Reject"}
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => submitManagerReviewDecision("SUBMIT")}
                       disabled={savingReview}
                       className={[
@@ -3557,7 +3773,7 @@ export default function ManagerPortal({ onLogout, auth }) {
                     </button>
                   </div>
                   <div className="text-[10px] text-[rgb(var(--muted))]">
-                    Validation: submit requires KPI/value ratings (1-5).
+                    Validation: submit requires KPI/value ratings (1-5). Reject requires comments (min 10 characters).
                   </div>
                   <div className="text-[11px] text-[rgb(var(--muted))]">
                     Manager ratings and comments are the scores forwarded to admins.
@@ -3565,75 +3781,6 @@ export default function ManagerPortal({ onLogout, auth }) {
                 </div>
               </div>
             </div>
-        </ModalOverlay>
-      ) : null}
-
-      {/* ── Quick Reject Dialog ── */}
-      {quickRejectModal.open && quickRejectModal.row ? (
-        <ModalOverlay
-          isOpen
-          onClose={() => { setQuickRejectModal({ open: false, row: null }); setQuickRejectComment(""); }}
-          title="Reject Submission"
-          maxWidth="max-w-lg"
-          zIndex={80}
-        >
-          <div className="p-6 space-y-5">
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 space-y-2">
-              <div className="flex items-center gap-2">
-                <XCircle size={16} className="text-amber-600 dark:text-amber-400 flex-shrink-0" />
-                <span className="text-sm font-semibold text-amber-800 dark:text-amber-200">
-                  Rejecting submission from {quickRejectModal.row?.employee?.name || "employee"}
-                </span>
-              </div>
-              <div className="text-xs text-amber-700 dark:text-amber-300">
-                The employee will see your comments below and can update &amp; resubmit.
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
-                Manager Comments <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                value={quickRejectComment}
-                onChange={(e) => setQuickRejectComment(e.target.value)}
-                rows={4}
-                className="w-full rt-input py-3 px-4 text-sm rounded-xl resize-none"
-                placeholder="Provide feedback for the employee — what needs to be changed or improved (min 10 characters)..."
-                autoFocus
-              />
-              <div className="flex items-center justify-between">
-                <div className="text-[10px] text-[rgb(var(--muted))] flex items-center gap-1">
-                  <Eye size={10} /> Visible to employee
-                </div>
-                <div className="text-[10px] text-[rgb(var(--muted))]">
-                  {quickRejectComment.length} / 10 min
-                </div>
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 pt-1">
-              <button
-                type="button"
-                onClick={() => { setQuickRejectModal({ open: false, row: null }); setQuickRejectComment(""); }}
-                className="rt-btn-ghost"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={submitQuickReject}
-                disabled={quickRejectBusy || quickRejectComment.trim().length < 10}
-                className={[
-                  "rt-btn-danger transition-all",
-                  quickRejectBusy || quickRejectComment.trim().length < 10
-                    ? "opacity-50 cursor-not-allowed"
-                    : "",
-                ].join(" ")}
-              >
-                <XCircle size={14} />
-                {quickRejectBusy ? "Rejecting…" : "Reject"}
-              </button>
-            </div>
-          </div>
         </ModalOverlay>
       ) : null}
 

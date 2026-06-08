@@ -14,6 +14,8 @@ export const ADMIN_NOTIFICATION_TYPES = Object.freeze({
 
 export const MANAGER_NOTIFICATION_TYPES = Object.freeze({
   EMPLOYEE_SUBMITTED_FOR_REVIEW: "EMPLOYEE_SUBMITTED_FOR_REVIEW",
+  MONTHLY_SELF_REVIEW_SUBMITTED: "MONTHLY_SELF_REVIEW_SUBMITTED",
+  MONTHLY_MANAGER_REVIEW_SUBMITTED: "MONTHLY_MANAGER_REVIEW_SUBMITTED",
   PROJECT_STAKEHOLDER_ALERT: "PROJECT_STAKEHOLDER_ALERT",
   EMPLOYEE_PROJECT_SUBMITTED: "EMPLOYEE_PROJECT_SUBMITTED",
 });
@@ -185,14 +187,50 @@ function buildAdminMessage(type, payload, obj) {
   return direct || "";
 }
 
-function buildManagerTitle(type) {
+function resolveNotificationSenderName(obj, payload = {}) {
+  return toTrimmedString(
+    obj?.senderName ??
+    payload?.senderName ??
+    payload?.adminName ??
+    payload?.reviewerName ??
+    payload?.returnedBy
+  );
+}
+
+function isManagerReviewReturnedNotification(type, title, message) {
+  if (String(type || "").toUpperCase() !== MANAGER_NOTIFICATION_TYPES.MONTHLY_MANAGER_REVIEW_SUBMITTED) {
+    return false;
+  }
+  const text = `${String(title || "")} ${String(message || "")}`.toLowerCase();
+  return text.includes("return");
+}
+
+function buildManagerTitle(type, obj = {}) {
+  if (type === MANAGER_NOTIFICATION_TYPES.MONTHLY_SELF_REVIEW_SUBMITTED) {
+    return "Employee submission received";
+  }
+  if (type === MANAGER_NOTIFICATION_TYPES.MONTHLY_MANAGER_REVIEW_SUBMITTED) {
+    const sender = resolveNotificationSenderName(obj);
+    if (sender && isManagerReviewReturnedNotification(type, obj?.title, obj?.message)) {
+      return `Manager review returned by ${sender}`;
+    }
+    return "Manager review returned";
+  }
   if (MANAGER_ALLOWED_NOTIFICATION_TYPES.has(type)) {
     return "Employee submission received";
   }
   return "Manager notification";
 }
 
-function buildManagerMessage(type, payload) {
+function buildManagerMessage(type, payload, obj) {
+  const direct = stripHtmlForNotification(obj?.message);
+  if (
+    direct &&
+    (type === MANAGER_NOTIFICATION_TYPES.MONTHLY_SELF_REVIEW_SUBMITTED ||
+      type === MANAGER_NOTIFICATION_TYPES.MONTHLY_MANAGER_REVIEW_SUBMITTED)
+  ) {
+    return direct;
+  }
   if (!isPlainObject(payload)) return "";
   if (!MANAGER_ALLOWED_NOTIFICATION_TYPES.has(type)) return "";
 
@@ -204,7 +242,17 @@ function buildManagerMessage(type, payload) {
     : `${employee} submitted monthly review.`;
 }
 
-function buildEmployeeTitle(type) {
+function buildEmployeeTitle(type, obj = {}) {
+  if (type === EMPLOYEE_NOTIFICATION_TYPES.MONTHLY_SELF_REVIEW_SUBMITTED) {
+    const sender = resolveNotificationSenderName(obj);
+    const text = `${String(obj?.title || "")} ${String(obj?.message || "")}`.toLowerCase();
+    if (sender && text.includes("return")) {
+      return `Submission returned by ${sender}`;
+    }
+    if (text.includes("return")) {
+      return "Submission returned for resubmission";
+    }
+  }
   if (type === EMPLOYEE_NOTIFICATION_TYPES.MONTHLY_MANAGER_REVIEW_SUBMITTED) {
     return "Manager review submitted";
   }
@@ -258,11 +306,14 @@ function normalizeInboxNotification(raw, allowedTypes, buildTitle, buildMessage,
     toIsoDate(obj.createdAt ?? obj.occurredAt ?? obj.timestamp ?? obj.emittedAt) ||
     new Date().toISOString();
 
+  const senderName = resolveNotificationSenderName(obj, payload);
+
   return {
     id: id || `${type}:${createdAt}`,
     type,
-    title: title || buildTitle(type),
+    title: title || buildTitle(type, obj),
     message: message || buildMessage(type, payload, obj),
+    senderName: senderName || null,
     createdAt,
     read: toBoolean(obj.read ?? obj.isRead ?? obj.acknowledged ?? obj.seen),
     payload,
@@ -287,7 +338,10 @@ function normalizeNotification(raw, allowedTypes, buildTitle, buildMessage) {
     (isPlainObject(obj.body) && obj.body) ||
     {};
 
-  const title = toTrimmedString(obj.title) || toTrimmedString(payload.title) || buildTitle(type);
+  const title =
+    toTrimmedString(obj.title) ||
+    toTrimmedString(payload.title) ||
+    buildTitle(type, obj);
   const message = stripHtmlForNotification(
     toTrimmedString(obj.message) ||
       toTrimmedString(obj.text) ||
@@ -300,12 +354,14 @@ function normalizeNotification(raw, allowedTypes, buildTitle, buildMessage) {
     new Date().toISOString();
 
   const read = toBoolean(obj.read ?? obj.isRead ?? obj.acknowledged ?? obj.seen);
+  const senderName = resolveNotificationSenderName(obj, payload);
 
   return {
     id: id || `${type}:${createdAt}`,
     type,
     title,
     message,
+    senderName: senderName || null,
     createdAt,
     read,
     payload,
@@ -532,14 +588,19 @@ export function normalizeAdminNotification(raw) {
 }
 
 export function normalizeManagerNotification(raw) {
-  const first = normalizeNotification(raw, MANAGER_ALLOWED_NOTIFICATION_TYPES, buildManagerTitle, buildManagerMessage);
+  const first = normalizeNotification(
+    raw,
+    MANAGER_ALLOWED_NOTIFICATION_TYPES,
+    buildManagerTitle,
+    (type, payload) => buildManagerMessage(type, payload, raw)
+  );
   if (first) return first;
 
   return normalizeInboxNotification(
     raw,
     MANAGER_ALLOWED_NOTIFICATION_TYPES,
     buildManagerTitle,
-    (type, payload) => buildManagerMessage(type, payload),
+    (type, payload, obj) => buildManagerMessage(type, payload, obj),
     "MANAGER_GENERIC"
   );
 }
@@ -706,7 +767,9 @@ export async function fetchAdminNotifications({ userId, signal } = {} as ApiOpti
 }
 
 export async function fetchManagerNotifications({ userId, signal } = {} as ApiOptions) {
-  return fetchNotificationsByUserId(userId, { signal });
+  const resolvedId = resolveNotificationUserId(userId);
+  const raw = await fetchNotificationsByUserId(resolvedId, { signal });
+  return normalizeManagerNotificationPage(Array.isArray(raw) ? { items: raw } : raw);
 }
 
 export async function fetchEmployeeNotifications({ userId, signal } = {} as ApiOptions) {

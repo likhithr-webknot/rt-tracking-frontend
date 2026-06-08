@@ -54,10 +54,11 @@ import { resolveEmployeeApiId } from "../../utils/employeeId";
 import { resolveStreamSelectValue } from "../../utils/departmentStorage";
 import { friendlyProxyUnreachableMessage } from "../../api/http";
 import {
+  ensurePromotionPathsLoaded,
   getPromotionPreview,
+  getNonTechMaxBand,
+  getTechMaxBand,
   normalizePromotionErrorMessage,
-  TECH_MAX_BAND,
-  NON_TECH_MAX_BAND,
 } from "../../utils/careerPromotion";
 
 function portalRoleBadgeClass(role) {
@@ -298,6 +299,20 @@ export default function EmployeeDirectory({
 
   const [toast, setToast] = useState(null); // { title: string, message?: string }
   const toastTimerRef = useRef(null);
+  const [promotionPathsRevision, setPromotionPathsRevision] = useState(0);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    ensurePromotionPathsLoaded({ signal: ac.signal })
+      .then(() => setPromotionPathsRevision((n) => n + 1))
+      .catch(() => {});
+    const onPathsUpdated = () => setPromotionPathsRevision((n) => n + 1);
+    window.addEventListener("rt:promotion-paths-updated", onPathsUpdated);
+    return () => {
+      ac.abort();
+      window.removeEventListener("rt:promotion-paths-updated", onPathsUpdated);
+    };
+  }, []);
 
   const [mutating, setMutating] = useState(false);
   const [portalRoleSavingId, setPortalRoleSavingId] = useState(null);
@@ -311,7 +326,7 @@ export default function EmployeeDirectory({
   const [promoteBandType, setPromoteBandType] = useState("BOTH");
   const promoteDialogPreview = useMemo(
     () => getPromotionPreview(pendingPromoteEmployee?.band, promoteBandType, null),
-    [pendingPromoteEmployee?.band, promoteBandType],
+    [pendingPromoteEmployee?.band, promoteBandType, promotionPathsRevision],
   );
 
   const promoteConfirmDisabled = promoteDialogPreview.isMaxBand;
@@ -1589,8 +1604,12 @@ export default function EmployeeDirectory({
                   </td>
                   <td className="px-4 py-2 align-middle text-center">
                      {emp.lastPromotionDate ? (
-                        <span className="inline-block text-[10px] font-semibold text-teal-700 dark:text-teal-300 bg-teal-500/10 px-2 py-0.5 rounded-md border border-teal-500/20 tabular-nums">
-                           {new Date(emp.lastPromotionDate).toLocaleDateString(undefined, { month: "short", day: "2-digit" })}
+                        <span className="rt-badge rt-badge--success whitespace-nowrap tabular-nums">
+                           {new Date(emp.lastPromotionDate).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "2-digit",
+                            year: "numeric",
+                          })}
                         </span>
                      ) : (
                         <span className="text-[rgb(var(--muted))]">—</span>
@@ -1907,8 +1926,8 @@ export default function EmployeeDirectory({
               disabled={Boolean(promotingId)}
             >
               <option value="BOTH">Auto — pick tech or non-tech ladder</option>
-              <option value="TECH">Tech — up to {TECH_MAX_BAND}</option>
-              <option value="NON_TECH">Non-tech — up to {NON_TECH_MAX_BAND}</option>
+              <option value="TECH">Tech — up to {getTechMaxBand()}</option>
+              <option value="NON_TECH">Non-tech — up to {getNonTechMaxBand()}</option>
             </select>
           </div>
           {promoteDialogPreview.reasonIfBlocked ? (

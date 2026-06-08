@@ -80,6 +80,7 @@ import {
   computeSubmissionWindowOpen,
   parseSettingsWindowFields,
 } from "../../utils/submissionWindow";
+import PromotionPathSettings from "./PromotionPathSettings";
 
 const REVIEW_CYCLE_MONTH_OPTIONS = [
   { value: 1, label: "January" },
@@ -787,6 +788,8 @@ export default function SettingsPanel({
           </div>
         </div>
       </SectionCard>
+
+              <PromotionPathSettings onToast={setToast} />
             </SettingsGroup>
 
             <SettingsGroup title="Infrastructure" description="API overrides, debug tools, and server-side key-value settings.">

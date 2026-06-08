@@ -11,10 +11,17 @@ import {
   resolveManagerValueRatings,
   fetchMonthlySubmissionScoreBreakdown,
   submitAdminReviewDecision,
+  submitSuperAdminManagerSelfEval,
 } from "../../api/monthly-submissions";
 import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions";
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi";
-import { buildCycleMonthOptions, getCycleForMonth, normalizeYearMonth } from "../../utils/reviewCycles";
+import {
+  buildCycleMonthOptions,
+  getCycleForMonth,
+  isAssignedSuperAdminReviewer,
+  normalizeYearMonth,
+  resolveReviewingSuperAdminIds,
+} from "../../utils/reviewCycles";
 import { computeSubmissionScoreBreakdown } from "../../utils/submissionScoring";
 import { formatWeightPercentLabel, getResolvedScoreWeights } from "../../utils/scoringSettings";
 import ModalOverlay from "../shared/ModalOverlay";
@@ -27,23 +34,13 @@ import SubmissionStatusBadge, { SubmissionLifecycleStrip } from "../shared/Submi
 import {
   resolveSubmissionWorkflow,
   submissionMatchesStatusFilter,
+  SUBMISSION_PHASES,
   SUBMISSION_STATUS_FILTER_OPTIONS,
 } from "../../utils/submissionStatus";
 import { isHrPortalUser } from "../../utils/hrRatingsFilter";
 import { isSuperAdminPortalUser } from "../../utils/portalAccess";
 import { formatPerformanceRating, parseDecimalPerformanceRating } from "../../utils/ratingLabels";
 import { DecimalPerformanceRatingInput } from "../shared/PerformanceRatingField";
-
-function resolveAssignedSuperAdminReviewerId(item) {
-  const sub = item?.submission ?? item?.raw ?? {};
-  const payload = sub?.payload && typeof sub.payload === "object" ? sub.payload : sub;
-  return String(
-    payload.reviewingManagerId ??
-    payload.managerId ??
-    sub.reviewingManagerId ??
-    ""
-  ).trim();
-}
 
 function formatMonthLabel(monthKey) {
   const m = normalizeYearMonth(monthKey);
@@ -98,6 +95,106 @@ function normalizeDecimalRatingsMap(input) {
     if (parsed != null) out[id] = parsed;
   }
   return out;
+}
+
+function resolveReviewerDisplayName(token, employeeLookup) {
+  const trimmed = String(token || "").trim();
+  if (!trimmed) return null;
+  const match = employeeLookup?.get(trimmed.toLowerCase());
+  if (match?.name) return match.name;
+  if (match?.email) return match.email;
+  return trimmed;
+}
+
+function extractManagerReviewerTokens(submission, obj, payload) {
+  let managerReview = submission?.managerReview ?? obj?.managerReview ?? payload?.managerReview;
+  let managerEvaluation = submission?.managerEvaluation ?? obj?.managerEvaluation ?? payload?.managerEvaluation;
+
+  const jsonRaw =
+    submission?.managerReviewJson ??
+    obj?.managerReviewJson ??
+    submission?.raw?.managerReviewJson;
+  if (jsonRaw && typeof jsonRaw === "string") {
+    try {
+      const parsed = JSON.parse(jsonRaw);
+      managerReview = managerReview ?? parsed?.managerReview;
+      managerEvaluation = managerEvaluation ?? parsed?.managerEvaluation;
+    } catch {
+      // ignore malformed JSON
+    }
+  } else if (jsonRaw && typeof jsonRaw === "object") {
+    managerReview = managerReview ?? jsonRaw?.managerReview;
+    managerEvaluation = managerEvaluation ?? jsonRaw?.managerEvaluation;
+  }
+
+  return [
+    managerReview?.reviewedBy,
+    managerEvaluation?.reviewedBy,
+    managerReview?.reviewerName,
+    managerEvaluation?.reviewerName,
+    obj?.reviewedByManager,
+    payload?.reviewedByManager,
+  ]
+    .map((x) => String(x ?? "").trim())
+    .filter(Boolean);
+}
+
+function resolveManagerReviewerLabels(submission, obj, payload, employeeLookup) {
+  const candidates = extractManagerReviewerTokens(submission, obj, payload);
+  const labels = [];
+  const seen = new Set();
+  for (const text of candidates) {
+    for (const part of text.split(/[,\n]+/g)) {
+      const cleaned = String(part || "").trim();
+      const key = cleaned.toLowerCase();
+      if (!cleaned || seen.has(key)) continue;
+      seen.add(key);
+      const label = resolveReviewerDisplayName(cleaned, employeeLookup);
+      if (label) labels.push(label);
+    }
+  }
+  return labels;
+}
+
+function resolveAdminReviewerLabel(auth) {
+  return String(
+    auth?.name ??
+    auth?.employeeName ??
+    auth?.claims?.name ??
+    auth?.email ??
+    auth?.employeeId ??
+    auth?.empId ??
+    ""
+  ).trim() || null;
+}
+
+function isSubmissionClosedForAdmin(item) {
+  const wf = resolveSubmissionWorkflow(item);
+  if (wf.phase === SUBMISSION_PHASES.APPROVED || wf.phase === SUBMISSION_PHASES.LOCKED) return true;
+  const adminAction = String(item?.adminAction || "").trim().toUpperCase();
+  if (adminAction === "APPROVE") return true;
+  const status = String(item?.status || "").trim().toUpperCase();
+  const reviewStatus = String(item?.reviewStatus || "").trim().toUpperCase();
+  return status === "APPROVED" || reviewStatus === "APPROVED";
+}
+
+function canAdminActOnSubmission(item) {
+  if (isSubmissionClosedForAdmin(item)) return false;
+  const wf = resolveSubmissionWorkflow(item);
+  if (wf.phase === SUBMISSION_PHASES.MANAGER_DONE) return true;
+  if (wf.phase === SUBMISSION_PHASES.RETURNED) return true;
+  const isManagerSelf = String(item?.submissionType || item?.entryType || "").toUpperCase().includes("MANAGER_SELF");
+  if (isManagerSelf) return true;
+  if (item?.managerReady) return true;
+  return false;
+}
+
+function defaultRejectTargetForItem(item) {
+  const isManagerSelf = String(item?.submissionType || item?.entryType || "").toUpperCase().includes("MANAGER_SELF");
+  if (isManagerSelf) return "manager";
+  const wf = resolveSubmissionWorkflow(item);
+  if (item?.managerReady && wf.phase === SUBMISSION_PHASES.MANAGER_DONE) return "manager";
+  return "employee";
 }
 
 function normalizeAdminSubmissions(data, employeeLookup) {
@@ -177,24 +274,32 @@ function normalizeAdminSubmissions(data, employeeLookup) {
         obj?.managerEvaluation ||
         payload?.managerEvaluation
       );
+      const superAdminEvalReady = Boolean(
+        hasManagerEvaluation ||
+        submission?.managerSubmittedAt ||
+        obj?.managerSubmittedAt ||
+        obj?.managerReviewedAt ||
+        obj?.reviewedByManager ||
+        obj?.managerReview ||
+        payload?.managerSubmittedAt ||
+        payload?.managerReviewedAt ||
+        payload?.managerReview
+      );
       const managerReady = needsManagerRework || staleManagerReject
         ? false
-        : Boolean(
-            hasManagerEvaluation ||
-            submission?.managerSubmittedAt ||
-            obj?.managerSubmittedAt ||
-            obj?.managerReviewedAt ||
-            obj?.reviewedByManager ||
-            obj?.managerReview ||
-            payload?.managerSubmittedAt ||
-            payload?.managerReviewedAt ||
-            payload?.managerReview
-          );
+        : isManagerSelf
+          ? managerSelfSubmitted || superAdminEvalReady
+          : superAdminEvalReady;
       const rawAdminAction = String(submission?.adminReview?.action || payload?.adminReview?.action || "").trim().toUpperCase() || null;
       /* After resubmission the reviewStatus becomes "SUBMITTED" but the
          server may still carry the old adminReview.  Clear the stale badge. */
       const adminAction = (isResubmitted && rawAdminAction === "REJECT") ? null : rawAdminAction;
       const isManagerSelf = submissionType === "MANAGER_SELF_REVIEW";
+      const managerSelfSubmitted = isManagerSelf && Boolean(
+        submittedAt ||
+        status === "SUBMITTED" ||
+        reviewStatus === "SUBMITTED"
+      );
       const entryType = isManagerSelf
         ? "Manager Self Review"
         : hasManagerEvaluation
@@ -215,9 +320,11 @@ function normalizeAdminSubmissions(data, employeeLookup) {
         when: updatedAt || submittedAt || "—",
         whenLabel: formatDateTimeLabel(updatedAt || submittedAt || "—"),
         managerReady,
+        managerSelfSubmitted,
         entryType,
         submissionType,
         adminAction,
+        managerReviewers: resolveManagerReviewerLabels(submission, obj, payload, employeeLookup),
         submission,
         raw: obj,
       };
@@ -228,9 +335,12 @@ function normalizeAdminSubmissions(data, employeeLookup) {
       return (
         x.status === "SUBMITTED" ||
         x.status === "MANAGER_REVIEWED" ||
+        x.status === "APPROVED" ||
         rs === "MANAGER_SUBMITTED" ||
         rs === "NEEDS_MANAGER_REVIEW" ||
-        x.managerReady
+        rs === "APPROVED" ||
+        x.managerReady ||
+        x.managerSelfSubmitted
       );
     });
 }
@@ -250,6 +360,9 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
   const [rejectError, setRejectError] = useState("");
   const [techShowcaseText, setTechShowcaseText] = useState("");
   const [approveBusy, setApproveBusy] = useState(false);
+  const [managerSelfEvalComments, setManagerSelfEvalComments] = useState("");
+  const [managerSelfEvalBusy, setManagerSelfEvalBusy] = useState(false);
+  const [managerSelfEvalError, setManagerSelfEvalError] = useState("");
   const [scoreBreakdown, setScoreBreakdown] = useState(null);
   const [scoreBreakdownLoading, setScoreBreakdownLoading] = useState(false);
   const [scoreBreakdownError, setScoreBreakdownError] = useState("");
@@ -268,17 +381,20 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
     return () => { cancelled = true; };
   }, []);
 
-  /* Build lookup map: employeeId (lowercase) → { name, email } */
+  /* Build lookup map: id / empId / email (lowercase) → { name, email } */
   const employeeLookup = useMemo(() => {
     const map = new Map();
     if (Array.isArray(employeesProp)) {
       for (const emp of employeesProp) {
-        const id = String(emp?.id ?? emp?.employeeId ?? "").trim().toLowerCase();
-        if (!id) continue;
-        map.set(id, {
+        const entry = {
           name: String(emp?.name ?? emp?.employeeName ?? "").trim() || null,
           email: String(emp?.email ?? emp?.employeeEmail ?? "").trim() || null,
-        });
+        };
+        for (const key of [emp?.id, emp?.employeeId, emp?.empId, entry.email]) {
+          const id = String(key ?? "").trim().toLowerCase();
+          if (!id) continue;
+          map.set(id, entry);
+        }
       }
     }
     return map;
@@ -320,10 +436,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
       if (statusFilter !== "all" && !submissionMatchesStatusFilter(it, statusFilter)) return false;
       if (restrictAssignedSelfReviews) {
         const type = String(it.submissionType || it.entryType || "").toUpperCase();
-        if (type.includes("MANAGER_SELF")) {
-          const assigned = resolveAssignedSuperAdminReviewerId(it);
-          if (assigned && assigned !== viewerId) return false;
-        }
+        if (type.includes("MANAGER_SELF") && !isAssignedSuperAdminReviewer(it, viewerId)) return false;
       }
       return true;
     });
@@ -347,6 +460,20 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
     const type = String(entry?.submissionType || entry?.entryType || "").toUpperCase();
     return type.includes("MANAGER_SELF");
   }, [reviewModal?.item]);
+
+  const reviewModalManagerReviewers = useMemo(() => {
+    const entry = reviewModal?.item;
+    if (!entry) return [];
+    if (Array.isArray(entry.managerReviewers) && entry.managerReviewers.length) {
+      return entry.managerReviewers;
+    }
+    const sub = entry.submission || {};
+    const raw = sub?.raw && typeof sub.raw === "object" ? sub.raw : entry?.raw && typeof entry.raw === "object" ? entry.raw : {};
+    const payload = sub?.raw?.payload && typeof sub.raw.payload === "object"
+      ? sub.raw.payload
+      : (raw?.payload && typeof raw.payload === "object" ? raw.payload : raw);
+    return resolveManagerReviewerLabels(sub, raw, payload, employeeLookup);
+  }, [reviewModal?.item, employeeLookup]);
 
   const reviewModalEmployeeKpiRatings = useMemo(() => {
     if (!reviewModal?.item) return {};
@@ -391,6 +518,23 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
       ""
     ).trim();
   }, [reviewModal?.item]);
+
+  const reviewModalSuperAdminEvalLocked = useMemo(() => {
+    if (!reviewModalIsManagerSelf || !reviewModal?.item) return false;
+    if (isSubmissionClosedForAdmin(reviewModal.item)) return true;
+    const sub = reviewModal.item.submission ?? {};
+    return Boolean(
+      sub.managerSubmittedAt || String(reviewModalManagerComments || "").trim()
+    );
+  }, [reviewModal?.item, reviewModalIsManagerSelf, reviewModalManagerComments]);
+
+  const reviewModalAssignedSuperAdmins = useMemo(() => {
+    if (!reviewModal?.item) return [];
+    const sub = reviewModal.item.submission ?? reviewModal.item.raw ?? {};
+    return resolveReviewingSuperAdminIds(sub).map(
+      (id) => resolveReviewerDisplayName(id, employeeLookup) || id
+    );
+  }, [employeeLookup, reviewModal?.item]);
 
   useEffect(() => {
     if (!reviewModal.open || !reviewModal.item) {
@@ -584,12 +728,24 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
 
   function openReview(item) {
     setTechShowcaseText(String(item?.submission?.techShowcase ?? "").trim());
+    const sub = item?.submission ?? {};
+    const raw = sub?.raw ?? item?.raw ?? {};
+    setManagerSelfEvalComments(
+      String(
+        sub?.managerReview?.comments ??
+        raw?.managerSelfReviewEvalComments ??
+        ""
+      ).trim()
+    );
+    setManagerSelfEvalError("");
     setReviewModal({ open: true, item });
   }
 
   function closeReview() {
     setReviewModal({ open: false, item: null });
     setTechShowcaseText("");
+    setManagerSelfEvalComments("");
+    setManagerSelfEvalError("");
     setReviewEditableKpiRatings({});
     setReviewEditableValueRatings({});
   }
@@ -679,6 +835,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                 <th className="p-6 font-semibold whitespace-nowrap">Month</th>
                 <th className="p-6 font-semibold">Type</th>
                 <th className="p-6 font-semibold">Workflow</th>
+                <th className="p-6 font-semibold">Rated by</th>
                 <th className="p-6 font-semibold whitespace-nowrap">Updated</th>
                 <th className="p-6 text-right font-semibold px-8">Actions</th>
               </tr>
@@ -707,8 +864,8 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                     </div>
                   </td>
                   <td className="p-6 font-mono text-[rgb(var(--text))] whitespace-nowrap">{it.monthLabel}</td>
-                  <td className="p-6">
-                    <span className="text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] text-[rgb(var(--text))]">
+                  <td className="p-6 whitespace-nowrap">
+                    <span className="inline-flex text-[10px] font-semibold uppercase whitespace-nowrap px-3 py-1 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] text-[rgb(var(--text))]">
                       {it.entryType}
                     </span>
                     {String(it.submissionType || it.entryType || "").toUpperCase().includes("MANAGER_SELF") ? (
@@ -724,6 +881,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                       managerReady={it.managerReady}
                       adminAction={it.adminAction}
                       submissionType={it.submissionType}
+                      compact
                     />
                     {it.adminAction ? (
                       <div className="mt-2 text-[10px] font-medium text-[rgb(var(--muted))]">
@@ -731,31 +889,62 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                       </div>
                     ) : null}
                   </td>
+                  <td className="p-6">
+                    {it.managerReviewers?.length ? (
+                      <div className="space-y-1">
+                        {it.managerReviewers.map((name) => (
+                          <div
+                            key={name}
+                            className="inline-flex items-center gap-1.5 text-xs font-medium text-[rgb(var(--text))]"
+                          >
+                            <User size={12} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+                            {name}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-[rgb(var(--muted))]">—</span>
+                    )}
+                  </td>
                   <td className="p-6 text-xs text-[rgb(var(--muted))] font-mono whitespace-nowrap">{it.whenLabel}</td>
-                  <td className="p-6 text-right px-8">
-                    <div className="inline-flex items-center gap-2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openReview(it);
-                        }}
-                        className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
-                        title="Review"
-                      >
-                        <CheckCircle2 size={16} />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const isManagerSelf = String(it?.submissionType || it?.entryType || "").toUpperCase().includes("MANAGER_SELF");
-                          setRejectModal({ open: true, item: it, comment: "", target: isManagerSelf ? "manager" : "employee" });
-                          setRejectError("");
-                        }}
-                        className="p-2 rounded-md text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 transition-all"
-                        title="Reject with comments"
-                      >
-                        <XCircle size={16} />
-                      </button>
+                  <td className="p-6 px-8" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-end gap-2 min-w-[5.5rem]">
+                      {isSubmissionClosedForAdmin(it) ? (
+                        <span className="text-[10px] font-medium uppercase tracking-wider text-[rgb(var(--muted))]">
+                          Complete
+                        </span>
+                      ) : canAdminActOnSubmission(it) ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openReview(it)}
+                            className="p-2 rounded-md text-[rgb(var(--muted))] hover:text-[rgb(var(--primary))] hover:bg-[rgb(var(--primary))]/10 transition-all"
+                            title="Review and approve"
+                          >
+                            <CheckCircle2 size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRejectModal({
+                                open: true,
+                                item: it,
+                                comment: "",
+                                target: defaultRejectTargetForItem(it),
+                              });
+                              setRejectError("");
+                            }}
+                            className="p-2 rounded-md text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 transition-all"
+                            title="Reject with comments"
+                          >
+                            <XCircle size={16} />
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-[10px] font-medium text-[rgb(var(--muted))]">
+                          Awaiting manager
+                        </span>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -763,7 +952,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
 
               {!loading && visibleItems.length === 0 ? (
                 <tr>
-                  <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={6}>
+                  <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={7}>
                     No submissions to show.
                   </td>
                 </tr>
@@ -795,9 +984,13 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                     Super admin review
                   </span>
                 ) : null}
-                {reviewModal.item.submission?.managerReview?.reviewedBy ? (
-                  <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20">
-                    <User size={11} /> Manager: {reviewModal.item.submission.managerReview.reviewedBy}
+                {!reviewModalIsManagerSelf && reviewModalManagerReviewers.length ? (
+                  <span
+                    className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20"
+                    title={reviewModalManagerReviewers.join(", ")}
+                  >
+                    <User size={11} /> {reviewModalManagerReviewers.length > 1 ? "Managers" : "Manager"}: {reviewModalManagerReviewers[0]}
+                    {reviewModalManagerReviewers.length > 1 ? ` (+${reviewModalManagerReviewers.length - 1})` : ""}
                   </span>
                 ) : null}
                 {reviewModal.item.submission?.adminReview?.reviewedBy ? (
@@ -836,7 +1029,9 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
 
             <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="rt-panel-subtle rounded-lg p-6">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Submitted Content</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  {reviewModalIsManagerSelf ? "Manager submission (locked)" : "Submitted Content"}
+                </div>
                 <div className="mt-4 space-y-4 text-sm text-[rgb(var(--text))]">
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-widest text-gray-500">Self Review</div>
@@ -860,7 +1055,9 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                   ) : null}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div className="rt-panel-subtle rounded-md p-3 space-y-2">
-                      <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Employee KPI Ratings</div>
+                      <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+                        {reviewModalIsManagerSelf ? "Manager KPI self-ratings" : "Employee KPI Ratings"}
+                      </div>
                       {Object.entries(reviewModalEmployeeKpiRatings).length ? (
                         Object.entries(reviewModalEmployeeKpiRatings).map(([kpiId, rating]) => (
                           <div key={kpiId} className="flex items-center justify-between gap-2">
@@ -875,7 +1072,9 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                       )}
                     </div>
                     <div className="rt-panel-subtle rounded-md p-3 space-y-2">
-                      <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Employee Values Ratings</div>
+                      <div className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+                        {reviewModalIsManagerSelf ? "Manager value self-ratings" : "Employee Values Ratings"}
+                      </div>
                       {Object.entries(reviewModalEmployeeValueRatings).length ? (
                         Object.entries(reviewModalEmployeeValueRatings).map(([valueId, rating]) => (
                           <div key={valueId} className="flex items-center justify-between gap-2">
@@ -941,11 +1140,21 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                       <div className="space-y-2">
                         <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Manager Self Review</div>
                         <p className="text-sm text-[rgb(var(--muted))]">
-                          This entry is a manager or admin self review. The assigned super admin reviews and approves directly in this queue.
+                          The manager&apos;s self review is locked for this month. Review their submitted ratings on the left, set final scores and comments below, then approve or reject.
                         </p>
                         <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
                           Super admin review
                         </div>
+                        {reviewModalAssignedSuperAdmins.length ? (
+                          <div className="text-[11px] text-[rgb(var(--muted))]">
+                            Assigned reviewers: {reviewModalAssignedSuperAdmins.join(", ")}
+                          </div>
+                        ) : null}
+                        {reviewModalSuperAdminEvalLocked ? (
+                          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">
+                            Your evaluation is saved. Approve to finalize, or reject to send back to the manager.
+                          </div>
+                        ) : null}
                       </div>
                       <div>
                         <div className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
@@ -958,6 +1167,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                                 <div className="flex-1 min-w-0 truncate">{kpiLabel(kpiId)}</div>
                                 <DecimalPerformanceRatingInput
                                   value={rating}
+                                  disabled={reviewModalSuperAdminEvalLocked || managerSelfEvalBusy}
                                   onChange={(next) => {
                                     setReviewEditableKpiRatings((prev) => {
                                       const updated = { ...(prev || {}) };
@@ -988,6 +1198,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                                 <div className="flex-1 min-w-0 truncate">{valueLabel(valueId)}</div>
                                 <DecimalPerformanceRatingInput
                                   value={rating}
+                                  disabled={reviewModalSuperAdminEvalLocked || managerSelfEvalBusy}
                                   onChange={(next) => {
                                     setReviewEditableValueRatings((prev) => {
                                       const updated = { ...(prev || {}) };
@@ -1005,6 +1216,66 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                           ) : (
                             <div className="text-xs text-[rgb(var(--muted))]">No value ratings to review.</div>
                           )}
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
+                          Super admin comments
+                        </label>
+                        <textarea
+                          value={managerSelfEvalComments}
+                          onChange={(e) => {
+                            setManagerSelfEvalComments(e.target.value);
+                            setManagerSelfEvalError("");
+                          }}
+                          className="rt-input w-full min-h-[100px] text-sm"
+                          placeholder="Feedback on this manager self review (required before approve)…"
+                          disabled={reviewModalSuperAdminEvalLocked || managerSelfEvalBusy || approveBusy}
+                        />
+                        {managerSelfEvalError ? (
+                          <div className="text-xs text-red-600">{managerSelfEvalError}</div>
+                        ) : null}
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (managerSelfEvalBusy || reviewModalSuperAdminEvalLocked) return;
+                              const comment = String(managerSelfEvalComments || "").trim();
+                              if (!comment) {
+                                setManagerSelfEvalError("Add comments before saving your evaluation.");
+                                return;
+                              }
+                              const submissionId = String(reviewModal.item?.id || "").trim();
+                              if (!submissionId) {
+                                setManagerSelfEvalError("Missing submission id.");
+                                return;
+                              }
+                              setManagerSelfEvalBusy(true);
+                              setManagerSelfEvalError("");
+                              try {
+                                await submitSuperAdminManagerSelfEval({
+                                  submissionId,
+                                  kpiRatings: reviewEditableKpiRatings,
+                                  webknotValueRatings: reviewEditableValueRatings,
+                                  comments: comment,
+                                  reviewedBy: resolveAdminReviewerLabel(auth),
+                                });
+                                await reload();
+                              } catch (err) {
+                                if (err?.status === 401) {
+                                  onLogout?.();
+                                  return;
+                                }
+                                setManagerSelfEvalError(err?.message || "Failed to save evaluation.");
+                              } finally {
+                                setManagerSelfEvalBusy(false);
+                              }
+                            }}
+                            className="bg-blue-600 text-white hover:bg-blue-500 rounded-md px-4 py-2 text-xs font-semibold uppercase tracking-wider transition-all disabled:opacity-70"
+                            disabled={reviewModalSuperAdminEvalLocked || managerSelfEvalBusy || approveBusy}
+                          >
+                            {managerSelfEvalBusy ? "Saving…" : "Save evaluation"}
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1086,8 +1357,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                   )}
 
                   {/* Scoring Breakdown */}
-                  {!reviewModalIsManagerSelf ? (
-                    <div className="rt-panel-subtle rounded-lg p-5 space-y-3">
+                  <div className="rt-panel-subtle rounded-lg p-5 space-y-3">
                       <div className="flex items-center justify-between gap-3 flex-wrap">
                         <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Scoring Breakdown</div>
                         {scoreBreakdownLoading ? <div className="text-[10px] text-[rgb(var(--muted))]">Loading backend breakdown…</div> : null}
@@ -1124,7 +1394,6 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                         </div>
                       </div>
                     </div>
-                  ) : null}
 
                   {/* Tech Showcase + Approve */}
                   <div className="rt-panel-subtle rounded-lg p-6 space-y-4">
@@ -1164,8 +1433,27 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                         type="button"
                         onClick={async () => {
                           if (approveBusy) return;
+                          const adminComment = reviewModalIsManagerSelf
+                            ? String(managerSelfEvalComments || "").trim()
+                            : "";
+                          if (reviewModalIsManagerSelf && !adminComment) {
+                            setManagerSelfEvalError("Add super admin comments before approving.");
+                            return;
+                          }
                           setApproveBusy(true);
+                          setManagerSelfEvalError("");
                           try {
+                            if (reviewModalIsManagerSelf) {
+                              const submissionId = String(reviewModal.item?.id || "").trim();
+                              if (!submissionId) throw new Error("Missing submission id.");
+                              await submitSuperAdminManagerSelfEval({
+                                submissionId,
+                                kpiRatings: reviewEditableKpiRatings,
+                                webknotValueRatings: reviewEditableValueRatings,
+                                comments: adminComment,
+                                reviewedBy: resolveAdminReviewerLabel(auth),
+                              });
+                            }
                             await submitAdminReviewDecision({
                               submissionId: reviewModal.item.id,
                               id: reviewModal.item.id,
@@ -1176,8 +1464,9 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                               techShowcase: techShowcaseText.trim(),
                               adminReview: {
                                 action: "APPROVE",
-                                comments: "",
+                                comments: adminComment,
                                 reviewedAt: new Date().toISOString(),
+                                reviewedBy: resolveAdminReviewerLabel(auth),
                               },
                               reviewStatus: "APPROVED",
                             });
@@ -1188,15 +1477,17 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                               onLogout?.();
                               return;
                             }
-                            // show inline error via showToast if available
+                            if (reviewModalIsManagerSelf) {
+                              setManagerSelfEvalError(err?.message || "Approve failed. Try again.");
+                            }
                           } finally {
                             setApproveBusy(false);
                           }
                         }}
                         className="bg-emerald-600 text-white hover:bg-emerald-500 rounded-md px-5 py-2.5 text-xs font-semibold uppercase tracking-wider transition-all disabled:opacity-70"
-                        disabled={approveBusy}
+                        disabled={approveBusy || (reviewModalIsManagerSelf && reviewModalSuperAdminEvalLocked && isSubmissionClosedForAdmin(reviewModal.item))}
                       >
-                        {approveBusy ? "Approving…" : "Approve"}
+                        {approveBusy ? "Approving…" : reviewModalIsManagerSelf ? "Approve ratings" : "Approve"}
                       </button>
                     </div>
                   </div>
@@ -1345,6 +1636,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
                         target,
                         comments: comment,
                         reviewedAt: new Date().toISOString(),
+                        reviewedBy: resolveAdminReviewerLabel(auth),
                       },
                       reviewStatus: rejectModalIsManagerSelf ? "REJECT" : target === "manager" ? "NEEDS_MANAGER_REVIEW" : "REJECT",
                       reopenedForResubmission: rejectModalIsManagerSelf || target === "employee",

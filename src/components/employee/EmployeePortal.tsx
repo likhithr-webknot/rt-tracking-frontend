@@ -75,11 +75,19 @@ import {
 } from "../../api/projects";
 import { listActiveProjectsForEmployees } from "../../utils/projectsCatalog";
 import { getAdminSettings, getEmployeeSettings } from "../../utils/appSettings.js";
-import { buildCycleMeta, buildCycleMonthOptions, getCycleForMonth, isResubmissionRequested, normalizeYearMonth } from "../../utils/reviewCycles.js";
+import {
+  buildCycleMeta,
+  buildCycleMonthOptions,
+  getCycleForMonth,
+  isResubmissionRequested,
+  normalizeYearMonth,
+  resolveResubmissionActor,
+  resolveResubmissionActorLabel,
+  resolveResubmissionComment,
+} from "../../utils/reviewCycles.js";
 import { formatPerformanceRating, performanceRatingLabel, performanceRatingScaleText, parseIntegerPerformanceRating } from "../../utils/ratingLabels";
 import { IntegerPerformanceRatingSelect } from "../shared/PerformanceRatingField";
-import { extractWebtrakBandCode, getPromotionPreview } from "../../utils/careerPromotion";
-import ResubmissionPlaybook from "../shared/ResubmissionPlaybook";
+import { ensurePromotionPathsLoaded, extractWebtrakBandCode, getPromotionPreview } from "../../utils/careerPromotion";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
 import EmployeePerformanceHistory from "./EmployeePerformanceHistory";
 import { EMPLOYEE_NAV_GROUPS, EMPLOYEE_REVIEW_STEP_IDS, EMPLOYEE_TAB_COPY } from "../../config/portalNavigation";
@@ -491,6 +499,21 @@ function normalizeValueCommentsForState(input) {
   return out;
 }
 
+function valuesStepComplete(list, ratings, comments) {
+  const rows = Array.isArray(list) ? list : [];
+  if (!rows.length) return true;
+  const normalizedComments = normalizeValueCommentsForState(comments);
+  for (const row of rows) {
+    const id = String(row?.id || "").trim();
+    if (!id) continue;
+    const rating = ratings?.[id];
+    const hasRating = typeof rating === "number" && Number.isFinite(rating) && rating >= 1 && rating <= 5;
+    if (!hasRating) return false;
+    if (!String(normalizedComments?.[id] || "").trim()) return false;
+  }
+  return true;
+}
+
 function buildMonthlySubmissionPayload({
   month,
   selfReviewText,
@@ -584,6 +607,8 @@ function isAuthorSubmissionLocked(meta) {
   return !isResubmissionRequested(meta);
 }
 
+const LOCKED_NAV_HINT = "Submission is locked — use Next and Back to browse each step.";
+
 function payloadHash(payload) {
   try {
     return JSON.stringify(payload ?? {});
@@ -633,19 +658,19 @@ function ProjectsTab({
         onSearchChange={onProjectSearchChange}
         error={projectsError}
       />
-      {!locked ? (
-        <PortalWorkflowActions
-          onBack={onBack}
-          onContinue={onProceed}
-          continueLabel="Continue to KPIs"
-          continueDisabled={!canProceed}
-          hint={
-            canProceed
+      <PortalWorkflowActions
+        onBack={onBack}
+        onContinue={onProceed}
+        continueLabel="Continue to KPIs"
+        continueDisabled={!locked && !canProceed}
+        hint={
+          locked
+            ? LOCKED_NAV_HINT
+            : canProceed
               ? "Great — your project selection is saved as you go."
               : "Pick at least one active project to continue."
-          }
-        />
-      ) : null}
+        }
+      />
     </PortalWorkflowFrame>
   );
 }
@@ -703,14 +728,12 @@ function ProfileTab({
         </div>
       </section>
 
-      {!locked ? (
-        <PortalWorkflowActions
-          onContinue={onProceed}
-          continueLabel="Continue to projects"
-          continueDisabled={!canProceed}
-          hint="Review your profile details, then choose your active projects."
-        />
-      ) : null}
+      <PortalWorkflowActions
+        onContinue={onProceed}
+        continueLabel="Continue to projects"
+        continueDisabled={!locked && !canProceed}
+        hint={locked ? LOCKED_NAV_HINT : "Review your profile details, then choose your active projects."}
+      />
     </PortalWorkflowFrame>
   );
 }
@@ -1045,21 +1068,21 @@ function KpisTab({
         />
       </section>
 
-      {!locked ? (
-        <PortalWorkflowActions
-          onBack={onBack}
-          onContinue={onProceed}
-          continueLabel="Continue to values"
-          continueDisabled={proceedDisabled}
-          hint={
-            proceedDisabled
+      <PortalWorkflowActions
+        onBack={onBack}
+        onContinue={onProceed}
+        continueLabel="Continue to values"
+        continueDisabled={proceedDisabled}
+        hint={
+          locked
+            ? LOCKED_NAV_HINT
+            : proceedDisabled
               ? !allRated
                 ? "Rate every KPI from 1 to 5 to continue."
                 : "Write your self-review notes before continuing."
               : `${ratedCount}/${all.length} KPIs rated — ready for the next step.`
-          }
-        />
-      ) : null}
+        }
+      />
     </PortalWorkflowFrame>
   );
 }
@@ -1070,6 +1093,8 @@ function ValuesTab({
   error,
   selectedValues,
   setSelectedValues,
+  valueComments,
+  setValueComments,
   onProceed,
   onBack,
   locked,
@@ -1106,6 +1131,10 @@ function ValuesTab({
     () => normalizeWebknotValueRatingsForState(selectedValues),
     [selectedValues]
   );
+  const normalizedComments = useMemo(
+    () => normalizeValueCommentsForState(valueComments),
+    [valueComments]
+  );
   const list = useMemo(() => (Array.isArray(items) ? items : []), [items]);
   const ratedCount = useMemo(() => {
     if (!list.length) return 0;
@@ -1118,6 +1147,16 @@ function ValuesTab({
     }
     return count;
   }, [list, valueRatings]);
+  const commentedCount = useMemo(() => {
+    if (!list.length) return 0;
+    let count = 0;
+    for (const v of list) {
+      const id = String(v?.id || "").trim();
+      if (!id) continue;
+      if (String(normalizedComments?.[id] || "").trim()) count += 1;
+    }
+    return count;
+  }, [list, normalizedComments]);
 
   return (
     <PortalWorkflowFrame>
@@ -1128,95 +1167,124 @@ function ValuesTab({
       ) : null}
 
       <section className="rt-panel rounded-2xl overflow-hidden shadow-sm">
-        <div className="p-8 flex items-center justify-between gap-4 flex-wrap">
+        <div className="p-8 flex items-center justify-between gap-4 flex-wrap border-b border-[rgb(var(--border))]">
           <div className="rt-section-header">
             <h3 className="rt-section-title">Values</h3>
             <p className="rt-section-subtitle">
               Rated: <span className="font-mono">{ratedCount}</span> / {list.length}
+              {" · "}
+              Commented: <span className="font-mono">{commentedCount}</span> / {list.length}
             </p>
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <p className="px-4 pt-4 pb-2 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
+        <div className="p-4 sm:p-6">
+          <p className="text-[11px] text-[rgb(var(--muted))] leading-relaxed">
             Rating scale: {performanceRatingScaleText()}
           </p>
-          <table className="w-full text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-t border-b border-[rgb(var(--border))]">
-              <tr>
-                <th className="p-4 font-medium">Value</th>
-                <th className="p-4 font-medium">Evaluation Criteria</th>
-                <th className="p-4 font-medium">Your Rating (1-5)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[rgb(var(--border))]">
-              {list.map((v) => {
-                const id = String(v?.id || "");
-                const value = valueRatings?.[id];
-                const pillar = String(v?.pillar || "—");
-                const isPillarMissing = !pillar || pillar === "—";
-                const colors = colorForPillar(isPillarMissing ? "" : pillar);
-                return (
-                  <tr key={id} className="hover:bg-[rgb(var(--surface-2))] transition-colors">
-                    <td className="p-6">
-                      <div className="font-bold text-[rgb(var(--text))] tracking-tight">{String(v?.title || id)}</div>
-                    </td>
-                    <td className="p-6">
-                      <span
-                        className={[
-                          "inline-flex text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border",
-                          isPillarMissing
-                            ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
-                            : `${colors.bg} ${colors.text} ${colors.border}`,
-                        ].join(" ")}
-                      >
-                        {pillar || "—"}
-                      </span>
-                    </td>
-                    <td className="p-6">
-                      <IntegerPerformanceRatingSelect
-                        value={value}
-                        disabled={locked}
-                        className="rt-input w-56 py-3 px-4 text-sm"
-                        onChange={(next) => {
-                          if (locked) return;
-                          setSelectedValues((prev) => {
-                            const updated = normalizeWebknotValueRatingsForState(prev);
-                            if (next == null) {
-                              delete updated[id];
-                              return updated;
-                            }
-                            updated[id] = next;
-                            return updated;
-                          });
-                        }}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
+        </div>
 
-              {!loading && list.length === 0 ? (
-                <tr>
-                  <td className="p-10 text-center text-[rgb(var(--muted))]" colSpan={3}>
-                    No values to show.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+        <div className="divide-y divide-[rgb(var(--border))] border-t border-[rgb(var(--border))]">
+          {list.map((v) => {
+            const id = String(v?.id || "");
+            const value = valueRatings?.[id];
+            const pillar = String(v?.pillar || "—");
+            const isPillarMissing = !pillar || pillar === "—";
+            const colors = colorForPillar(isPillarMissing ? "" : pillar);
+            const comment = normalizedComments?.[id] || "";
+            return (
+              <div key={id} className="p-6 space-y-4">
+                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_12rem] gap-4 items-start">
+                  <div className="min-w-0 space-y-2">
+                    <div className="font-bold text-[rgb(var(--text))] tracking-tight">{String(v?.title || id)}</div>
+                    <span
+                      className={[
+                        "inline-flex text-[10px] font-semibold uppercase px-3 py-1 rounded-lg border",
+                        isPillarMissing
+                          ? "bg-[rgb(var(--surface-2))] text-[rgb(var(--muted))] border-[rgb(var(--border))]"
+                          : `${colors.bg} ${colors.text} ${colors.border}`,
+                      ].join(" ")}
+                    >
+                      {pillar || "—"}
+                    </span>
+                  </div>
+                  <IntegerPerformanceRatingSelect
+                    value={value}
+                    disabled={locked}
+                    className="rt-input w-full py-3 px-4 text-sm lg:justify-self-end"
+                    onChange={(next) => {
+                      if (locked) return;
+                      setSelectedValues((prev) => {
+                        const updated = normalizeWebknotValueRatingsForState(prev);
+                        if (next == null) {
+                          delete updated[id];
+                          return updated;
+                        }
+                        updated[id] = next;
+                        return updated;
+                      });
+                    }}
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor={`value-comment-${id}`}
+                    className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]"
+                  >
+                    Comments for this evaluation criteria
+                  </label>
+                  <textarea
+                    id={`value-comment-${id}`}
+                    value={comment}
+                    onChange={(e) => {
+                      if (locked) return;
+                      const next = String(e.target.value || "");
+                      setValueComments((prev) => {
+                        const updated = { ...(prev || {}) };
+                        if (!next.trim()) {
+                          delete updated[id];
+                          return updated;
+                        }
+                        updated[id] = next;
+                        return updated;
+                      });
+                    }}
+                    readOnly={locked}
+                    rows={3}
+                    className={[
+                      "mt-2 rt-input p-3 text-sm w-full resize-y min-h-[4.5rem]",
+                      locked ? "opacity-75 cursor-not-allowed" : "",
+                    ].join(" ")}
+                    placeholder="Describe how you demonstrated this value during the cycle"
+                  />
+                </div>
+              </div>
+            );
+          })}
+
+          {!loading && list.length === 0 ? (
+            <div className="p-10 text-center text-[rgb(var(--muted))]">
+              No values to show.
+            </div>
+          ) : null}
         </div>
       </section>
 
-      {!locked ? (
-        <PortalWorkflowActions
-          onBack={onBack}
-          onContinue={onProceed}
-          continueLabel="Continue to certifications"
-          continueDisabled={!canProceed}
-          hint={canProceed ? "Values saved — move on when ready." : "Rate at least one value to continue."}
-        />
-      ) : null}
+      <PortalWorkflowActions
+        onBack={onBack}
+        onContinue={onProceed}
+        continueLabel="Continue to certifications"
+        continueDisabled={!locked && !canProceed}
+        hint={
+          locked
+            ? LOCKED_NAV_HINT
+            : canProceed
+              ? "Values saved — move on when ready."
+              : ratedCount < list.length
+                ? "Rate every value from 1 to 5 to continue."
+                : "Add a comment for each evaluation criteria to continue."
+        }
+      />
     </PortalWorkflowFrame>
   );
 }
@@ -1329,15 +1397,13 @@ function CertificationsTab({
         </div>
       </section>
 
-      {!locked ? (
-        <PortalWorkflowActions
-          onBack={onBack}
-          onContinue={onProceed}
-          continueLabel="Continue to recognition"
-          continueDisabled={!canProceed}
-          hint={canProceed ? "Certifications look good — continue when ready." : "Add proof for each selected certification."}
-        />
-      ) : null}
+      <PortalWorkflowActions
+        onBack={onBack}
+        onContinue={onProceed}
+        continueLabel="Continue to recognition"
+        continueDisabled={!locked && !canProceed}
+        hint={locked ? LOCKED_NAV_HINT : canProceed ? "Certifications look good — continue when ready." : "Add proof for each selected certification."}
+      />
 
       {proofModal.open ? (
         <ModalOverlay
@@ -1466,15 +1532,13 @@ function RecognitionsTab({ recognitionsCount, setRecognitionsCount, onProceed, o
         </div>
       </section>
 
-      {!locked ? (
-        <PortalWorkflowActions
-          onBack={onBack}
-          onContinue={onProceed}
-          continueLabel="Continue to review"
-          continueDisabled={!canProceed}
-          hint="Enter 0 if you did not receive any awards this cycle."
-        />
-      ) : null}
+      <PortalWorkflowActions
+        onBack={onBack}
+        onContinue={onProceed}
+        continueLabel="Continue to review"
+        continueDisabled={!locked && !canProceed}
+        hint={locked ? LOCKED_NAV_HINT : "Enter 0 if you did not receive any awards this cycle."}
+      />
     </PortalWorkflowFrame>
   );
 }
@@ -1489,6 +1553,7 @@ function ReviewTab({
   kpiRatings,
   selfReviewText,
   selectedValues,
+  valueComments,
   selectedCertifications,
   recognitionsCount,
   onSaveDraft,
@@ -1520,6 +1585,7 @@ function ReviewTab({
   const valueRatings = useMemo(() => {
     const idx = valuesIndex && typeof valuesIndex === "object" ? valuesIndex : {};
     const ratings = normalizeWebknotValueRatingsForState(selectedValues);
+    const comments = normalizeValueCommentsForState(valueComments);
     const out = [];
     for (const [idRaw, ratingRaw] of Object.entries(ratings)) {
       const id = String(idRaw || "").trim();
@@ -1528,111 +1594,18 @@ function ReviewTab({
         : null;
       if (!id || rating == null) continue;
       const title = idx?.[id]?.title ? String(idx[id].title) : id;
-      out.push({ id, title, rating });
+      out.push({ id, title, rating, comment: String(comments?.[id] || "").trim() });
     }
     out.sort((a, b) => String(a.title).localeCompare(String(b.title), undefined, { numeric: true }));
     return out;
-  }, [selectedValues, valuesIndex]);
+  }, [selectedValues, valueComments, valuesIndex]);
 
   const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false);
   const [confirmSubmitBusy, setConfirmSubmitBusy] = useState(false);
   const [confirmSubmitError, setConfirmSubmitError] = useState("");
 
-  const reviewFeedback = useMemo(() => {
-    const manager = submissionMeta?.managerReview && typeof submissionMeta.managerReview === "object"
-      ? submissionMeta.managerReview
-      : null;
-    const admin = submissionMeta?.adminReview && typeof submissionMeta.adminReview === "object"
-      ? submissionMeta.adminReview
-      : null;
-    const rows = [];
-
-    const managerComment = String(manager?.comments || "").trim();
-    if (managerComment) {
-      rows.push({
-        id: "manager",
-        reviewer: "Manager",
-        action: String(manager?.action || "").trim().toUpperCase(),
-        comment: managerComment,
-        reviewedAt: manager?.reviewedAt || submissionMeta?.managerSubmittedAt || null,
-      });
-    }
-
-    const adminComment = String(admin?.comments || "").trim();
-    if (adminComment) {
-      rows.push({
-        id: "admin",
-        reviewer: "Admin",
-        action: String(admin?.action || "").trim().toUpperCase(),
-        comment: adminComment,
-        reviewedAt: admin?.reviewedAt || submissionMeta?.adminSubmittedAt || null,
-      });
-    }
-
-    const needsResubmission = Boolean(isResubmissionRequested(submissionMeta));
-    return { rows: filterHrPeerReviewRows(auth, rows), needsResubmission };
-  }, [auth, submissionMeta]);
-
   return (
     <PortalWorkflowFrame>
-      {reviewFeedback.needsResubmission && reviewFeedback.rows.length ? (
-        <section className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-5 sm:p-6 space-y-3">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-100">
-            Changes Requested
-          </div>
-          {reviewFeedback.rows.map((row) => {
-            const isReject = row.action === "REJECT";
-            return (
-              <div key={row.id} className="rounded-lg border border-amber-400/30 bg-white/40 dark:bg-black/20 p-4 space-y-2">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="text-xs font-semibold uppercase tracking-wider text-amber-900 dark:text-amber-100">
-                    {row.reviewer}
-                  </div>
-                  <div className={[
-                    "text-[10px] font-semibold uppercase tracking-wider rounded-full px-2 py-1 border",
-                    isReject
-                      ? "border-amber-500/40 text-amber-900 dark:text-amber-100 bg-amber-500/15"
-                      : "border-[rgb(var(--border))] text-[rgb(var(--muted))] bg-[rgb(var(--surface-2))]",
-                  ].join(" ")}>
-                    {row.action || "COMMENTED"}
-                  </div>
-                </div>
-                <div className="text-sm text-amber-950 dark:text-amber-50 whitespace-pre-wrap break-words">
-                  {row.comment}
-                </div>
-                {row.reviewedAt ? (
-                  <div className="text-[11px] text-amber-800/80 dark:text-amber-200/80 font-mono">
-                    Reviewed at: {formatReviewTimestamp(row.reviewedAt)}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </section>
-      ) : null}
-
-      {reviewFeedback.needsResubmission ? (
-        <ResubmissionPlaybook
-          submission={{
-            submission: {
-              selfReviewText,
-              kpiRatings,
-              webknotValueRatings: normalizeWebknotValueRatingsForState(selectedValues),
-              reopenedForResubmission: true,
-              managerReview: submissionMeta?.managerReview,
-              adminReview: submissionMeta?.adminReview,
-              updatedAt: submissionMeta?.updatedAt,
-              raw: submissionMeta?.raw,
-            },
-          }}
-          rejectComment={
-            submissionMeta?.adminReview?.comments ||
-            submissionMeta?.managerReview?.comments ||
-            ""
-          }
-        />
-      ) : null}
-
       <CycleReplayPanel
         currentSubmission={{
           submission: {
@@ -1727,11 +1700,18 @@ function ReviewTab({
           Webknot Values
         </div>
         {valueRatings.length ? (
-          <div className="space-y-2">
+          <div className="space-y-4">
             {valueRatings.map((row) => (
-              <div key={row.id} className="flex items-center justify-between gap-4">
-                <div className="text-sm text-[rgb(var(--text))]">{row.title}</div>
-                <div className="text-sm font-mono text-[rgb(var(--text))]">{row.rating.toFixed(1)}</div>
+              <div key={row.id} className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] p-4 space-y-2">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="text-sm font-medium text-[rgb(var(--text))]">{row.title}</div>
+                  <div className="text-sm font-mono text-[rgb(var(--text))]">{row.rating.toFixed(1)}</div>
+                </div>
+                {row.comment ? (
+                  <div className="text-sm text-[rgb(var(--muted))] whitespace-pre-wrap break-words">{row.comment}</div>
+                ) : (
+                  <div className="text-sm text-[rgb(var(--muted))] italic">No comment provided.</div>
+                )}
               </div>
             ))}
           </div>
@@ -1767,7 +1747,9 @@ function ReviewTab({
         </div>
       </section>
 
-      {!locked ? (
+      {locked ? (
+        <PortalWorkflowActions onBack={onBack} hint={LOCKED_NAV_HINT} />
+      ) : (
         <div className="rt-workflow-actions flex-col sm:flex-row gap-4">
           <div className="flex items-center gap-3 flex-wrap">
             <button
@@ -1820,7 +1802,7 @@ function ReviewTab({
             )}
           </div>
         </div>
-      ) : null}
+      )}
 
       {/* ── Final submit confirmation ── */}
       {confirmSubmitOpen ? (
@@ -2354,10 +2336,24 @@ export default function EmployeePortal({ onLogout, auth }) {
     [submissionMonth]
   );
 
+  const [promotionPathsRevision, setPromotionPathsRevision] = useState(0);
+  useEffect(() => {
+    const ac = new AbortController();
+    ensurePromotionPathsLoaded({ signal: ac.signal })
+      .then(() => setPromotionPathsRevision((n) => n + 1))
+      .catch(() => {});
+    const onPathsUpdated = () => setPromotionPathsRevision((n) => n + 1);
+    window.addEventListener("rt:promotion-paths-updated", onPathsUpdated);
+    return () => {
+      ac.abort();
+      window.removeEventListener("rt:promotion-paths-updated", onPathsUpdated);
+    };
+  }, []);
+
   const nextBandPreview = useMemo(() => {
     if (!employee?.band) return null;
     return getPromotionPreview(employee.band, employee?.bandType || "BOTH");
-  }, [employee?.band, employee?.bandType]);
+  }, [employee?.band, employee?.bandType, promotionPathsRevision]);
 
   const visibleNextBandKpis = useMemo(() => {
     if (!nextBandPreview?.nextBand) return [];
@@ -2544,6 +2540,11 @@ export default function EmployeePortal({ onLogout, auth }) {
           const nextValues = normalizeWebknotValueRatingsForState(
             normalizedSubmission.webknotValueRatings ?? normalizedSubmission.webknotValues
           );
+          const nextValueComments = normalizeValueCommentsForState(
+            normalizedSubmission.webknotValueComments ??
+            normalizedSubmission.raw?.payload?.webknotValueComments ??
+            normalizedSubmission.raw?.payload?.webknotValueResponses
+          );
 
           setSelfReviewText((prev) => (String(prev || "").trim() ? prev : normalizedSubmission.selfReviewText || ""));
           setSelectedCertifications((prev) => (Array.isArray(prev) && prev.length ? prev : nextCerts));
@@ -2551,6 +2552,10 @@ export default function EmployeePortal({ onLogout, auth }) {
           setSelectedValues((prev) => {
             const existing = normalizeWebknotValueRatingsForState(prev);
             return Object.keys(existing).length ? existing : nextValues;
+          });
+          setValueComments((prev) => {
+            const existing = normalizeValueCommentsForState(prev);
+            return Object.keys(existing).length ? existing : nextValueComments;
           });
           setRecognitionsCount((prev) => (prev ? prev : (normalizedSubmission.recognitionsCount || 0)));
         }
@@ -2846,6 +2851,7 @@ export default function EmployeePortal({ onLogout, auth }) {
             selectedCertifications: [],
             kpiRatings: {},
             selectedValues: {},
+            valueComments: {},
             recognitionsCount: 0,
             submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
             actorRole: "EMPLOYEE",
@@ -2867,6 +2873,11 @@ export default function EmployeePortal({ onLogout, auth }) {
           reviewStatus: normalized.reviewStatus || null,
           managerReview: normalized.managerReview || null,
           managerEvaluation: normalized.managerEvaluation || null,
+          managerSelfReviewEvalComments: String(
+            normalized.raw?.managerSelfReviewEvalComments ??
+              normalized.managerReview?.comments ??
+              ""
+          ).trim() || null,
           managerSubmittedAt: normalized.managerSubmittedAt || null,
           adminReview: normalized.adminReview || null,
           adminSubmittedAt: normalized.adminSubmittedAt || null,
@@ -2881,11 +2892,17 @@ export default function EmployeePortal({ onLogout, auth }) {
         const nextValues = normalizeWebknotValueRatingsForState(
           normalized.webknotValueRatings ?? normalized.webknotValues
         );
+        const nextValueComments = normalizeValueCommentsForState(
+          normalized.webknotValueComments ??
+          normalized.raw?.payload?.webknotValueComments ??
+          normalized.raw?.payload?.webknotValueResponses
+        );
 
         setSelfReviewText(normalized.selfReviewText || "");
         setSelectedCertifications(nextCerts);
         setKpiRatings(nextRatings);
         setSelectedValues(nextValues);
+        setValueComments(nextValueComments);
         setRecognitionsCount(
           typeof normalized.recognitionsCount === "number" && Number.isFinite(normalized.recognitionsCount)
             ? normalized.recognitionsCount
@@ -2898,6 +2915,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           selectedCertifications: nextCerts,
           kpiRatings: nextRatings,
           selectedValues: nextValues,
+          valueComments: nextValueComments,
           recognitionsCount: normalized.recognitionsCount,
           submissionType: "EMPLOYEE_MONTHLY_SUBMISSION",
           actorRole: "EMPLOYEE",
@@ -2926,9 +2944,14 @@ export default function EmployeePortal({ onLogout, auth }) {
     };
   }, [onLogout, subjectEmployeeId, submissionMonth]);
 
-  const locked = useMemo(
-    () => isAuthorSubmissionLocked(submissionMeta),
+  const needsResubmission = useMemo(
+    () => Boolean(isResubmissionRequested(submissionMeta)),
     [submissionMeta]
+  );
+
+  const locked = useMemo(
+    () => (needsResubmission ? false : isAuthorSubmissionLocked(submissionMeta)),
+    [needsResubmission, submissionMeta]
   );
 
   useEffect(() => {
@@ -3207,6 +3230,7 @@ export default function EmployeePortal({ onLogout, auth }) {
         reviewStatus: "SUBMITTED",
         reopenedForResubmission: false,
       }),
+      submissionId: submissionMeta?.id ?? null,
       employeeId: subjectEmployeeId,
       projectIds,
       submittedAt: new Date().toISOString(),
@@ -3307,8 +3331,14 @@ export default function EmployeePortal({ onLogout, auth }) {
         })
       : true;
     const projectsOk = selectedProjectIds.size >= 1 && selectedProjectIds.size <= MAX_PROJECT_SELECTIONS;
-    return textOk && kpisOk && certsOk && projectsOk;
-  }, [kpiRatings, kpisFullyLoaded, locked, selectedCertifications, selectedProjectIds, selfReviewText, visibleKpis]);
+    const valueList = Array.isArray(valuesPage?.items) ? valuesPage.items : [];
+    const valuesOk = valuesStepComplete(
+      valueList,
+      normalizeWebknotValueRatingsForState(selectedValues),
+      valueComments
+    );
+    return textOk && kpisOk && certsOk && projectsOk && valuesOk;
+  }, [kpiRatings, kpisFullyLoaded, locked, selectedCertifications, selectedProjectIds, selectedValues, selfReviewText, valueComments, valuesPage?.items, visibleKpis]);
 
   const valuesRatedCount = useMemo(() => {
     const list = Array.isArray(valuesPage?.items) ? valuesPage.items : [];
@@ -3326,10 +3356,14 @@ export default function EmployeePortal({ onLogout, auth }) {
 
   const valuesCanProceed = useMemo(() => {
     if (locked) return true;
-    const total = Array.isArray(valuesPage?.items) ? valuesPage.items.length : 0;
-    if (total === 0) return true;
-    return valuesRatedCount > 0;
-  }, [locked, valuesPage?.items, valuesRatedCount]);
+    const list = Array.isArray(valuesPage?.items) ? valuesPage.items : [];
+    if (!list.length) return true;
+    return valuesStepComplete(
+      list,
+      normalizeWebknotValueRatingsForState(selectedValues),
+      valueComments
+    );
+  }, [locked, selectedValues, valueComments, valuesPage?.items]);
 
   const certificationsCanProceed = useMemo(() => {
     if (locked) return true;
@@ -3423,28 +3457,20 @@ export default function EmployeePortal({ onLogout, auth }) {
     };
   }, [auth?.employeeId, auth?.empId, authEmail, onLogout, role]);
 
-  const needsResubmission = useMemo(
-    () => Boolean(isResubmissionRequested(submissionMeta)),
-    [submissionMeta]
+  const resubmissionActor = useMemo(
+    () => (needsResubmission ? resolveResubmissionActor(submissionMeta) : null),
+    [needsResubmission, submissionMeta]
   );
 
-  const resubmissionActor = useMemo(() => {
-    if (!needsResubmission) return null;
-    const reviewStatusUpper = String(submissionMeta?.reviewStatus || "").toUpperCase();
-    const adminAction = String(submissionMeta?.adminReview?.action || "").toUpperCase();
-    const managerAction = String(submissionMeta?.managerReview?.action || "").toUpperCase();
-    if (adminAction.includes("REJECT") || reviewStatusUpper.includes("ADMIN")) return "ADMIN";
-    if (managerAction.includes("REJECT") || reviewStatusUpper.includes("MANAGER")) return "MANAGER";
-    return null;
-  }, [needsResubmission, submissionMeta?.adminReview?.action, submissionMeta?.managerReview?.action, submissionMeta?.reviewStatus]);
+  const resubmissionActorLabel = useMemo(
+    () => (needsResubmission ? resolveResubmissionActorLabel(submissionMeta, resubmissionActor) : null),
+    [needsResubmission, resubmissionActor, submissionMeta]
+  );
 
-  const latestReviewComment = useMemo(() => {
-    const manager = String(submissionMeta?.managerReview?.comments || "").trim();
-    const admin = String(submissionMeta?.adminReview?.comments || "").trim();
-    if (resubmissionActor === "ADMIN") return admin || manager || "";
-    if (resubmissionActor === "MANAGER") return manager || admin || "";
-    return admin || manager || "";
-  }, [resubmissionActor, submissionMeta?.adminReview?.comments, submissionMeta?.managerReview?.comments]);
+  const latestReviewComment = useMemo(
+    () => (needsResubmission ? resolveResubmissionComment(submissionMeta, resubmissionActor) : ""),
+    [needsResubmission, resubmissionActor, submissionMeta]
+  );
 
   const stepItems = useMemo(() => ([
     { id: "profile", label: "Profile", status: "done" },
@@ -3525,7 +3551,7 @@ export default function EmployeePortal({ onLogout, auth }) {
             employee={employee}
             auth={auth}
             authEmail={authEmail}
-            locked={locked && !needsResubmission}
+            locked={locked}
             onProceed={() => goToTab("projects")}
             canProceed={!loading}
           />
@@ -3542,7 +3568,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           projectsError={projectsError}
           projectSearch={projectSearch}
           onProjectSearchChange={setProjectSearch}
-          locked={locked && !needsResubmission}
+          locked={locked}
           onProceed={() => goToTab("kpis")}
           onBack={() => goToTab("profile")}
           canProceed={projectsCanProceed}
@@ -3580,6 +3606,8 @@ export default function EmployeePortal({ onLogout, auth }) {
           error={valuesError}
           selectedValues={selectedValues}
           setSelectedValues={setSelectedValues}
+          valueComments={valueComments}
+          setValueComments={setValueComments}
           locked={locked}
           canProceed={valuesCanProceed}
           onProceed={() => goToTab("certifications")}
@@ -3665,6 +3693,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           kpiRatings={kpiRatings}
           selfReviewText={selfReviewText}
           selectedValues={selectedValues}
+          valueComments={valueComments}
           selectedCertifications={selectedCertifications}
           recognitionsCount={recognitionsCount}
           onSaveDraft={saveDraftNow}
@@ -3808,62 +3837,46 @@ export default function EmployeePortal({ onLogout, auth }) {
 
         {!locked && needsResubmission && activeTab !== "settings" ? (
           <div className="max-w-4xl mx-auto w-full min-w-0 mb-6">
-            <div className="relative overflow-hidden rounded-2xl border border-amber-500/45 bg-gradient-to-r from-amber-50 via-amber-50 to-white shadow-sm dark:from-amber-950/40 dark:via-amber-900/40 dark:to-transparent">
-              <div className="absolute inset-y-0 left-0 w-1.5 bg-gradient-to-b from-amber-500 to-orange-500" aria-hidden="true" />
-              <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_10%_20%,rgba(251,191,36,0.12),transparent_35%),radial-gradient(circle_at_80%_0%,rgba(253,186,116,0.15),transparent_30%)]" aria-hidden="true" />
-              <div className="relative p-5 sm:p-6 flex items-start gap-4">
-                <div className="h-11 w-11 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-200 flex items-center justify-center shadow-inner shadow-amber-500/20">
-                  <ShieldAlert size={18} />
-                </div>
-                <div className="flex-1 space-y-2">
-                  <div className="flex items-center gap-3 flex-wrap justify-between">
-                    <div className="space-y-0.5">
-                      <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-200">Changes Requested</div>
-                      <div className="text-sm font-semibold text-amber-900 dark:text-amber-100">
-                        Returned by {resubmissionActor === "ADMIN" ? "Admin" : "Manager"}
-                      </div>
-                    </div>
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-200">
-                      {resubmissionActor === "ADMIN" ? "Admin review" : "Manager review"}
-                    </span>
+            <section className="rt-panel overflow-hidden">
+              <div className="border-b border-[rgb(var(--border))] bg-[rgb(var(--surface-2))]/50 px-5 py-4 sm:px-6">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                    <ShieldAlert size={18} aria-hidden />
                   </div>
-                  <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
-                    {resubmissionActor === "ADMIN"
-                      ? "An admin reviewed this cycle and returned it for changes. Please address the notes below and resubmit."
-                      : "Your manager reviewed your submission and returned it with feedback. Please address the comments below and resubmit."}
-                  </p>
-                  {latestReviewComment ? (
-                    <div className="rounded-xl border border-amber-500/25 bg-white/80 p-3 sm:p-4 shadow-inner shadow-amber-500/10 backdrop-blur-sm dark:border-amber-500/30 dark:bg-black/25">
-                      <div className="text-[11px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-200">
-                        {resubmissionActor === "ADMIN" ? "Admin comments" : "Manager comments"}
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                          Changes requested
+                        </p>
+                        <h3 className="text-base font-semibold text-[rgb(var(--text))] mt-0.5">
+                          Returned by {resubmissionActorLabel || (resubmissionActor === "ADMIN" ? "Admin" : "Manager")}
+                        </h3>
                       </div>
-                      <div className="mt-1 text-sm text-amber-950 dark:text-amber-50 whitespace-pre-wrap leading-relaxed break-words">
-                        {latestReviewComment}
-                      </div>
+                      <span className="rt-badge rt-badge--warning shrink-0">
+                        {resubmissionActor === "ADMIN" ? "Admin review" : "Manager review"}
+                      </span>
                     </div>
-                  ) : null}
+                    <p className="text-sm text-[rgb(var(--muted))] leading-relaxed pt-1">
+                      {resubmissionActor === "ADMIN"
+                        ? "An admin returned this submission for updates. Review the notes below, edit your responses, then resubmit."
+                        : "Your manager returned this submission for updates. Review the notes below, edit your responses, then resubmit."}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-            {needsResubmission ? (
-              <div className="mt-4 max-w-4xl mx-auto w-full">
-                <ResubmissionPlaybook
-                  submission={{
-                    submission: {
-                      selfReviewText,
-                      kpiRatings,
-                      webknotValueRatings: normalizeWebknotValueRatingsForState(selectedValues),
-                      reopenedForResubmission: true,
-                      managerReview: submissionMeta?.managerReview,
-                      adminReview: submissionMeta?.adminReview,
-                      updatedAt: submissionMeta?.updatedAt,
-                      raw: submissionMeta?.raw,
-                    },
-                  }}
-                  rejectComment={latestReviewComment}
-                />
-              </div>
-            ) : null}
+
+              {latestReviewComment ? (
+                <div className="px-5 py-4 sm:px-6 sm:py-5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))]">
+                    {resubmissionActor === "ADMIN" ? "Admin comments" : "Manager comments"}
+                  </p>
+                  <blockquote className="mt-2 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-4 py-3.5 text-sm text-[rgb(var(--text))] whitespace-pre-wrap leading-relaxed break-words">
+                    {latestReviewComment}
+                  </blockquote>
+                </div>
+              ) : null}
+            </section>
           </div>
         ) : null}
         {EMPLOYEE_REVIEW_STEP_IDS.includes(activeTab) ? (
@@ -3912,9 +3925,11 @@ export default function EmployeePortal({ onLogout, auth }) {
           </div>
 
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))]">
-            <span className={`h-2 w-2 rounded-full ${locked ? "bg-red-500" : draftSaving ? "bg-amber-500 animate-pulse" : draftSaveError ? "bg-red-500" : "bg-emerald-500"}`} />
+            <span className={`h-2 w-2 rounded-full ${needsResubmission ? "bg-amber-500" : locked ? "bg-red-500" : draftSaving ? "bg-amber-500 animate-pulse" : draftSaveError ? "bg-red-500" : "bg-emerald-500"}`} />
             <span className="text-xs font-medium text-[rgb(var(--text))]">
-              {locked
+              {needsResubmission
+                ? "Changes requested — you can edit"
+                : locked
                 ? "Locked"
                 : hydratingSubmission
                 ? "Loading…"

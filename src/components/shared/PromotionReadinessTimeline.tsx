@@ -17,7 +17,12 @@ export default function PromotionReadinessTimeline({ employee, averageScore = nu
         ) : null}
         {readiness.lastPromotionDate ? (
           <span className="rt-badge rt-badge--primary">
-            Promoted {new Date(readiness.lastPromotionDate).toLocaleDateString(undefined, { month: "short", year: "2-digit" })}
+            Promoted{" "}
+            {new Date(readiness.lastPromotionDate).toLocaleDateString(undefined, {
+              month: "short",
+              day: "2-digit",
+              year: "numeric",
+            })}
           </span>
         ) : (
           <span className="rt-badge rt-badge--neutral">No promotion on file</span>
