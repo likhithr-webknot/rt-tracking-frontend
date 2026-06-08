@@ -920,7 +920,7 @@ export default function EmployeeDirectory({
   }
 
   function requestRemoveEmployee(emp) {
-    if (!guardHrEdit(emp, "deactivate")) return;
+    if (!guardHrEdit(emp, "delete")) return;
     const employeeId = String(emp?.id || "").trim();
     if (!employeeId) return;
     if (/^EMP_\d+$/i.test(employeeId)) {
@@ -955,8 +955,8 @@ export default function EmployeeDirectory({
           );
         }
         showToast({
-          title: "Employee deactivated",
-          message: `${employeeName || apiEmpId} is now inactive and hidden from active directory views.`,
+          title: "Employee removed",
+          message: `${employeeName || apiEmpId} was deleted from the database.`,
         });
       }
     } catch (err) {
@@ -1056,8 +1056,8 @@ export default function EmployeeDirectory({
     await refreshDirectoryAfterMutation();
     setMutating(false);
     showToast({
-      title: fail ? "Bulk deactivate finished" : "Employees deactivated",
-      message: `${ok} deactivated${fail ? `, ${fail} failed` : ""}.`,
+      title: fail ? "Bulk delete finished" : "Employees removed",
+      message: `${ok} deleted${fail ? `, ${fail} failed` : ""}.`,
       tone: fail && !ok ? "error" : fail ? "warning" : "success",
     });
   }
@@ -1499,7 +1499,7 @@ export default function EmployeeDirectory({
               Clear selection
             </button>
             <button type="button" className="rt-btn-primary !bg-red-600 hover:!bg-red-500 text-xs" onClick={requestBulkDelete}>
-              Deactivate selected
+              Delete selected
             </button>
           </div>
         </div>
@@ -1648,8 +1648,8 @@ export default function EmployeeDirectory({
                         variant="danger"
                         title={
                           !canModifyEmployee(emp)
-                            ? "HR cannot deactivate Super Admin accounts"
-                            : "Remove employee"
+                            ? "HR cannot delete Super Admin accounts"
+                            : "Delete employee from database"
                         }
                         ariaLabel={`Remove ${emp.name}`}
                       >
@@ -1778,7 +1778,7 @@ export default function EmployeeDirectory({
                   onClick={() => requestRemoveEmployee(emp)}
                   disabled={isSelf(emp) || !canModifyEmployee(emp)}
                   variant="danger"
-                  title={canModifyEmployee(emp) ? "Remove" : "HR cannot deactivate Super Admin accounts"}
+                  title={canModifyEmployee(emp) ? "Delete from database" : "HR cannot delete Super Admin accounts"}
                   ariaLabel={`Remove ${emp.name}`}
                 >
                   <Trash2 size={16} strokeWidth={2} />
@@ -1842,14 +1842,14 @@ export default function EmployeeDirectory({
 
       <ConfirmDialog
         open={Boolean(pendingDeleteEmployee)}
-        title="Deactivate employee?"
+        title="Delete employee?"
         message={
           pendingDeleteEmployee
-            ? `You are about to deactivate ${pendingDeleteEmployee.name}.\n\nThey will be marked inactive and hidden from active lists. Historical submissions and records are kept.\n\nThis cannot be undone from the directory UI without re-activating the profile.`
-            : "Deactivate this employee?"
+            ? `You are about to permanently delete ${pendingDeleteEmployee.name} from the database.\n\nThis removes their profile, roles, allocations, and related portal records. This cannot be undone.`
+            : "Delete this employee?"
         }
-        confirmText="Yes, deactivate"
-        cancelText="Keep active"
+        confirmText="Yes, delete permanently"
+        cancelText="Cancel"
         confirmVariant="danger"
         busy={mutating}
         onCancel={() => setPendingDeleteEmployee(null)}
@@ -1858,13 +1858,13 @@ export default function EmployeeDirectory({
 
       <ConfirmDialog
         open={Boolean(pendingBulkDelete?.length)}
-        title={`Deactivate ${pendingBulkDelete?.length || 0} employees?`}
+        title={`Delete ${pendingBulkDelete?.length || 0} employees?`}
         message={
           pendingBulkDelete?.length
-            ? `You selected ${pendingBulkDelete.length} people to deactivate.\n\nEach will be marked inactive in WebTrak. This does not delete audit history.\n\nContinue?`
+            ? `You selected ${pendingBulkDelete.length} people to permanently delete from the database.\n\nThis cannot be undone. Continue?`
             : ""
         }
-        confirmText={`Deactivate ${pendingBulkDelete?.length || 0}`}
+        confirmText={`Delete ${pendingBulkDelete?.length || 0}`}
         cancelText="Cancel"
         confirmVariant="danger"
         busy={mutating}

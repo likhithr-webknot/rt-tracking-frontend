@@ -579,7 +579,7 @@ export async function updateEmployee(employeeId, payload, { signal } = {} as Api
   throw new Error("Employee edit endpoint not found.");
 }
 
-/** Mark an employee inactive (Webtrak has no hard DELETE on employees). */
+/** Mark an employee inactive (legacy soft remove). */
 export async function deactivateEmployee(employeeId, { signal } = {} as ApiOptions) {
   return updateEmployee(employeeId, { userStatus: "INACTIVE" }, { signal });
 }
@@ -588,7 +588,7 @@ export async function deleteEmployee(
   employeeId,
   {
     signal,
-    hardDelete = false,
+    hardDelete = true,
     alternateIds = [],
   } = {} as ApiOptions & { hardDelete?: boolean; alternateIds?: (string | number | null | undefined)[] },
 ) {
