@@ -14,6 +14,8 @@ import {
   withCsrfHeaders,
 } from "./http";
 import { fetchUser } from "./user";
+import { buildWebtrakUrl, getWebtrakAuthHeaders, resolveWebtrakProfilePhotoUrl, toWebtrakPortalRoleToken } from "./webtrak";
+import { loadTeamListCache, saveTeamListCache } from "../utils/teamListCache";
 
 export function normalizeEmployees(data) {
   const root = data && typeof data === "object" ? data : {};
@@ -70,23 +72,36 @@ export function normalizeEmployees(data) {
       e.employeeName ?? e.employee_name ?? e.name ?? e.fullName ?? e.full_name ?? e.displayName ?? e.display_name ?? ""
     ).trim();
 
-    const empId = String(e.empId ?? e.employeeId ?? e.employee_id ?? "").trim();
+    const empId = String(e.empId ?? e.emp_id ?? e.employeeId ?? e.employee_id ?? "").trim();
     const dbId = String(e.id ?? e.userId ?? e.user_id ?? "").trim();
     const primaryId = empId || dbId || `EMP_${i}`;
     const userIdRaw = String(e.userId ?? e.user_id ?? e.appUserId ?? e.accountId ?? "").trim();
 
     const rawDesignation = String(e.designation ?? e.title ?? e.jobTitle ?? "").trim();
     const rawRoleField = String(e.role ?? "").trim();
+    const portalRolesList = Array.isArray(e.portal_roles)
+      ? e.portal_roles
+      : Array.isArray(e.portalRoles)
+        ? e.portalRoles
+        : [];
+    const portalRoleFromList = pickPrimaryPortalRoleToken(portalRolesList);
     const portalRole =
       resolvePortalRoleLabel(
         e.empRole,
         e.portalRole,
+        portalRoleFromList,
         formatPortalRoleLabel(rawRoleField) ? rawRoleField : null,
         e.userRole,
       ) || "Employee";
     const jobTitle =
       rawDesignation ||
       (rawRoleField && !formatPortalRoleLabel(rawRoleField) ? rawRoleField : "");
+
+    const profilePhotoRaw =
+      e.profilePhoto ?? e.profile_photo ?? e.photoUrl ?? e.photo_url ?? e.picture ?? e.avatarUrl ?? "";
+    const profilePhoto = resolveWebtrakProfilePhotoUrl(profilePhotoRaw);
+    const isOnline = Boolean(e.isOnline ?? e.is_online ?? e.online ?? false);
+    const lastSeenAt = e.lastSeenAt ?? e.last_seen_at ?? null;
 
     return {
       id: primaryId,
@@ -98,20 +113,24 @@ export function normalizeEmployees(data) {
       email: String(e.email ?? e.employeeEmail ?? e.mail ?? ""),
       role: portalRole,
       empRole: portalRole,
-      userType: String(e.userType ?? e.type ?? "").trim(),
-      workMode: String(e.workMode ?? "").trim(),
-      phoneNumber: String(e.phoneNumber ?? e.phone ?? "").trim(),
+      userType: String(e.userType ?? e.user_type ?? e.type ?? "").trim(),
+      workMode: String(e.workMode ?? e.work_mode ?? "").trim(),
+      phoneNumber: String(e.phoneNumber ?? e.phone_number ?? e.phone ?? "").trim(),
+      profilePhoto,
+      picture: profilePhoto,
+      isOnline,
+      lastSeenAt: lastSeenAt ? String(lastSeenAt) : null,
       designation:
         formatEmployeeDesignation(jobTitle, e.band ?? e.level ?? "") ||
         jobTitle,
       band: formatEmployeeBandCode(e.band ?? e.level ?? "") || String(e.band ?? e.level ?? "B4").trim() || "B4",
       stream: String(e.department ?? e.stream ?? e.context ?? ""),
       project: String(e.project ?? e.projectName ?? e.account ?? e.client ?? ""),
-      managerId: String(e.managerId ?? e.reportingManagerId ?? e.managerEmpId ?? ""),
-      createdAt: e.createdAt ? String(e.createdAt) : null,
+      managerId: String(e.managerId ?? e.manager_id ?? e.reportingManagerId ?? e.managerEmpId ?? ""),
+      createdAt: e.createdAt ? String(e.createdAt) : e.onboardedDate ? String(e.onboardedDate) : e.onboarded_date ? String(e.onboarded_date) : null,
       updatedAt: e.updatedAt ? String(e.updatedAt) : null,
       lastPromotionDate: e.lastPromotionDate ?? e.last_promotion_date ?? null,
-      status: String(e.userStatus ?? e.status ?? "").trim(),
+      status: String(e.userStatus ?? e.status ?? e.onboardingStatus ?? e.onboarding_status ?? "").trim(),
       submitted: Boolean(e.submitted ?? e.hasSubmitted ?? false),
       recognitions: Number(e.recognitions ?? e.recognitionCount ?? 0) || 0,
       certifications: Array.isArray(e.certifications) ? e.certifications : [],
@@ -136,13 +155,56 @@ export function normalizeEmployees(data) {
  * when the API sends ROLE_* enums, title case, or non-standard labels.
  */
 export function resolveRoleStatsBucket(empLike) {
+  const portalRoles = Array.isArray(empLike?.portal_roles)
+    ? empLike.portal_roles
+    : Array.isArray(empLike?.portalRoles)
+      ? empLike.portalRoles
+      : [];
   const raw = String(
-    empLike?.empRole ?? empLike?.portalRole ?? empLike?.userRole ?? empLike?.role ?? "",
+    empLike?.empRole ??
+      empLike?.portalRole ??
+      empLike?.userRole ??
+      pickPrimaryPortalRoleToken(portalRoles) ??
+      empLike?.role ??
+      "",
   ).trim();
   const key = raw.toLowerCase().replace(/^role_/, "");
-  if (key === "admin" || key.includes("admin")) return "admin";
+  if (key === "admin" || key.includes("admin") || key === "hr" || key.includes("human resource")) return "admin";
   if (key === "manager" || key.includes("manager")) return "manager";
   return "employee";
+}
+
+/** When onboard returns multiple portal roles, pick one for directory display. */
+function pickPrimaryPortalRoleToken(roles: unknown) {
+  const list = (Array.isArray(roles) ? roles : [])
+    .map((r) => String(r ?? "").trim())
+    .filter(Boolean);
+  if (!list.length) return null;
+  if (list.length === 1) return list[0];
+  // Prefer a singular portal identity. Alphabetical ROLE_ADMIN+ROLE_HR previously
+  // always showed Super Admin even after set-portal-role assigned HR.
+  const priority = [
+    "ROLE_HR",
+    "HR",
+    "ROLE_FINANCE",
+    "FINANCE",
+    "ROLE_MANAGER",
+    "MANAGER",
+    "ROLE_AM",
+    "AM",
+    "ROLE_DM",
+    "DM",
+    "ROLE_ADMIN",
+    "ADMIN",
+    "ROLE_EMPLOYEE",
+    "EMPLOYEE",
+  ];
+  const upper = new Map(list.map((r) => [r.toUpperCase(), r]));
+  for (const token of priority) {
+    const hit = upper.get(token);
+    if (hit) return hit;
+  }
+  return list[0];
 }
 
 function resolvePagedListTotal(raw, pageData, fallbackLen) {
@@ -197,59 +259,172 @@ function extractUsersArray(raw) {
   return [];
 }
 
-export async function fetchEmployees({ limit = null, cursor = null, signal } = {} as ApiOptions) {
-  const auth = getAuthHeader();
-  const fallbackLimit = 10;
+export async function fetchEmployees({
+  limit = null,
+  cursor = null,
+  signal,
+  search = "",
+  type = "",
+  onboardingStatus = "",
+} = {} as ApiOptions & {
+  search?: string;
+  type?: string;
+  onboardingStatus?: string;
+}) {
+  const fallbackLimit = 500;
   const parsedLimit = limit != null ? Number.parseInt(String(limit), 10) : fallbackLimit;
   const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : fallbackLimit;
   const parsedOffset = cursor != null ? Number.parseInt(String(cursor), 10) : 0;
   const safeOffset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
-  const page = Math.floor(safeOffset / safeLimit);
-  const pageQ = `page=${encodeURIComponent(String(page))}&size=${encodeURIComponent(String(safeLimit))}`;
-  const offsetQ = `offset=${encodeURIComponent(String(safeOffset))}&limit=${encodeURIComponent(String(safeLimit))}`;
-  // Prefer paged employees/users first. Avoid paginated employee-profile here — many stacks return
-  // only the current user for that route, which makes the directory look like a single-employee org.
-  const endpoints = [
-    `/api/v1/employees?${pageQ}`,
-    `/api/v1/users?${pageQ}`,
-    `/api/v1/employee-profile?${pageQ}`,
-    `/api/v1/employees?${offsetQ}`,
-    `/api/v1/employees`,
-  ];
-  const raw = await requestWithFallbacks(endpoints, {
-    signal,
-    headers: auth ? { Authorization: auth } : undefined,
-    fallbackStatuses: [400, 403, 404, 405],
-    notFoundMessage: "Employees list endpoint not found.",
-  });
-  const allUsers = extractUsersArray(raw);
+  const startPage = Math.floor(safeOffset / Math.min(safeLimit, 500));
+  const searchQ = String(search ?? "").trim();
+  const typeQ = String(type ?? "").trim();
+  const statusQ = String(onboardingStatus ?? "").trim();
 
-  const root = raw && typeof raw === "object" ? raw : {};
-  const data = root?.data && typeof root.data === "object" ? root.data : root;
-  const total = resolvePagedListTotal(raw, data, allUsers.length);
+  const webtrakKey = String(import.meta?.env?.VITE_WEBTRAK_API_KEY ?? "").trim();
+  const onboardBase = buildWebtrakUrl("/api/v1/user/onboard");
+
+  const buildOnboardUrl = (page: number, size: number) => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    params.set("size", String(size));
+    params.set("search", searchQ);
+    params.set("type", typeQ);
+    params.set("onboardingStatus", statusQ);
+    return `${onboardBase}?${params.toString()}`;
+  };
+
+  // Browser always uses /__webtrak; proxy injects WEBTRAK_API_KEY. Never hit Webtrak origin directly (CORS).
+  const onboardHeaders: Record<string, string> = getWebtrakAuthHeaders();
+  if (webtrakKey && !onboardHeaders.Authorization && typeof window === "undefined") {
+    onboardHeaders.Authorization = /^bearer\s+/i.test(webtrakKey)
+      ? webtrakKey
+      : `Bearer ${webtrakKey}`;
+  }
+
+  const pageSize = Math.min(safeLimit, 500);
+  const collected = [];
+  let reportedTotal = null;
+  let usedOnboard = false;
+  let onboardFailed = false;
+  let onboardError: Error | null = null;
+
+  for (let page = startPage; page < startPage + 8; page += 1) {
+    const remaining = safeLimit - collected.length;
+    if (remaining <= 0) break;
+    const size = Math.min(pageSize, remaining);
+    try {
+      const raw = await requestWithFallbacks([buildOnboardUrl(page, size)], {
+        signal,
+        credentials: "omit",
+        headers: onboardHeaders,
+        fallbackStatuses: [400, 403, 404, 405],
+        notFoundMessage: "Onboard users endpoint not found.",
+      });
+      usedOnboard = true;
+      const batch = extractUsersArray(raw);
+      const root = raw && typeof raw === "object" ? raw : {};
+      const data = root?.data && typeof root.data === "object" ? root.data : root;
+      const total = resolvePagedListTotal(raw, data, null);
+      if (total != null) reportedTotal = total;
+      if (!batch.length) break;
+      collected.push(...batch);
+      if (batch.length < size) break;
+      if (reportedTotal != null && safeOffset + collected.length >= reportedTotal) break;
+      if (collected.length >= safeLimit) break;
+    } catch (err) {
+      if (err?.name === "AbortError") throw err;
+      if (!usedOnboard) {
+        onboardFailed = true;
+        onboardError = err instanceof Error ? err : new Error(String(err?.message || err || "Onboard failed"));
+      }
+      break;
+    }
+  }
+
+  const roleStats = (users: unknown[]) => {
+    let managerCount = 0;
+    let adminCount = 0;
+    let employeeCount = 0;
+    for (const u of users) {
+      const bucket = resolveRoleStatsBucket(u);
+      if (bucket === "admin") adminCount += 1;
+      else if (bucket === "manager") managerCount += 1;
+      else employeeCount += 1;
+    }
+    return {
+      managerCount,
+      adminCount,
+      employeeCount,
+      bandCount: new Set(
+        users.map((u) => String((u as { band?: string; level?: string })?.band ?? (u as { level?: string })?.level ?? "").trim()).filter(Boolean),
+      ).size,
+    };
+  };
+
+  // Onboard failed: serve last successful Webtrak snapshot (local / Supabase cache).
+  if (onboardFailed || !usedOnboard) {
+    const cached = await loadTeamListCache();
+    if (cached?.items?.length) {
+      const allUsers = cached.items as unknown[];
+      const total = cached.total != null ? cached.total : allUsers.length;
+      const pageItems =
+        allUsers.length > safeLimit
+          ? allUsers.slice(safeOffset, safeOffset + safeLimit)
+          : allUsers.slice(safeOffset);
+      const nextCursor =
+        safeOffset + pageItems.length < total ? String(safeOffset + pageItems.length) : null;
+      const stats = roleStats(allUsers);
+      return {
+        items: pageItems,
+        nextCursor,
+        total,
+        managerCount: cached.managerCount ?? stats.managerCount,
+        adminCount: cached.adminCount ?? stats.adminCount,
+        employeeCount: cached.employeeCount ?? stats.employeeCount,
+        bandCount: cached.bandCount ?? stats.bandCount,
+        fromCache: true,
+        cachedAt: cached.fetchedAt,
+      };
+    }
+    const detail = onboardError?.message
+      ? String(onboardError.message).trim()
+      : "Webtrak onboard failed and no cached roster.";
+    const err = new Error(
+      detail.startsWith("Team List unavailable")
+        ? detail
+        : `Team List unavailable: ${detail}`,
+    ) as Error & { status?: number; path?: string; method?: string };
+    err.status = typeof (onboardError as { status?: number })?.status === "number"
+      ? (onboardError as { status?: number }).status
+      : 503;
+    err.path = onboardBase;
+    err.method = "GET";
+    throw err;
+  }
+
+  const allUsers = collected;
+  const total = reportedTotal != null ? reportedTotal : safeOffset + allUsers.length;
   const items = allUsers.length > safeLimit ? allUsers.slice(0, safeLimit) : allUsers;
   const nextCursor = safeOffset + items.length < total ? String(safeOffset + items.length) : null;
+  const stats = roleStats(allUsers);
 
-  let managerCount = 0;
-  let adminCount = 0;
-  let employeeCount = 0;
-  for (const u of allUsers) {
-    const bucket = resolveRoleStatsBucket(u);
-    if (bucket === "admin") adminCount += 1;
-    else if (bucket === "manager") managerCount += 1;
-    else employeeCount += 1;
+  // Persist successful external fetch for offline / outage fallback.
+  if (!searchQ && !typeQ && !statusQ && safeOffset === 0) {
+    void saveTeamListCache({
+      fetchedAt: new Date().toISOString(),
+      items: allUsers,
+      total,
+      ...stats,
+    });
   }
 
   return {
     items,
     nextCursor,
     total,
-    managerCount,
-    adminCount,
-    employeeCount,
-    bandCount: new Set(
-      allUsers.map((u) => String(u?.band ?? u?.level ?? "").trim()).filter(Boolean)
-    ).size,
+    ...stats,
+    fromCache: false,
   };
 }
 
@@ -534,6 +709,48 @@ export async function addEmployee(payload, { signal } = {} as ApiOptions) {
 export async function addEmployeeWithManager(payload, options = {} as ApiOptions) {
   return addEmployee(payload, options);
 }
+/**
+ * POST /api/v1/roles/set-portal-role via /__webtrak (same-origin proxy).
+ * Body matches webtrak1.0 AssignRoleRequest: target_email + role.
+ */
+export async function setPortalRole(
+  {
+    email,
+    role,
+  }: {
+    email?: string | null;
+    role?: string | null;
+  },
+  { signal } = {} as ApiOptions,
+) {
+  const targetEmail = String(email ?? "").trim().toLowerCase();
+  if (!targetEmail || !targetEmail.includes("@")) {
+    throw new Error("A valid employee email is required to set the portal role.");
+  }
+  const roleToken = toWebtrakPortalRoleToken(role);
+  const body = {
+    target_email: targetEmail,
+    role: roleToken,
+  };
+
+  const res = await fetch(buildWebtrakUrl("/api/v1/roles/set-portal-role"), {
+    method: "POST",
+    signal,
+    credentials: "omit",
+    headers: getWebtrakAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw await toHttpError(res, {
+      method: "POST",
+      path: "/api/v1/roles/set-portal-role",
+    });
+  }
+
+  return parseResponse(res, {});
+}
+
 export async function updateEmployee(employeeId, payload, { signal } = {} as ApiOptions) {
   const empId = String(employeeId ?? "").trim();
   if (!empId || /^EMP_\d+$/i.test(empId)) {

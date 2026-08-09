@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { getAuthHeader } from "./auth";
-import { buildApiUrl, ensureCsrfCookie, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
+import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
+import { buildWebtrakUrl, getWebtrakAuthHeaders } from "./webtrak";
 
 function extractAllocationsArray(data) {
   const root = data && typeof data === "object" ? data : {};
@@ -72,6 +73,79 @@ export async function fetchAllocations(options = {}) {
       notFoundMessage: "Allocation list endpoint not found.",
     }
   );
+}
+
+/**
+ * GET /api/v1/allocation/employee?userEmail=…&scope=current_and_future
+ * Uses the Webtrak third-party host + API key (same as Team List).
+ */
+export async function fetchEmployeeAllocations(
+  { userEmail, scope = "current_and_future" } = {},
+  { signal } = {},
+) {
+  const email = String(userEmail ?? "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    throw new Error("A valid employee email is required to load allocations.");
+  }
+  const params = new URLSearchParams();
+  params.set("userEmail", email);
+  if (scope) params.set("scope", String(scope));
+
+  const res = await fetch(
+    buildWebtrakUrl(`/api/v1/allocation/employee?${params.toString()}`),
+    {
+      method: "GET",
+      signal,
+      credentials: "omit",
+      headers: getWebtrakAuthHeaders(),
+    },
+  );
+  if (!res.ok) {
+    throw await toHttpError(res, {
+      method: "GET",
+      path: "/api/v1/allocation/employee",
+    });
+  }
+  return parseResponse(res, {});
+}
+
+export function parseEmployeeAllocationsPayload(raw) {
+  const root = raw && typeof raw === "object" ? raw : {};
+  const data = root.data && typeof root.data === "object" ? root.data : root;
+  const allocations = Array.isArray(data.allocations)
+    ? data.allocations
+    : extractAllocationsArray(data);
+  return {
+    employeeEmail: String(data.employee_email ?? data.employeeEmail ?? "").trim(),
+    employeeName: String(data.employee_name ?? data.employeeName ?? "").trim(),
+    empId: String(data.emp_id ?? data.empId ?? "").trim(),
+    userId: data.user_id ?? data.userId ?? null,
+    totalAllocatedPercent: Number(
+      data.total_allocated_percent ?? data.totalAllocatedPercent ?? 0,
+    ),
+    allocations: allocations.map((row, i) => {
+      const r = row && typeof row === "object" ? row : {};
+      return {
+        id: String(r.id ?? r.allocation_id ?? r.allocationId ?? `alloc_${i}`).trim(),
+        projectName: String(
+          r.project_name ?? r.projectName ?? r.project?.name ?? r.project_code ?? r.projectCode ?? "—",
+        ).trim(),
+        projectCode: String(r.project_code ?? r.projectCode ?? "").trim(),
+        role: String(r.role ?? r.allocation_type ?? r.allocationType ?? "—").trim(),
+        percent: Number(
+          r.allocated_percent ??
+            r.allocatedPercent ??
+            r.percentage ??
+            r.percent ??
+            r.utilization ??
+            0,
+        ),
+        startDate: String(r.start_date ?? r.startDate ?? "").trim(),
+        endDate: String(r.end_date ?? r.endDate ?? "").trim(),
+        status: String(r.status ?? r.allocation_status ?? "").trim(),
+      };
+    }),
+  };
 }
 
 export async function addAllocation(payload, options = {}) {

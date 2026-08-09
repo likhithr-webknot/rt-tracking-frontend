@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { characterAvatarUrl, defaultCharacterStyle } from "../../utils/avatarCharacter";
 import { loadAvatarPrefs, resolveDisplayAvatar } from "../../utils/avatarPrefs";
 
@@ -23,6 +23,8 @@ export default function UserAvatar({
   className = "",
   ringClassName = "rounded-full",
 }) {
+  const [imgFailed, setImgFailed] = useState(false);
+
   const avatar = useMemo(() => {
     const prefs = loadAvatarPrefs(email);
     if (prefs.characterSeed) {
@@ -44,6 +46,17 @@ export default function UserAvatar({
     });
   }, [auth?.avatarUrl, auth?.characterSeed, auth?.characterStyle, auth?.picture, auth?.profilePic, email]);
 
+  const imageSrc =
+    avatar.type === "character"
+      ? avatar.url
+      : avatar.type === "image" && avatar.value
+        ? avatar.value
+        : "";
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [imageSrc]);
+
   const px = typeof size === "number" ? size : 40;
   const shell = [
     "inline-flex shrink-0 items-center justify-center overflow-hidden bg-[rgb(var(--surface-2))] border border-[rgb(var(--border))]",
@@ -53,17 +66,19 @@ export default function UserAvatar({
     .filter(Boolean)
     .join(" ");
 
-  if (avatar.type === "character" || (avatar.type === "image" && avatar.value)) {
-    const src = avatar.type === "character" ? avatar.url : avatar.value;
+  if (imageSrc && !imgFailed) {
     return (
       <img
-        src={src}
+        src={imageSrc}
         alt=""
         width={px}
         height={px}
+        loading="lazy"
+        decoding="async"
         className={shell}
         style={{ width: px, height: px }}
         referrerPolicy="no-referrer"
+        onError={() => setImgFailed(true)}
       />
     );
   }

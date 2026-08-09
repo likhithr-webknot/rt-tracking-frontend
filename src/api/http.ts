@@ -243,8 +243,13 @@ export function buildApiUrl(path) {
   if (!p) return p;
   if (p.startsWith("http://") || p.startsWith("https://")) return p;
 
-  const base = getApiBaseUrl();
   let normalizedPath = p.startsWith("/") ? p : `/${p}`;
+  // Vite same-origin Webtrak proxy — never prefix with Pulse API base / Settings apiBaseUrl.
+  if (normalizedPath === "/__webtrak" || normalizedPath.startsWith("/__webtrak/")) {
+    return normalizedPath;
+  }
+
+  const base = getApiBaseUrl();
 
   // If base already includes "/api/v1" (common), avoid accidental "/api/v1/api/v1".
   // Example:

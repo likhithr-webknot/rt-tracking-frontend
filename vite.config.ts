@@ -53,6 +53,11 @@ function spaBypass(req: { headers?: { accept?: string }; url?: string }) {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const API_TARGET = env.VITE_API_DEV_PROXY || "http://localhost:8080";
+  const WEBTRAK_TARGET =
+    env.VITE_WEBTRAK_API_BASE || "https://webtrak.webknot-dev.in";
+  const WEBTRAK_API_KEY = String(
+    env.WEBTRAK_API_KEY || env.VITE_WEBTRAK_API_KEY || "",
+  ).trim();
 
   const base = {
     target: API_TARGET,
@@ -63,12 +68,71 @@ export default defineConfig(({ mode }) => {
     configure: (proxy: { on: (ev: string, fn: (...args: unknown[]) => void) => void }) => configureProxy(proxy, API_TARGET),
   };
 
+  function configureWebtrakProxy(proxy: {
+    on: (ev: string, fn: (...args: unknown[]) => void) => void;
+  }) {
+    proxy.on("proxyReq", (...args: unknown[]) => {
+      const proxyReq = args[0] as {
+        getHeader: (n: string) => unknown;
+        setHeader: (n: string, v: string) => void;
+        removeHeader?: (n: string) => void;
+      };
+      if (proxyReq.getHeader("origin")) {
+        proxyReq.setHeader("origin", WEBTRAK_TARGET);
+      }
+      // Only forward Webtrak app keys (wtrt_…). Pulse session JWTs are not valid
+      // on Webtrak and would block the service key injection → 401 / failed calls.
+      const incoming = String(proxyReq.getHeader("authorization") || "").trim();
+      const isWebtrakAppKey =
+        /\bwtrt_/.test(incoming) || incoming.startsWith("wtrt_");
+      const asBearer = (token: string) =>
+        /^bearer\s+/i.test(token) ? token : `Bearer ${token}`;
+      if (isWebtrakAppKey) {
+        // Normalize caller-provided app key to Bearer scheme.
+        proxyReq.setHeader("Authorization", asBearer(incoming));
+      } else if (WEBTRAK_API_KEY) {
+        proxyReq.setHeader("Authorization", asBearer(WEBTRAK_API_KEY));
+      }
+    });
+    proxy.on("error", (...args: unknown[]) => {
+      const err = args[0];
+      const req = args[1] as { method?: string; url?: string };
+      const res = args[2] as {
+        headersSent?: boolean;
+        writeHead?: (c: number, h: Record<string, string>) => void;
+        end?: (b: string) => void;
+      };
+      const method = req?.method || "GET";
+      const url = req?.url || "";
+      const message = err instanceof Error ? err.message : "Webtrak proxy request failed";
+      console.error(`[vite webtrak-proxy] ${method} ${url} -> ${WEBTRAK_TARGET}: ${message}`);
+      if (!res || res.headersSent) return;
+      res.writeHead?.(502, { "Content-Type": "application/json" });
+      res.end?.(
+        JSON.stringify({
+          message: "Frontend dev proxy could not reach Webtrak.",
+          details: `${method} ${url} -> ${WEBTRAK_TARGET}: ${message}`,
+        })
+      );
+    });
+  }
+
   return {
     plugins: [react(), tailwindcss()],
     server: {
       port: 3000,
       host: true,
       proxy: {
+        // Third-party Webtrak (Team List / onboard). Key injected from WEBTRAK_API_KEY.
+        "/__webtrak": {
+          target: WEBTRAK_TARGET,
+          changeOrigin: true,
+          secure: true,
+          timeout: 120_000,
+          proxyTimeout: 120_000,
+          rewrite: (path: string) => path.replace(/^\/__webtrak/, ""),
+          configure: configureWebtrakProxy,
+        },
         // Spring Security oauth2 callbacks have to round-trip to the backend.
         "/oauth2": { ...base },
         "/login/oauth2": { ...base },
@@ -101,12 +165,6 @@ export default defineConfig(({ mode }) => {
         "/auth": { ...base, bypass: spaBypass },
         "/certifications": { ...base, bypass: spaBypass },
         "/projects": { ...base, bypass: spaBypass },
-        // SPA-only routes (`/admin/*`, `/employee/*`, `/manager/*`) are
-        // intentionally NOT in the proxy table. Vite's default SPA fallback
-        // serves index.html for them; React Router handles the rest. Adding
-        // them here proxied every browser navigation to Spring Boot, which
-        // 404s because the backend has no `/admin` etc. endpoints — its API
-        // lives under `/api/v1/...`.
       },
     },
     preview: {

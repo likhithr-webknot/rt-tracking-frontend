@@ -1,16 +1,15 @@
 // @ts-nocheck
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, History, Loader2, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, Search } from "lucide-react";
 import { fetchAdminAllSubmissions, normalizeMonthlySubmission } from "../../api/monthly-submissions";
 import { fetchAvailableProjects, normalizeProjects } from "../../api/projects";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
-import EntityCsvToolbar from "../shared/EntityCsvToolbar";
-import Toast from "../shared/Toast";
+import ListPaginationBar from "../shared/ListPaginationBar";
+import { useClientPagination } from "../../hooks/useClientPagination";
 import {
   averageNumericScores,
   scoreFromMonthlySubmission,
 } from "../../utils/employeePerformanceScore";
-import { exportRatingsHistoryCsv } from "../../utils/entityCsvExport";
 import {
   currentReviewCycleKey,
   formatCycleKeyLabel,
@@ -103,19 +102,16 @@ export default function RatingsHistoryWorkspace({
 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [submissions, setSubmissions] = useState([]);
   const [historyByEmp, setHistoryByEmp] = useState(new Map());
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState(() => new Set());
   const [projectIndex, setProjectIndex] = useState({});
-  const [toast, setToast] = useState(null);
   const requestIdRef = useRef(0);
 
   const employees = useMemo(
     () => filterEmployeesForRatingsHistory(auth, employeesProp),
     [auth, employeesProp],
   );
-  const showToast = useCallback((next) => setToast(next), []);
 
   const loadSubmissions = useCallback(async ({ signal } = {}) => {
     const requestId = requestIdRef.current + 1;
@@ -126,7 +122,6 @@ export default function RatingsHistoryWorkspace({
       const subs = await fetchAdminAllSubmissions({ signal });
       if (requestId !== requestIdRef.current || signal?.aborted) return;
       const subsList = Array.isArray(subs) ? subs : [];
-      setSubmissions(subsList);
       setHistoryByEmp(buildEmployeeHistory(subsList));
     } catch (err) {
       if (isAbortError(err) || signal?.aborted) return;
@@ -243,6 +238,12 @@ export default function RatingsHistoryWorkspace({
     });
   }, [employees, historyByEmp, search, currentCycleKey]);
 
+  const listPagination = useClientPagination(rows, {
+    pageSize: 12,
+    pageSizeOptions: [12, 25, 50],
+    resetKey: search,
+  });
+
   function toggleExpanded(id) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -263,18 +264,7 @@ export default function RatingsHistoryWorkspace({
             ? `HR view — employee and manager ratings only. Other HR and Super Admin profiles are hidden.`
             : `Super Admin view — current cycle (${currentCycleLabel}), all-time averages, and full monthly history.`
         }
-      >
-        <EntityCsvToolbar
-          entityKey="ratings-history"
-          disabled={pageLoading}
-          importLabel="Import"
-          exportLabel="Export"
-          showToast={showToast}
-          onExport={() => exportRatingsHistoryCsv(employees, submissions)}
-          onImportComplete={() => loadSubmissions()}
-          confirmImportMessage="Import ratings history from CSV? Rows update existing monthly submissions matched by submission ID or employee + month."
-        />
-      </AdminPageHeader>
+      />
 
       {error ? (
         <div className="rt-panel border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-700 dark:text-red-300">
@@ -302,110 +292,122 @@ export default function RatingsHistoryWorkspace({
             Loading full ratings history…
           </div>
         ) : (
-          <div className="divide-y divide-[rgb(var(--border))]">
-            {rows.map((emp) => {
-              const id = String(emp.id);
-              const open = expanded.has(id);
-              return (
-                <div key={id}>
-                  <button
-                    type="button"
-                    onClick={() => toggleExpanded(id)}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[rgb(var(--surface-2))]/70 transition-colors"
-                  >
-                    {open ? (
-                      <ChevronDown size={18} className="shrink-0 text-[rgb(var(--muted))]" />
-                    ) : (
-                      <ChevronRight size={18} className="shrink-0 text-[rgb(var(--muted))]" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="font-semibold text-[rgb(var(--text))] truncate">{emp.name}</div>
-                      <div className="text-xs text-[rgb(var(--muted))] truncate">
-                        {emp.empId || emp.id} · {emp.email}
-                      </div>
-                    </div>
-                    <div className="hidden sm:flex items-center gap-6 text-sm shrink-0">
-                      <div className="text-center min-w-[4.5rem]">
-                        <div className="text-[10px] uppercase tracking-wide text-[rgb(var(--muted))]">Current cycle</div>
-                        <ScoreCell value={emp.currentCycleAverage} />
-                      </div>
-                      <div className="text-center min-w-[3.5rem]">
-                        <div className="text-[10px] uppercase tracking-wide text-[rgb(var(--muted))]">All-time</div>
-                        <ScoreCell value={emp.allTimeAverage} />
-                      </div>
-                    </div>
-                  </button>
-                  {open ? (
-                    <div className="px-4 pb-4 pl-11 space-y-4">
-                      {emp.cycleSummaries.length ? (
-                        <div>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-[rgb(var(--muted))] mb-2">
-                            Per-cycle averages
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            {emp.cycleSummaries.map((c) => (
-                              <span
-                                key={c.cycle}
-                                className="inline-flex items-center gap-2 rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-1 text-xs"
-                              >
-                                <span>{formatCycleKeyLabel(c.cycle)}</span>
-                                <ScoreCell value={c.average} />
-                              </span>
-                            ))}
-                          </div>
+          <>
+            <div className="divide-y divide-[rgb(var(--border))]">
+              {listPagination.slice.map((emp) => {
+                const id = String(emp.id);
+                const open = expanded.has(id);
+                return (
+                  <div key={id}>
+                    <button
+                      type="button"
+                      onClick={() => toggleExpanded(id)}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[rgb(var(--surface-2))]/70 transition-colors"
+                    >
+                      {open ? (
+                        <ChevronDown size={18} className="shrink-0 text-[rgb(var(--muted))]" />
+                      ) : (
+                        <ChevronRight size={18} className="shrink-0 text-[rgb(var(--muted))]" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-[rgb(var(--text))] truncate">{emp.name}</div>
+                        <div className="text-xs text-[rgb(var(--muted))] truncate">
+                          {emp.empId || emp.id} · {emp.email}
                         </div>
-                      ) : null}
-                      <div className="overflow-x-auto custom-scrollbar">
-                        <table className="w-full min-w-[680px] text-sm">
-                          <thead className="text-[10px] uppercase tracking-wide text-[rgb(var(--muted))]">
-                            <tr>
-                              <th className="py-2 pr-4 text-left font-semibold">Month</th>
-                              <th className="py-2 pr-4 text-left font-semibold">Review cycle</th>
-                              <th className="py-2 pr-4 text-left font-semibold">Projects</th>
-                              <th className="py-2 pr-4 text-left font-semibold">Status</th>
-                              <th className="py-2 text-right font-semibold">Score</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-[rgb(var(--border))]">
-                            {emp.months.length ? (
-                              emp.months.map((m, idx) => (
-                                <tr key={`${m.month}-${m.cycleKey}-${idx}`}>
-                                  <td className="py-2 pr-4">{monthLabel(m.month)}</td>
-                                  <td className="py-2 pr-4 text-[rgb(var(--muted))]">
-                                    {cycleLabel(m.cycleKey, m.month)}
-                                  </td>
-                                  <td className="py-2 pr-4 text-[rgb(var(--muted))] max-w-[16rem]">
-                                    <span className="line-clamp-2">{formatProjectList(m.projectIds)}</span>
-                                  </td>
-                                  <td className="py-2 pr-4 text-[rgb(var(--muted))]">{m.status || "—"}</td>
-                                  <td className="py-2 text-right">
-                                    <ScoreCell value={m.score} />
+                      </div>
+                      <div className="hidden sm:flex items-center gap-6 text-sm shrink-0">
+                        <div className="text-center min-w-[4.5rem]">
+                          <div className="text-[10px] uppercase tracking-wide text-[rgb(var(--muted))]">Current cycle</div>
+                          <ScoreCell value={emp.currentCycleAverage} />
+                        </div>
+                        <div className="text-center min-w-[3.5rem]">
+                          <div className="text-[10px] uppercase tracking-wide text-[rgb(var(--muted))]">All-time</div>
+                          <ScoreCell value={emp.allTimeAverage} />
+                        </div>
+                      </div>
+                    </button>
+                    {open ? (
+                      <div className="px-4 pb-4 pl-11 space-y-4">
+                        {emp.cycleSummaries.length ? (
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-[rgb(var(--muted))] mb-2">
+                              Per-cycle averages
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {emp.cycleSummaries.map((c) => (
+                                <span
+                                  key={c.cycle}
+                                  className="inline-flex items-center gap-2 rounded-full border border-[rgb(var(--border))] bg-[rgb(var(--surface-2))] px-3 py-1 text-xs"
+                                >
+                                  <span>{formatCycleKeyLabel(c.cycle)}</span>
+                                  <ScoreCell value={c.average} />
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="overflow-x-auto custom-scrollbar">
+                          <table className="w-full min-w-[680px] text-sm">
+                            <thead className="text-[10px] uppercase tracking-wide text-[rgb(var(--muted))]">
+                              <tr>
+                                <th className="py-2 pr-4 text-left font-semibold">Month</th>
+                                <th className="py-2 pr-4 text-left font-semibold">Review cycle</th>
+                                <th className="py-2 pr-4 text-left font-semibold">Projects</th>
+                                <th className="py-2 pr-4 text-left font-semibold">Status</th>
+                                <th className="py-2 text-right font-semibold">Score</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[rgb(var(--border))]">
+                              {emp.months.length ? (
+                                emp.months.map((m, idx) => (
+                                  <tr key={`${m.month}-${m.cycleKey}-${idx}`}>
+                                    <td className="py-2 pr-4">{monthLabel(m.month)}</td>
+                                    <td className="py-2 pr-4 text-[rgb(var(--muted))]">
+                                      {cycleLabel(m.cycleKey, m.month)}
+                                    </td>
+                                    <td className="py-2 pr-4 text-[rgb(var(--muted))] max-w-[16rem]">
+                                      <span className="line-clamp-2">{formatProjectList(m.projectIds)}</span>
+                                    </td>
+                                    <td className="py-2 pr-4 text-[rgb(var(--muted))]">{m.status || "—"}</td>
+                                    <td className="py-2 text-right">
+                                      <ScoreCell value={m.score} />
+                                    </td>
+                                  </tr>
+                                ))
+                              ) : (
+                                <tr>
+                                  <td colSpan={5} className="py-4 text-[rgb(var(--muted))]">
+                                    No scored monthly reviews yet.
                                   </td>
                                 </tr>
-                              ))
-                            ) : (
-                              <tr>
-                                <td colSpan={5} className="py-4 text-[rgb(var(--muted))]">
-                                  No scored monthly reviews yet.
-                                </td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-            {!rows.length ? (
-              <div className="py-16 text-center text-sm text-[rgb(var(--muted))]">No employees found.</div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {!rows.length ? (
+                <div className="py-16 text-center text-sm text-[rgb(var(--muted))]">No employees found.</div>
+              ) : null}
+            </div>
+            {listPagination.show ? (
+              <ListPaginationBar
+                rangeLabel={listPagination.rangeLabel}
+                page={listPagination.page}
+                maxPage={listPagination.maxPage}
+                pageSize={listPagination.pageSize}
+                pageSizeOptions={listPagination.pageSizeOptions}
+                loading={pageLoading}
+                onPageChange={listPagination.setPage}
+                onPageSizeChange={listPagination.setPageSize}
+              />
             ) : null}
-          </div>
+          </>
         )}
       </div>
-
-      <Toast toast={toast} onDismiss={() => setToast(null)} />
     </AdminPageShell>
   );
 }

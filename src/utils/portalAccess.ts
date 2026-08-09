@@ -68,6 +68,9 @@ export function filterAdminNavGroups(groups, { isHrUser = false, isSuperAdmin = 
       ...group,
       items: (group.items || []).filter((item) => {
         if (item?.id === "ratings-history" && !isSuperAdmin && !isHrUser) return false;
+        // Apps is Super Admin / Admin only — never HR.
+        if (item?.id === "apps" && !isSuperAdmin) return false;
+        if (item?.id === "band-streams") return false;
         return true;
       }),
     }))

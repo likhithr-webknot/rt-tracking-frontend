@@ -15,13 +15,13 @@ import AdminSubmissions from "./AdminSubmissions";
 import AdminCertificationsBridge from "./AdminCertificationsBridge";
 import AdminGoalsRegistry from "./AdminGoalsRegistry";
 import EmployeeDirectory from "./EmployeeDirectory";
+import EmployeeAllocationProfileModal from "./EmployeeAllocationProfileModal";
 import SettingsPanel from "./SettingsPanel";
 import CompanyValuesWorkspace from "./CompanyValuesWorkspace";
-import BandStreamDirectory from "./BandStreamDirectory";
-import DesignationsWorkspace from "./DesignationsWorkspace";
 import ProjectsDirectory from "./ProjectsDirectory";
 import PortalNotesWorkspace from "../shared/PortalNotesWorkspace";
 import ReportsDashboard from "./ReportsDashboard";
+import AppsWorkspace from "./AppsWorkspace";
 import Toast from "../shared/Toast";
 import NotFoundPage from "../shared/NotFoundPage";
 import PortalUserMenu from "../shared/PortalUserMenu";
@@ -142,12 +142,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
     "projects",
     "reports",
     "kpi",
-    "band-streams",
-    "designations",
     "certifications",
     "values",
     "notes",
     "drive",
+    "apps",
     "settings",
     "account",
   ]), []);
@@ -157,12 +156,28 @@ export default function AdminControlCenter({ onLogout, auth }) {
     [location.pathname],
   );
 
+  const directoryProfileEmpId = useMemo(() => {
+    const parts = String(location.pathname || "")
+      .split("/")
+      .filter(Boolean);
+    // /admin/directory/:empId
+    if (parts[0] === "admin" && parts[1] === "directory" && parts[2]) {
+      try {
+        return decodeURIComponent(parts[2]);
+      } catch {
+        return parts[2];
+      }
+    }
+    return "";
+  }, [location.pathname]);
+
   const isHrUser = useMemo(() => isHrPortalUser(auth), [auth]);
   const isSuperAdmin = useMemo(() => isSuperAdminPortalUser(auth), [auth]);
 
   const activeTab = useMemo(() => {
     if (!VALID_TABS.has(resolvedTab)) return ADMIN_NOT_FOUND_TAB;
     if (resolvedTab === "ratings-history" && !isSuperAdmin && !isHrUser) return "dashboard";
+    if (resolvedTab === "apps" && !isSuperAdmin) return "dashboard";
     return resolvedTab;
   }, [VALID_TABS, resolvedTab, isHrUser, isSuperAdmin]);
 
@@ -179,19 +194,26 @@ export default function AdminControlCenter({ onLogout, auth }) {
     if (resolvedTab === "ratings-history" && !isSuperAdmin && !isHrUser) {
       navigate("/admin", { replace: true });
     }
+    if (resolvedTab === "apps" && !isSuperAdmin) {
+      navigate("/admin", { replace: true });
+    }
   }, [VALID_TABS, resolvedTab, isHrUser, isSuperAdmin, navigate]);
 
   const [toast, setToast] = useState(null);
   const showToast = useCallback((t) => setToast(next => ({ ...next, ...t })), []);
 
   const [employees, setEmployees] = useState([]);
-  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [employeesLoading, setEmployeesLoading] = useState(true);
   const [employeesError, setEmployeesError] = useState("");
 
+  const employeesRef = useRef(employees);
+  employeesRef.current = employees;
+
   const reloadEmployees = useCallback(async () => {
-    setEmployeesLoading(true);
+    setEmployeesError("");
+    if (!employeesRef.current.length) setEmployeesLoading(true);
     try {
-      const page = await fetchEmployees({ limit: 1000, cursor: 0 });
+      const page = await fetchEmployees({ limit: 500, cursor: 0 });
       setEmployees(normalizeEmployees(page));
     } catch (err) {
       setEmployeesError(err.message);
@@ -201,7 +223,22 @@ export default function AdminControlCenter({ onLogout, auth }) {
   }, []);
 
   useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { loadTeamListCache } = await import("../../utils/teamListCache");
+        const cached = await loadTeamListCache();
+        if (!alive || !cached?.items?.length) return;
+        setEmployees((prev) => (prev.length ? prev : normalizeEmployees({ data: { items: cached.items } })));
+        setEmployeesLoading(false);
+      } catch {
+        void 0;
+      }
+    })();
     reloadEmployees();
+    return () => {
+      alive = false;
+    };
   }, [reloadEmployees]);
 
   const [portalWindow, setPortalWindow] = useState(() => defaultPortalWindow());
@@ -505,7 +542,26 @@ export default function AdminControlCenter({ onLogout, auth }) {
             />
           ) : null}
 
-          {activeTab === "directory" && (
+          {activeTab === "directory" && directoryProfileEmpId ? (
+            <EmployeeAllocationProfileModal
+              empId={directoryProfileEmpId}
+              employee={
+                (Array.isArray(employees) ? employees : []).find(
+                  (e) =>
+                    String(e?.empId ?? "").trim() === directoryProfileEmpId ||
+                    String(e?.id ?? "").trim() === directoryProfileEmpId,
+                ) || null
+              }
+              onBack={() => navigate("/admin/directory")}
+              canEdit={isSuperAdmin || isHrUser}
+              canEditPortalRoles={isSuperAdmin || isHrUser}
+              onSaved={() => {
+                reloadEmployees().catch(() => {});
+              }}
+            />
+          ) : null}
+
+          {activeTab === "directory" && !directoryProfileEmpId ? (
             <EmployeeDirectory
               auth={auth}
               employees={employees}
@@ -515,8 +571,12 @@ export default function AdminControlCenter({ onLogout, auth }) {
               setEmployees={setEmployees}
               globalWindowOpen={globalWindowOpen}
               onSetEmployeeSubmissionWindow={handleEmployeeSubmissionWindow}
+              onOpenProfile={(emp) => {
+                const id = String(emp?.empId ?? emp?.id ?? "").trim();
+                if (id) navigate(`/admin/directory/${encodeURIComponent(id)}`);
+              }}
             />
-          )}
+          ) : null}
 
           {activeTab === "kpi" && <AdminGoalsRegistry />}
 
@@ -529,8 +589,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
             />
           )}
           {activeTab === "reports" && <ReportsDashboard />}
-          {activeTab === "band-streams" && <BandStreamDirectory />}
-          {activeTab === "designations" && <DesignationsWorkspace />}
           {activeTab === "certifications" && <AdminCertificationsBridge />}
           {activeTab === "notes" && (
             <PortalNotesWorkspace
@@ -541,11 +599,13 @@ export default function AdminControlCenter({ onLogout, auth }) {
             />
           )}
           {activeTab === "drive" && <WebknotDrive auth={auth} portalLabel="your admin account" />}
+          {activeTab === "apps" && isSuperAdmin ? <AppsWorkspace /> : null}
           {activeTab === "settings" ? (
             <SettingsPanel
               employees={employees}
               employeesLoading={employeesLoading}
               isSuperAdmin={isSuperAdmin}
+              isHrUser={isHrUser}
             />
           ) : null}
 

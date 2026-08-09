@@ -15,9 +15,11 @@ import {
 import ModalOverlay from "../shared/ModalOverlay";
 import ConfirmDialog from "../shared/ConfirmDialog";
 import Toast from "../shared/Toast";
+import ListPaginationBar from "../shared/ListPaginationBar";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import EntityCsvToolbar from "../shared/EntityCsvToolbar";
 import { exportCompanyValuesCsv } from "../../utils/entityCsvExport";
+import { useClientPagination } from "../../hooks/useClientPagination";
 import {
   useWebknotValues,
   useAddWebknotValueMutation,
@@ -149,9 +151,15 @@ export default function CompanyValuesWorkspace() {
     });
   }, [webknotValues, searchTerm, criteriaFilter]);
 
+  const pagination = useClientPagination(filteredValues, {
+    pageSize: 10,
+    pageSizeOptions: [10, 20, 50],
+    resetKey: `${searchTerm}|${criteriaFilter}`,
+  });
+
   const groupedByCriteria = useMemo(() => {
     const map = new Map();
-    for (const v of filteredValues) {
+    for (const v of pagination.slice) {
       const key = evaluationCriteriaGroupKey(v.evaluationCriteria);
       const label = evaluationCriteriaDisplayLabel(v.evaluationCriteria);
       if (!map.has(key)) map.set(key, { key, label, values: [] });
@@ -160,15 +168,16 @@ export default function CompanyValuesWorkspace() {
     return Array.from(map.values()).sort((a, b) =>
       a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
     );
-  }, [filteredValues]);
+  }, [pagination.slice]);
 
   const stats = useMemo(
     () => ({
       total: webknotValues.length,
       criteriaCount: criteriaOptions.length,
       visible: filteredValues.length,
+      showingLabel: pagination.rangeLabel,
     }),
-    [webknotValues.length, criteriaOptions.length, filteredValues.length]
+    [webknotValues.length, criteriaOptions.length, filteredValues.length, pagination.rangeLabel]
   );
 
   function openCreateEditor() {
@@ -278,7 +287,7 @@ export default function CompanyValuesWorkspace() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard icon={Hash} label="Total values" value={stats.total} />
         <StatCard icon={Layers} label="Criteria groups" value={stats.criteriaCount} />
-        <StatCard icon={Filter} label="Showing" value={stats.visible} />
+        <StatCard icon={Filter} label="Showing" value={stats.showingLabel} />
       </div>
 
       {loadError ? (
@@ -333,80 +342,92 @@ export default function CompanyValuesWorkspace() {
           No values match your search or filter.
         </div>
       ) : (
-        <div className="space-y-5">
-          <AnimatePresence mode="popLayout">
-            {groupedByCriteria.map((group) => {
-              const palette = paletteForCriteria(group.key);
-              return (
-                <motion.section
-                  key={group.key}
-                  layout
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  className={`rt-panel ring-2 ${palette.ring}`}
-                >
-                  <div className="flex items-center justify-between gap-3 border-b border-[rgb(var(--border))] px-5 py-4 sm:px-6">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${palette.dot}`} />
-                      <div className="min-w-0">
-                        <h3 className="truncate text-sm font-bold tracking-tight text-[rgb(var(--text))]">
-                          {group.label}
-                        </h3>
-                        <p className="text-[11px] font-medium text-[rgb(var(--muted))]">
-                          {group.values.length} value{group.values.length === 1 ? "" : "s"}
-                        </p>
-                      </div>
-                    </div>
-                    <span
-                      className={`rt-badge shrink-0 border ${palette.badge}`}
-                    >
-                      Evaluation criteria
-                    </span>
-                  </div>
-                  <ul className="divide-y divide-[rgb(var(--border))]">
-                    {group.values.map((value) => (
-                      <li
-                        key={value.id || `${group.key}-${value.name}`}
-                        className="flex items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-[rgb(var(--surface-2))]/60 sm:px-6"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate font-semibold text-[rgb(var(--text))]">
-                            {value.name}
+        <div className="rt-panel overflow-hidden">
+          <div className="space-y-5 p-4 sm:p-5">
+            <AnimatePresence mode="popLayout">
+              {groupedByCriteria.map((group) => {
+                const palette = paletteForCriteria(group.key);
+                return (
+                  <motion.section
+                    key={group.key}
+                    layout
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    className={`overflow-hidden rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] ring-2 ${palette.ring}`}
+                  >
+                    <div className="flex items-center justify-between gap-3 border-b border-[rgb(var(--border))] px-5 py-4 sm:px-6">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${palette.dot}`} />
+                        <div className="min-w-0">
+                          <h3 className="truncate text-sm font-bold tracking-tight text-[rgb(var(--text))]">
+                            {group.label}
+                          </h3>
+                          <p className="text-[11px] font-medium text-[rgb(var(--muted))]">
+                            {group.values.length} value{group.values.length === 1 ? "" : "s"} on this page
                           </p>
-                          {value.description ? (
-                            <p className="mt-0.5 line-clamp-2 text-xs text-[rgb(var(--muted))]">
-                              {value.description}
+                        </div>
+                      </div>
+                      <span className={`rt-badge shrink-0 border ${palette.badge}`}>
+                        Evaluation criteria
+                      </span>
+                    </div>
+                    <ul className="divide-y divide-[rgb(var(--border))]">
+                      {group.values.map((value) => (
+                        <li
+                          key={value.id || `${group.key}-${value.name}`}
+                          className="flex items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-[rgb(var(--surface-2))]/60 sm:px-6"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-semibold text-[rgb(var(--text))]">
+                              {value.name}
                             </p>
-                          ) : null}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => openEditEditor(value)}
-                            className="rounded-lg p-2 text-[rgb(var(--muted))] transition-colors hover:bg-[rgb(var(--primary-soft))] hover:text-[rgb(var(--primary))]"
-                            title="Edit value"
-                            aria-label={`Edit ${value.name}`}
-                          >
-                            <Pencil size={16} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setPendingDelete(value)}
-                            className="rounded-lg p-2 text-[rgb(var(--muted))] transition-colors hover:bg-red-500/10 hover:text-red-500"
-                            title="Delete value"
-                            aria-label={`Delete ${value.name}`}
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </motion.section>
-              );
-            })}
-          </AnimatePresence>
+                            {value.description ? (
+                              <p className="mt-0.5 line-clamp-2 text-xs text-[rgb(var(--muted))]">
+                                {value.description}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => openEditEditor(value)}
+                              className="rounded-lg p-2 text-[rgb(var(--muted))] transition-colors hover:bg-[rgb(var(--primary-soft))] hover:text-[rgb(var(--primary))]"
+                              title="Edit value"
+                              aria-label={`Edit ${value.name}`}
+                            >
+                              <Pencil size={16} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPendingDelete(value)}
+                              className="rounded-lg p-2 text-[rgb(var(--muted))] transition-colors hover:bg-red-500/10 hover:text-red-500"
+                              title="Delete value"
+                              aria-label={`Delete ${value.name}`}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </motion.section>
+                );
+              })}
+            </AnimatePresence>
+          </div>
+          {pagination.show ? (
+            <ListPaginationBar
+              rangeLabel={pagination.rangeLabel}
+              page={pagination.page}
+              maxPage={pagination.maxPage}
+              pageSize={pagination.pageSize}
+              pageSizeOptions={pagination.pageSizeOptions}
+              loading={isLoading}
+              onPageChange={pagination.setPage}
+              onPageSizeChange={pagination.setPageSize}
+            />
+          ) : null}
         </div>
       )}
 
@@ -498,7 +519,7 @@ function StatCard({ icon: Icon, label, value }) {
         <div className="pulse-metric-label">{label}</div>
         <Icon size={18} className="text-[rgb(var(--accent))]" />
       </div>
-      <div className="pulse-metric-value">{value}</div>
+      <div className="pulse-metric-value text-lg sm:text-xl">{value}</div>
     </div>
   );
 }

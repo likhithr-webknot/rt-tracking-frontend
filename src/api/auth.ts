@@ -20,7 +20,16 @@ const SessionStorageSchema = z.object({
   band: z.string().nullable().optional(),
   managerId: z.string().nullable().optional(),
   needsOnboarding: z.boolean().optional(),
+  /** Absolute session start (ms since epoch). */
+  issuedAt: z.number().nullable().optional(),
+  /** Last user activity (ms since epoch). */
+  lastActivityAt: z.number().nullable().optional(),
 }).passthrough();
+
+/** Absolute max session length (8 hours). */
+export const SESSION_MAX_MS = 8 * 60 * 60 * 1000;
+/** Logout after this much idle time (30 minutes). */
+export const SESSION_INACTIVITY_MS = 30 * 60 * 1000;
 const JwtPayloadSchema = z.object({}).passthrough();
 
 function shouldPersistAccessToken() {
@@ -240,6 +249,8 @@ function loadSessionFromStorage() {
       band: typeof parsed.band === "string" ? parsed.band : null,
       managerId: typeof parsed.managerId === "string" ? parsed.managerId : null,
       needsOnboarding: parsed.needsOnboarding === true,
+      issuedAt: typeof parsed.issuedAt === "number" ? parsed.issuedAt : null,
+      lastActivityAt: typeof parsed.lastActivityAt === "number" ? parsed.lastActivityAt : null,
       claims: null,
     };
   } catch {
@@ -270,6 +281,92 @@ export function decodeJwtPayload(token) {
 export function getAuth() {
   if (!memoryAuth) memoryAuth = loadSessionFromStorage();
   return memoryAuth;
+}
+
+/** Why the session should end now, or null if still valid. */
+export function getSessionExpiryReason(now = Date.now()) {
+  const auth = getAuth();
+  if (!auth) return "missing";
+  const signedIn = Boolean(auth.email || auth.accessToken);
+  if (!signedIn) return "missing";
+
+  const issuedAt = typeof auth.issuedAt === "number" ? auth.issuedAt : null;
+  const lastActivityAt =
+    typeof auth.lastActivityAt === "number"
+      ? auth.lastActivityAt
+      : issuedAt;
+
+  if (issuedAt != null && now - issuedAt >= SESSION_MAX_MS) {
+    return "max_duration";
+  }
+  if (lastActivityAt != null && now - lastActivityAt >= SESSION_INACTIVITY_MS) {
+    return "inactivity";
+  }
+  // Legacy sessions without timers: start the clock now (do not log out immediately).
+  if (issuedAt == null || lastActivityAt == null) {
+    touchSessionActivity({ ensureIssuedAt: true });
+  }
+  return null;
+}
+
+export function isSessionExpired(now = Date.now()) {
+  const reason = getSessionExpiryReason(now);
+  return reason === "max_duration" || reason === "inactivity";
+}
+
+/**
+ * Update lastActivityAt (and issuedAt on first touch). Persists to sessionStorage.
+ * No-op when signed out.
+ */
+export function touchSessionActivity({ ensureIssuedAt = false } = {}) {
+  const auth = getAuth();
+  if (!auth) return null;
+  const signedIn = Boolean(auth.email || auth.accessToken);
+  if (!signedIn) return null;
+
+  const now = Date.now();
+  const issuedAt =
+    typeof auth.issuedAt === "number" && auth.issuedAt > 0
+      ? auth.issuedAt
+      : ensureIssuedAt || auth.issuedAt == null
+        ? now
+        : auth.issuedAt;
+
+  memoryAuth = {
+    ...auth,
+    issuedAt,
+    lastActivityAt: now,
+  };
+  persistSessionFields(memoryAuth);
+  return memoryAuth;
+}
+
+function persistSessionFields(session) {
+  if (typeof window === "undefined" || !session) return;
+  try {
+    window.sessionStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({
+        ...(shouldPersistAccessToken() && session.accessToken
+          ? { accessToken: session.accessToken }
+          : {}),
+        tokenType: session.tokenType,
+        userId: session.userId,
+        role: session.role,
+        portal: session.portal,
+        email: session.email,
+        employeeId: session.employeeId,
+        employeeName: session.employeeName,
+        designation: session.designation,
+        stream: session.stream,
+        band: session.band,
+        managerId: session.managerId,
+        needsOnboarding: session.needsOnboarding,
+        issuedAt: session.issuedAt ?? null,
+        lastActivityAt: session.lastActivityAt ?? null,
+      })
+    );
+  } catch { void 0; }
 }
 
 export function setAuth(auth) {
@@ -349,6 +446,24 @@ export function setAuth(auth) {
     obj.fullName,
     prev?.employeeName
   );
+  const picture = firstNullableString(
+    obj.picture,
+    obj.profilePic,
+    obj.profilePhoto,
+    obj.avatarUrl,
+    obj.avatar,
+    claims?.picture,
+    prev?.picture,
+    prev?.profilePic,
+  );
+  const profilePic = firstNullableString(
+    obj.profilePic,
+    obj.profilePhoto,
+    obj.picture,
+    prev?.profilePic,
+    prev?.picture,
+    picture,
+  );
   const designation = firstNullableString(
     coerceDisplayString(obj.designation),
     coerceDisplayString(obj.title),
@@ -382,6 +497,15 @@ export function setAuth(auth) {
     prev?.empRole,
   );
 
+  const now = Date.now();
+  const resetTimers = identityChanged || hasIncomingToken || !prev?.issuedAt;
+  const issuedAt = resetTimers
+    ? (typeof obj.issuedAt === "number" ? obj.issuedAt : now)
+    : (typeof prev.issuedAt === "number" ? prev.issuedAt : now);
+  const lastActivityAt = resetTimers
+    ? now
+    : (typeof prev.lastActivityAt === "number" ? prev.lastActivityAt : now);
+
   memoryAuth = {
     accessToken,
     tokenType,
@@ -394,37 +518,19 @@ export function setAuth(auth) {
     email,
     employeeId,
     employeeName,
+    picture,
+    profilePic,
+    avatarUrl: firstNullableString(obj.avatarUrl, prev?.avatarUrl, picture),
     designation,
     stream,
     band,
     managerId,
     needsOnboarding,
     claims,
+    issuedAt,
+    lastActivityAt,
   };
-  if (typeof window !== "undefined") {
-    try {
-      window.sessionStorage.setItem(
-        SESSION_STORAGE_KEY,
-        JSON.stringify({
-          ...(shouldPersistAccessToken() && memoryAuth.accessToken
-            ? { accessToken: memoryAuth.accessToken }
-            : {}),
-          tokenType: memoryAuth.tokenType,
-          userId: memoryAuth.userId,
-          role: memoryAuth.role,
-          portal: memoryAuth.portal,
-          email: memoryAuth.email,
-          employeeId: memoryAuth.employeeId,
-          employeeName: memoryAuth.employeeName,
-          designation: memoryAuth.designation,
-          stream: memoryAuth.stream,
-          band: memoryAuth.band,
-          managerId: memoryAuth.managerId,
-          needsOnboarding: memoryAuth.needsOnboarding,
-        })
-      );
-    } catch { void 0; }
-  }
+  persistSessionFields(memoryAuth);
 
   notifyAuthChanged();
 }
@@ -786,10 +892,21 @@ export async function fetchMe({ signal } = {} as ApiOptions) {
     );
     const mergedEmail = extractEmailFromSources(normalized, claimsFromHeader || normalized?.claims || {});
     mergedRole = applyAdminEmailAllowlist(mergedEmail, mergedRole);
-    if (!mergedRole) return mergedEmail ? { ...normalized, email: mergedEmail || normalized.email } : normalized;
-    return {
+    const picture = firstNonEmptyString(
+      normalized?.picture,
+      normalized?.profilePic,
+      normalized?.profilePhoto,
+      normalized?.avatarUrl,
+      claimsFromHeader?.picture,
+    );
+    const base = {
       ...normalized,
       ...(mergedEmail ? { email: mergedEmail } : {}),
+      ...(picture ? { picture, profilePic: picture } : {}),
+    };
+    if (!mergedRole) return mergedEmail || picture ? base : normalized;
+    return {
+      ...base,
       role: mergedRole,
     };
   }

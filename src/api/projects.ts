@@ -1,8 +1,11 @@
 // @ts-nocheck
 import type { ApiOptions } from "../types/api-options";
 import { sanitizeEmployeeIdForApi } from "../utils/employeeId";
+import { loadProjectsCache, saveProjectsCache } from "../utils/projectsCache";
+import { loadProjectsCatalog } from "../utils/projectsCatalog";
 import { getAuthHeader } from "./auth";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
+import { buildWebtrakUrl, getWebtrakAuthHeaders } from "./webtrak";
 
 /* ── helpers ── */
 
@@ -29,7 +32,9 @@ function coalesceProjectRow(raw) {
 export function normalizeProject(raw) {
   const row = coalesceProjectRow(raw);
   if (!row || typeof row !== "object") return null;
-  const code = String(row.code ?? row.projectCode ?? "").trim();
+  const code = String(
+    row.code ?? row.projectCode ?? row.project_code ?? "",
+  ).trim();
   const description = String(
     row.description ??
     row.projectDescription ??
@@ -39,11 +44,21 @@ export function normalizeProject(raw) {
     ""
   ).trim();
   const pm = String(row.pm ?? row.projectManager ?? row.managerName ?? row.manager?.name ?? "").trim();
-  const am = String(row.am ?? row.accountManager ?? row.accountManagerName ?? "").trim();
+  const am = String(
+    row.am ??
+      row.accountManager ??
+      row.accountManagerName ??
+      row.account_manager_name ??
+      row.accountManagerEmail ??
+      row.account_manager_email ??
+      "",
+  ).trim();
+  const startDateRaw = row.startDate ?? row.start_date ?? null;
+  const endDateRaw = row.endDate ?? row.end_date ?? null;
   return {
     id: String(row.id ?? row.projectId ?? row._id ?? code ?? "").trim(),
     code,
-    name: String(row.name ?? row.projectName ?? row.title ?? "").trim(),
+    name: String(row.name ?? row.projectName ?? row.project_name ?? row.title ?? "").trim(),
     description,
     pm,
     am,
@@ -51,7 +66,13 @@ export function normalizeProject(raw) {
     managerEmployeeId: String(row.managerEmployeeId ?? row.managerEmployeeID ?? row.managerEmployeeId ?? "").trim(),
     managerName: pm || String(row.managerName ?? row.manager?.name ?? row.manager?.employeeName ?? am ?? "").trim(),
     managerEmail: String(row.managerEmail ?? row.manager?.email ?? "").trim(),
-    active: row.isActive !== false && row.active !== false && row.status !== "INACTIVE",
+    startDate: startDateRaw ? String(startDateRaw).slice(0, 10) : null,
+    endDate: endDateRaw ? String(endDateRaw).slice(0, 10) : null,
+    active:
+      row.isActive !== false &&
+      row.is_active !== false &&
+      row.active !== false &&
+      row.status !== "INACTIVE",
     createdAt: row.createdAt || null,
     updatedAt: row.updatedAt || null,
   };
@@ -63,6 +84,7 @@ export function normalizeProjects(data) {
   const arr =
     (Array.isArray(data) && data) ||
     (Array.isArray(root?.data) && root.data) ||
+    (dataObj && Array.isArray(dataObj.items) && dataObj.items) ||
     (dataObj && Array.isArray(dataObj.content) && dataObj.content) ||
     (dataObj && Array.isArray(dataObj.projects) && dataObj.projects) ||
     (Array.isArray(root?.items) && root.items) ||
@@ -76,29 +98,67 @@ export function normalizeProjects(data) {
 
 /* ── admin endpoints ── */
 
+/**
+ * Projects catalog: prefer Webtrak GET /api/v1/projects/all (via /__webtrak proxy).
+ * On success, refresh local cache/catalog. On failure, serve last cached snapshot.
+ */
 export async function fetchProjects({ signal, includeInactive = false } = {} as ApiOptions & { includeInactive?: boolean }) {
-  const auth = getAuthHeader();
-  const inactiveQs = includeInactive ? "?includeInactive=true" : "";
-  /**
-   * Prefer full catalog (Admin/HR/Manager). Fall back to assigned projects for other roles.
-   */
-  return requestWithFallbacks(
-    [
-      `/api/v1/projects/all${inactiveQs}`,
-      `/api/v1/getAllprojects${inactiveQs}`,
-      "/api/v1/projects?page=0&size=500",
-      "/api/v1/projects",
-      "/api/v1/project-assigned-to-user",
-    ],
-    {
+  void includeInactive;
+  const webtrakUrl = buildWebtrakUrl("/api/v1/projects/all");
+
+  try {
+    const raw = await requestWithFallbacks([webtrakUrl], {
       signal,
-      headers: auth ? { Authorization: auth } : undefined,
-      credentials: "include",
-      fallbackStatuses: [403, 404, 405],
-      notFoundMessage:
-        "Could not load projects. The server rejected the admin catalog (403). Trying your assigned projects also failed — check backend roles for GET /api/v1/projects vs /api/v1/project-assigned-to-user.",
+      credentials: "omit",
+      headers: getWebtrakAuthHeaders(),
+      fallbackStatuses: [400, 403, 404, 405],
+      notFoundMessage: "Webtrak projects/all endpoint not found.",
+    });
+    const items = normalizeProjects(raw);
+    const root = raw && typeof raw === "object" ? raw : {};
+    const data = root?.data && typeof root.data === "object" && !Array.isArray(root.data) ? root.data : root;
+    const total =
+      typeof data?.total === "number"
+        ? data.total
+        : typeof root?.total === "number"
+          ? root.total
+          : items.length;
+
+    const rawItems = Array.isArray(data?.items)
+      ? data.items
+      : Array.isArray(root?.items)
+        ? root.items
+        : items;
+
+    saveProjectsCache({
+      fetchedAt: new Date().toISOString(),
+      items: rawItems,
+      total,
+    });
+
+    return raw;
+  } catch (err) {
+    if (err?.name === "AbortError") throw err;
+    const cached = loadProjectsCache();
+    if (cached?.items?.length) {
+      return {
+        items: cached.items,
+        total: cached.total ?? cached.items.length,
+        fromCache: true,
+        cachedAt: cached.fetchedAt,
+      };
     }
-  );
+    const catalog = loadProjectsCatalog();
+    if (Array.isArray(catalog) && catalog.length) {
+      return {
+        items: catalog,
+        total: catalog.length,
+        fromCache: true,
+        cachedAt: null,
+      };
+    }
+    throw err;
+  }
 }
 
 export async function addProject({ code, name, description = "", managerEmployeeId, active = true }, { signal } = {} as ApiOptions) {

@@ -2,9 +2,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAdminMonthlyOverview } from "../../hooks/queries";
 import { fetchAdminAllSubmissions, fetchSubmissionCycles } from "../../api/monthly-submissions";
+import { fetchAllocations, normalizeAllocations } from "../../api/allocations";
+import { fetchAvailableProjects, normalizeProjects } from "../../api/projects";
 import {
   Activity,
   AlertTriangle,
+  BarChart3,
   CheckCircle2,
   Clock,
   Download,
@@ -18,6 +21,8 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -276,6 +281,36 @@ function MiniProgressBar({ value, max = 100, color = "bg-blue-500" }) {
   );
 }
 
+function ProjectRatingsTooltip({ active, payload, tooltipStyle }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  if (!row) return null;
+  const members = Array.isArray(row.members) ? row.members : [];
+  return (
+    <div style={tooltipStyle}>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>{row.project}</div>
+      <div style={{ marginBottom: 8 }}>
+        Average rating: <strong>{Number(row.avgRating || 0).toFixed(1)}</strong>
+        {row.memberCount ? ` · ${row.memberCount} member${row.memberCount === 1 ? "" : "s"}` : ""}
+      </div>
+      {members.length ? (
+        <div style={{ display: "grid", gap: 4 }}>
+          {members.map((member) => (
+            <div key={member.id} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <span>{member.name}</span>
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                {member.score != null ? Number(member.score).toFixed(1) : "—"}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div>No scored members on this project yet.</div>
+      )}
+    </div>
+  );
+}
+
 /* ───── main component ───── */
 
 export default function AdminDashboard({
@@ -306,9 +341,15 @@ export default function AdminDashboard({
   const [selectedCycleKey, setSelectedCycleKey] = useState("");
   const [serverCycleKeys, setServerCycleKeys] = useState([]);
   const [allSubmissions, setAllSubmissions] = useState([]);
+  const [allocations, setAllocations] = useState([]);
+  const [projectIndex, setProjectIndex] = useState({});
   const [cyclesLoading, setCyclesLoading] = useState(true);
   const [submissionTab, setSubmissionTab] = useState("submitted");
   const [submissionRosterSearch, setSubmissionRosterSearch] = useState("");
+  const [rosterDepartmentFilter, setRosterDepartmentFilter] = useState("all");
+  const [rosterBandFilter, setRosterBandFilter] = useState("all");
+  const [projectChartSearch, setProjectChartSearch] = useState("");
+  const [projectMinMembers, setProjectMinMembers] = useState("1");
 
   useEffect(() => {
     let alive = true;
@@ -317,11 +358,21 @@ export default function AdminDashboard({
     Promise.all([
       fetchSubmissionCycles({ signal: controller.signal }).catch(() => []),
       fetchAdminAllSubmissions({ signal: controller.signal }).catch(() => []),
+      fetchAllocations({ signal: controller.signal }).catch(() => []),
+      fetchAvailableProjects({ signal: controller.signal }).catch(() => []),
     ])
-      .then(([cyclesData, submissions]) => {
+      .then(([cyclesData, submissions, allocationRaw, projectsRaw]) => {
         if (!alive) return;
         setServerCycleKeys([...collectCycleKeysFromUnknown(cyclesData)]);
         setAllSubmissions(Array.isArray(submissions) ? submissions : []);
+        setAllocations(normalizeAllocations(allocationRaw));
+        const index = {};
+        for (const project of normalizeProjects(projectsRaw)) {
+          const id = String(project?.id ?? "").trim();
+          if (!id) continue;
+          index[id] = String(project?.name ?? project?.projectName ?? id);
+        }
+        setProjectIndex(index);
       })
       .finally(() => {
         if (alive) setCyclesLoading(false);
@@ -488,20 +539,41 @@ export default function AdminDashboard({
     });
   }, [safeEmployees, selectedCycleKey, submissionCycleMap, submissionSummary, activeCycleSubmittedIds]);
 
-  const stats = useMemo(() => {
-    const directoryEmployeeCount = Number.isFinite(directoryTotals?.employeeCount) ? directoryTotals.employeeCount : null;
-    const directoryManagerCount = Number.isFinite(directoryTotals?.managerCount) ? directoryTotals.managerCount : null;
-    const directoryAdminCount = Number.isFinite(directoryTotals?.adminCount) ? directoryTotals.adminCount : null;
-    const employeesOnly = normalizedEmployees.filter((e) => e._isEmployee);
-    const managersOnly = normalizedEmployees.filter((e) => e._isManager);
-    const adminsOnly = normalizedEmployees.filter((e) => e._isAdmin);
+  const dashboardFilterOptions = useMemo(() => {
+    const departments = new Set();
+    const bands = new Set();
+    for (const emp of normalizedEmployees) {
+      const dept = getDepartmentLabel(emp);
+      if (dept && dept !== "Unassigned") departments.add(dept);
+      const band = String(emp?.band || "").trim();
+      if (band) bands.add(band);
+    }
+    return {
+      departments: [...departments].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
+      bands: [...bands].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })),
+    };
+  }, [normalizedEmployees]);
 
-    let totalHeadcount = Number.isFinite(totalEmployeesCount) ? totalEmployeesCount : null;
+  // Org-wide metrics/charts use the full directory for the selected cycle.
+  // Card-scoped filters (roster / project chart) apply only inside those cards.
+  const filteredEmployees = normalizedEmployees;
+  const filtersActive = false;
+
+  const stats = useMemo(() => {
+    const useDirectoryTotals = !filtersActive;
+    const directoryEmployeeCount = useDirectoryTotals && Number.isFinite(directoryTotals?.employeeCount) ? directoryTotals.employeeCount : null;
+    const directoryManagerCount = useDirectoryTotals && Number.isFinite(directoryTotals?.managerCount) ? directoryTotals.managerCount : null;
+    const directoryAdminCount = useDirectoryTotals && Number.isFinite(directoryTotals?.adminCount) ? directoryTotals.adminCount : null;
+    const employeesOnly = filteredEmployees.filter((e) => e._isEmployee);
+    const managersOnly = filteredEmployees.filter((e) => e._isManager);
+    const adminsOnly = filteredEmployees.filter((e) => e._isAdmin);
+
+    let totalHeadcount = useDirectoryTotals && Number.isFinite(totalEmployeesCount) ? totalEmployeesCount : null;
     if (!Number.isFinite(totalHeadcount)) {
       const summed = [directoryEmployeeCount, directoryManagerCount, directoryAdminCount].filter(Number.isFinite).reduce((s, n) => s + n, 0);
       totalHeadcount = summed > 0 ? summed : null;
     }
-    if (!Number.isFinite(totalHeadcount)) totalHeadcount = normalizedEmployees.length;
+    if (!Number.isFinite(totalHeadcount)) totalHeadcount = filteredEmployees.length;
 
     const employeeHeadcount = Number.isFinite(directoryEmployeeCount) ? directoryEmployeeCount : employeesOnly.length;
     const totalManagers = Number.isFinite(directoryManagerCount) ? directoryManagerCount : managersOnly.length;
@@ -532,10 +604,10 @@ export default function AdminDashboard({
       managerSubmissionRate: totalManagers ? Math.round((managersSubmitted / totalManagers) * 100) : 0,
       overallSubmissionRate: totalHeadcount ? Math.round(((employeesSubmitted + managersSubmitted) / totalHeadcount) * 100) : 0,
     };
-  }, [safeAbility6mProp, directoryTotals, normalizedEmployees, totalEmployeesCount]);
+  }, [safeAbility6mProp, directoryTotals, filteredEmployees, totalEmployeesCount, filtersActive]);
 
   const enrichedEmployees = useMemo(() => {
-    return normalizedEmployees.map((emp) => {
+    return filteredEmployees.map((emp) => {
       const submissionExtras = submissionExtrasByEmployee?.[String(emp?.id)] || null;
       const recognitions = Number(submissionExtras?.recognitions ?? emp?.recognitions ?? emp?.recognitionsCount ?? 0) || 0;
       const certifications = Array.isArray(submissionExtras?.certifications)
@@ -558,17 +630,17 @@ export default function AdminDashboard({
         browniePoints: computeEmployeeBrowniePoints({ ...merged, certCount }),
       };
     });
-  }, [normalizedEmployees, submissionExtrasByEmployee]);
+  }, [filteredEmployees, submissionExtrasByEmployee]);
 
   const departmentBreakdown = useMemo(
     () =>
       buildBreakdownRows({
-        employees: normalizedEmployees,
+        employees: filteredEmployees,
         ability6m: safeAbility6mProp,
         keySelector: getDepartmentLabel,
         scoreGetter: computeEmployeePerformanceScore,
       }),
-    [normalizedEmployees, safeAbility6mProp],
+    [filteredEmployees, safeAbility6mProp],
   );
 
   const roleThroughputData = useMemo(() => {
@@ -578,16 +650,16 @@ export default function AdminDashboard({
       { label: "Admin", test: (emp) => emp._isAdmin },
     ]
       .map(({ label, test }) => {
-        const subset = normalizedEmployees.filter(test);
+        const subset = filteredEmployees.filter(test);
         const sub = subset.filter((e) => e.submitted).length;
         return { role: label, submitted: sub, pending: Math.max(0, subset.length - sub) };
       })
       .filter((r) => r.submitted > 0 || r.pending > 0);
-  }, [normalizedEmployees]);
+  }, [filteredEmployees]);
 
   const bandDistributionData = useMemo(() => {
     const groups = new Map();
-    for (const emp of normalizedEmployees) {
+    for (const emp of filteredEmployees) {
       const band = String(emp?.band || "Unassigned").trim() || "Unassigned";
       const prev = groups.get(band) || { total: 0, submitted: 0 };
       prev.total += 1;
@@ -603,7 +675,7 @@ export default function AdminDashboard({
     const restTotal = rest.reduce((s, r) => s + r.total, 0);
     const restSubmitted = rest.reduce((s, r) => s + r.submittedCount, 0);
     return [...top, { band: "Other", total: restTotal, submittedCount: restSubmitted, submittedRate: restTotal ? Math.round((restSubmitted / restTotal) * 100) : 0 }];
-  }, [normalizedEmployees]);
+  }, [filteredEmployees]);
 
   const cycleHealthPieData = useMemo(() => {
     return [
@@ -691,6 +763,75 @@ export default function AdminDashboard({
       .sort((a, b) => (b.performanceScore || 0) - (a.performanceScore || 0) || (b.recognitions || 0) - (a.recognitions || 0))
       .slice(0, 6);
   }, [enrichedEmployees]);
+
+  const projectRatingsData = useMemo(() => {
+    const employeeByKey = new Map();
+    for (const emp of enrichedEmployees) {
+      for (const key of [emp?.id, emp?.empId, emp?.userId, emp?.email]) {
+        const text = String(key ?? "").trim();
+        if (!text) continue;
+        employeeByKey.set(text.toLowerCase(), emp);
+        if (text.includes("@")) employeeByKey.set(`email:${text.toLowerCase()}`, emp);
+      }
+    }
+
+    const grouped = new Map();
+    for (const alloc of allocations) {
+      const projectKey = String(alloc?.projectId ?? alloc?.projectName ?? "").trim();
+      if (!projectKey) continue;
+      const projectLabel =
+        projectIndex[projectKey] ||
+        String(alloc?.projectName ?? "").trim() ||
+        projectKey;
+      const employeeKey = String(alloc?.employeeId ?? "").trim().toLowerCase();
+      const emp =
+        employeeByKey.get(employeeKey) ||
+        employeeByKey.get(String(alloc?.employeeName ?? "").trim().toLowerCase()) ||
+        null;
+      // When workforce filters are active, only include allocations for people in scope.
+      if (filtersActive && !emp) continue;
+      const member = {
+        id: String(emp?.id ?? alloc?.employeeId ?? alloc?.id ?? projectKey).trim(),
+        name: String(emp?.name ?? alloc?.employeeName ?? alloc?.employeeId ?? "Unknown").trim(),
+        score: Number.isFinite(Number(emp?.performanceScore)) ? Number(emp.performanceScore) : null,
+      };
+      const prev = grouped.get(projectKey) || {
+        project: projectLabel,
+        members: [],
+        memberIds: new Set(),
+      };
+      if (!prev.memberIds.has(member.id)) {
+        prev.members.push(member);
+        prev.memberIds.add(member.id);
+      }
+      grouped.set(projectKey, prev);
+    }
+
+    const q = projectChartSearch.trim().toLowerCase();
+    const minMembers = Math.max(1, Number.parseInt(String(projectMinMembers), 10) || 1);
+
+    return Array.from(grouped.values())
+      .map((row) => {
+        const scored = row.members.filter((member) => member.score != null);
+        const avgRating = scored.length
+          ? Math.round((scored.reduce((sum, member) => sum + member.score, 0) / scored.length) * 10) / 10
+          : 0;
+        return {
+          project: row.project,
+          avgRating,
+          memberCount: row.members.length,
+          members: row.members.sort((a, b) => (b.score ?? -1) - (a.score ?? -1)),
+        };
+      })
+      .filter((row) => row.memberCount >= minMembers)
+      .filter((row) => {
+        if (!q) return true;
+        if (row.project.toLowerCase().includes(q)) return true;
+        return row.members.some((member) => String(member.name || "").toLowerCase().includes(q));
+      })
+      .sort((a, b) => b.avgRating - a.avgRating || b.memberCount - a.memberCount)
+      .slice(0, 12);
+  }, [allocations, enrichedEmployees, projectIndex, filtersActive, projectChartSearch, projectMinMembers]);
 
   const departmentGranularityRows = useMemo(() => {
     const managersById = new Map(enrichedEmployees.map((emp) => [String(emp?.id || "").trim(), emp]));
@@ -895,21 +1036,30 @@ export default function AdminDashboard({
   const activeSubmissionRows = useMemo(() => {
     const base = submissionTab === "submitted" ? submissionRoster.submitted : submissionRoster.pending;
     const q = submissionRosterSearch.trim().toLowerCase();
-    if (!q) return base;
-    return base.filter(
-      (row) =>
+    return base.filter((row) => {
+      if (rosterDepartmentFilter !== "all" && row.department !== rosterDepartmentFilter) return false;
+      if (rosterBandFilter !== "all" && row.band !== rosterBandFilter) return false;
+      if (!q) return true;
+      return (
         row.name.toLowerCase().includes(q) ||
         row.department.toLowerCase().includes(q) ||
         row.band.toLowerCase().includes(q) ||
         row.role.toLowerCase().includes(q) ||
-        row.id.toLowerCase().includes(q),
-    );
-  }, [submissionTab, submissionRoster, submissionRosterSearch]);
+        row.id.toLowerCase().includes(q)
+      );
+    });
+  }, [
+    submissionTab,
+    submissionRoster,
+    submissionRosterSearch,
+    rosterDepartmentFilter,
+    rosterBandFilter,
+  ]);
 
   const submissionListPagination = useClientPagination(activeSubmissionRows, {
     pageSize: 12,
     pageSizeOptions: [12, 24, 48],
-    resetKey: `${submissionTab}|${activeCycleKey}|${submissionRosterSearch}`,
+    resetKey: `${submissionTab}|${activeCycleKey}|${submissionRosterSearch}|${rosterDepartmentFilter}|${rosterBandFilter}`,
   });
 
   const workforceMaxHeadcount = useMemo(
@@ -966,6 +1116,15 @@ export default function AdminDashboard({
     sections.push("--- TOP PERFORMERS ---");
     sections.push("Rank,Name,Department,Band,Score,Recognitions,Certifications");
     topPerformers.forEach((emp, i) => sections.push(`${i + 1},${emp.name},${getDepartmentLabel(emp)},${emp.band || "—"},${(emp.performanceScore || 0).toFixed(1)},${emp.recognitions},${emp.certCount}`));
+    sections.push("");
+    sections.push("--- PROJECT AVERAGE RATINGS ---");
+    sections.push("Project,Avg Rating,Members,Member List");
+    for (const row of projectRatingsData) {
+      const memberList = row.members
+        .map((member) => `${member.name} (${member.score != null ? member.score.toFixed(1) : "—"})`)
+        .join("; ");
+      sections.push(`${row.project},${row.avgRating.toFixed(1)},${row.memberCount},"${memberList}"`);
+    }
     sections.push("");
     const interventionDepts = departmentBreakdown.filter((d) => d.needsIntervention);
     if (interventionDepts.length) {
@@ -1232,18 +1391,48 @@ export default function AdminDashboard({
           </div>
         </div>
 
-        <div className="border-b border-[rgb(var(--border))]/70 px-4 py-3">
-          <label className="relative block">
-            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
-            <input
-              type="search"
-              value={submissionRosterSearch}
-              onChange={(e) => setSubmissionRosterSearch(e.target.value)}
-              placeholder="Search name, department, band, or role…"
-              className="rt-input h-10 w-full pl-9 text-sm"
-              aria-label="Search submission roster"
-            />
-          </label>
+        <div className="border-b border-[rgb(var(--border))]/70 px-4 py-3 space-y-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="relative block sm:col-span-2 lg:col-span-1">
+              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
+              <input
+                type="search"
+                value={submissionRosterSearch}
+                onChange={(e) => setSubmissionRosterSearch(e.target.value)}
+                placeholder="Search name, department, band, or role…"
+                className="rt-input h-10 w-full pl-9 text-sm"
+                aria-label="Search submission roster"
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="sr-only">Filter roster by department</span>
+              <select
+                value={rosterDepartmentFilter}
+                onChange={(e) => setRosterDepartmentFilter(e.target.value)}
+                className="rt-input h-10 w-full text-sm"
+                aria-label="Filter roster by department"
+              >
+                <option value="all">All departments</option>
+                {dashboardFilterOptions.departments.map((dept) => (
+                  <option key={dept} value={dept}>{dept}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block space-y-1">
+              <span className="sr-only">Filter roster by band</span>
+              <select
+                value={rosterBandFilter}
+                onChange={(e) => setRosterBandFilter(e.target.value)}
+                className="rt-input h-10 w-full text-sm"
+                aria-label="Filter roster by band"
+              >
+                <option value="all">All bands</option>
+                {dashboardFilterOptions.bands.map((band) => (
+                  <option key={band} value={band}>{band}</option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -1376,6 +1565,78 @@ export default function AdminDashboard({
               <p className="text-sm text-[rgb(var(--muted))]">No performance data yet.</p>
             )}
           </div>
+        </div>
+      </div>
+
+      <div className="pulse-surface">
+        <div className="flex flex-col gap-4 border-b border-[rgb(var(--border))]/70 pb-4 lg:flex-row lg:items-end lg:justify-between">
+          <SectionHeader
+            icon={BarChart3}
+            iconClassName="bg-blue-500/10 text-blue-600 dark:text-blue-300"
+            title="Project average ratings"
+            subtitle="Hover a bar to see project members and their scores"
+            compact
+            className="!mb-0"
+          />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <label className="relative block min-w-[14rem] flex-1">
+              <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[rgb(var(--muted))]" />
+              <input
+                type="search"
+                value={projectChartSearch}
+                onChange={(e) => setProjectChartSearch(e.target.value)}
+                placeholder="Filter projects or members…"
+                className="rt-input h-10 w-full pl-9 text-sm"
+                aria-label="Filter project chart"
+              />
+            </label>
+            <label className="min-w-[9rem] space-y-1 sm:space-y-0">
+              <span className="sr-only">Minimum members</span>
+              <select
+                value={projectMinMembers}
+                onChange={(e) => setProjectMinMembers(e.target.value)}
+                className="rt-input h-10 w-full text-sm"
+                aria-label="Minimum project members"
+              >
+                <option value="1">1+ members</option>
+                <option value="2">2+ members</option>
+                <option value="3">3+ members</option>
+                <option value="5">5+ members</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="mt-4 w-full" style={{ height: 320 }}>
+          {projectRatingsData.length ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={projectRatingsData} margin={{ top: 10, right: 16, bottom: 48, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--border))" vertical={false} />
+                <XAxis
+                  dataKey="project"
+                  stroke="rgb(var(--muted))"
+                  fontSize={11}
+                  tickLine={false}
+                  axisLine={false}
+                  interval={0}
+                  angle={-24}
+                  textAnchor="end"
+                  height={70}
+                />
+                <YAxis stroke="rgb(var(--muted))" fontSize={11} tickLine={false} axisLine={false} domain={[0, 5]} />
+                <Tooltip
+                  content={<ProjectRatingsTooltip tooltipStyle={CHART_TOOLTIP_STYLE} />}
+                  cursor={{ fill: "rgb(var(--surface-2))", opacity: 0.35 }}
+                />
+                <Bar dataKey="avgRating" fill="#2563eb" radius={[8, 8, 0, 0]} maxBarSize={56} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="grid h-full place-items-center px-4 text-center text-sm text-[rgb(var(--muted))]">
+              {projectChartSearch.trim() || Number(projectMinMembers) > 1
+                ? "No projects match the current chart filters."
+                : "No project allocation data yet. Assign people to projects to see average ratings here."}
+            </div>
+          )}
         </div>
       </div>
 

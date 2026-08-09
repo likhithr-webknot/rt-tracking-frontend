@@ -6,6 +6,9 @@ type AdminPageHeaderProps = {
   title: string;
   subtitle?: string;
   sectionLabel?: string;
+  breadcrumbs?: Array<{ label: string; onClick?: () => void } | null>;
+  onBack?: (() => void) | null;
+  backLabel?: string;
   children?: ReactNode;
   className?: string;
 };
@@ -14,6 +17,9 @@ export default function AdminPageHeader({
   title,
   subtitle,
   sectionLabel = "Admin",
+  breadcrumbs = null,
+  onBack = null,
+  backLabel = "Back",
   children,
   className = "",
 }: AdminPageHeaderProps) {
@@ -22,6 +28,9 @@ export default function AdminPageHeader({
       title={title}
       subtitle={subtitle}
       sectionLabel={sectionLabel}
+      breadcrumbs={breadcrumbs}
+      onBack={onBack}
+      backLabel={backLabel}
       className={className}
     >
       {children}

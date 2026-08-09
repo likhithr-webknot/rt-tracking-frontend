@@ -17,6 +17,7 @@ import {
   fetchMe,
   getAuth,
   getAuthHeader,
+  getSessionExpiryReason,
   hasManualLogoutMark,
   hasRecoverableSession,
   isPortalAdminEmail,
@@ -24,10 +25,11 @@ import {
   markManualLogout,
   setAuth,
   stripOAuthParamsFromUrl,
+  touchSessionActivity,
 } from "./api/auth";
 import { isWebknotWorkEmail } from "./utils/webknotEmail";
 import { isHrPortalUser } from "./utils/hrRatingsFilter";
-import CompanyLogo from "./components/shared/CompanyLogo";
+import PortalLoadingScreen from "./components/shared/PortalLoadingScreen";
 import NotFoundPage from "./components/shared/NotFoundPage";
 
 const EMPLOYEE_LEGACY_TABS = new Set([
@@ -139,20 +141,14 @@ function resolvePortalRole(auth) {
   ]);
 }
 
-/** Shared loading fallback for Suspense boundaries */
+/** Shared loading fallback for Suspense / cold auth bootstrap */
 function PortalLoader() {
   return (
-    <div className="rt-shell grid min-h-[100dvh] place-items-center px-6">
-      <div className="rt-panel w-full max-w-md px-10 py-12 text-center">
-        <CompanyLogo size={48} className="mx-auto h-12 w-12" aria-hidden />
-        <p className="rt-kicker mt-6">Webknot Pulse</p>
-        <h1 className="rt-title mt-2">Loading workspace</h1>
-        <p className="mt-2 text-sm text-[rgb(var(--muted))]">Please wait a moment…</p>
-        <div className="mx-auto mt-6 h-1 w-32 overflow-hidden rounded-full bg-[rgb(var(--surface-3))]">
-          <div className="h-full w-1/2 animate-pulse rounded-full bg-[rgb(var(--primary))]" />
-        </div>
-      </div>
-    </div>
+    <PortalLoadingScreen
+      title="Loading workspace"
+      subtitle="Just a moment…"
+      className="min-h-[100dvh]"
+    />
   );
 }
 
@@ -272,9 +268,13 @@ export default function App() {
     const controller = new AbortController();
 
     async function run() {
-      setAuthChecking(true);
-      if (hasRecoverableSession()) {
+      const hadSession = hasRecoverableSession();
+      if (hadSession) {
         setAuthState(getAuth());
+        // Paint the app immediately; refresh /me in the background.
+        setAuthChecking(false);
+      } else {
+        setAuthChecking(true);
       }
 
       try {
@@ -293,7 +293,11 @@ export default function App() {
               existing.employeeName ||
               String(claims?.name ?? claims?.given_name ?? "").trim() ||
               undefined,
+            picture: existing.picture || claims?.picture || undefined,
+            profilePic: existing.profilePic || claims?.picture || undefined,
           });
+          setAuthState(getAuth());
+          setAuthChecking(false);
         }
 
         let me = null;
@@ -372,6 +376,43 @@ export default function App() {
     }
     window.addEventListener("rt-auth-changed", onAuthChanged);
     return () => window.removeEventListener("rt-auth-changed", onAuthChanged);
+  }, []);
+
+  // Absolute 8h session + 30m inactivity timeout.
+  useEffect(() => {
+    let lastTouch = 0;
+    const expireIfNeeded = () => {
+      const reason = getSessionExpiryReason();
+      if (reason === "max_duration" || reason === "inactivity") {
+        markManualLogout();
+        void logoutApi().catch(() => {});
+        clearAuth();
+        setAuthState(null);
+        setAuthChecking(false);
+      }
+    };
+    const onActivity = () => {
+      const now = Date.now();
+      // Throttle activity writes (mousemove/scroll can be very chatty).
+      if (now - lastTouch < 15_000) return;
+      lastTouch = now;
+      touchSessionActivity();
+    };
+    const windowEvents = ["pointerdown", "keydown", "mousemove", "scroll", "touchstart"] as const;
+    for (const ev of windowEvents) {
+      window.addEventListener(ev, onActivity, { passive: true });
+    }
+    document.addEventListener("visibilitychange", onActivity);
+    const interval = window.setInterval(expireIfNeeded, 30_000);
+    expireIfNeeded();
+    touchSessionActivity({ ensureIssuedAt: true });
+    return () => {
+      for (const ev of windowEvents) {
+        window.removeEventListener(ev, onActivity);
+      }
+      document.removeEventListener("visibilitychange", onActivity);
+      window.clearInterval(interval);
+    };
   }, []);
 
   const logout = useCallback(() => {

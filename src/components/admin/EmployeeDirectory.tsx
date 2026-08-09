@@ -3,22 +3,23 @@ import type { ApiOptions } from "../../types/api-options";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Search,
-  Trash2,
   ArrowUpCircle,
-  Edit3,
   X,
-  Plus,
   Play,
   Square,
+  Edit3,
 } from "lucide-react";
 import Toast from "../shared/Toast";
 import SearchField from "../shared/SearchField";
 import ListPaginationBar from "../shared/ListPaginationBar";
 import CursorPagination from "../shared/CursorPagination";
 import ConfirmDialog from "../shared/ConfirmDialog";
+import TableDensityToggle from "../shared/TableDensityToggle";
 import { useClientPagination } from "../../hooks/useClientPagination";
+import { useTableDensity } from "../../hooks/useTableDensity";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import { canHrEditEmployee, isSuperAdminPortalUser } from "../../utils/portalAccess";
+import { isHrPortalUser } from "../../utils/hrRatingsFilter";
 import {
   coercePortalRoleSelectValue,
   getPortalRoleSelectOptions,
@@ -26,8 +27,7 @@ import {
   resolvePortalRoleLabel,
 } from "../../utils/portalRole";
 import ModalOverlay from "../shared/ModalOverlay";
-import EntityCsvToolbar from "../shared/EntityCsvToolbar";
-import { exportEmployeesCsv } from "../../utils/entityCsvExport";
+import UserAvatar from "../shared/UserAvatar";
 
 import {
   addEmployee,
@@ -35,6 +35,7 @@ import {
   promoteEmployee as promoteEmployeeApi,
   resolveBandCodeFromDisplay,
   resolveEmployeeEmpId,
+  setPortalRole,
   updateEmployee,
   normalizeEmployees,
   resolveRoleStatsBucket,
@@ -287,7 +288,9 @@ export default function EmployeeDirectory({
   pager,
   onSetEmployeeSubmissionWindow,
   globalWindowOpen = false,
+  onOpenProfile = null,
 }) {
+  const { density, setDensity } = useTableDensity();
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState("all"); // "all" | role value
   const [designationFilter, setDesignationFilter] = useState("all"); // "all" | designation value
@@ -318,6 +321,7 @@ export default function EmployeeDirectory({
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState(() => new Set());
   const [pendingBulkDelete, setPendingBulkDelete] = useState(null);
   const [pendingSaveEdit, setPendingSaveEdit] = useState(false);
+  const [pendingPortalRoleChange, setPendingPortalRoleChange] = useState(null);
   const [pendingPromoteEmployee, setPendingPromoteEmployee] = useState(null);
   const [promoteBandType, setPromoteBandType] = useState("BOTH");
   const promoteDialogPreview = useMemo(
@@ -327,6 +331,8 @@ export default function EmployeeDirectory({
 
   const promoteConfirmDisabled = promoteDialogPreview.isMaxBand;
   const isSuperAdminViewer = useMemo(() => isSuperAdminPortalUser(auth), [auth]);
+  const isHrViewer = useMemo(() => isHrPortalUser(auth), [auth]);
+  const canEditPortalRoles = isSuperAdminViewer || isHrViewer;
   const canModifyEmployee = useCallback(
     (emp) => canHrEditEmployee(auth, emp),
     [auth],
@@ -826,26 +832,70 @@ export default function EmployeeDirectory({
   }
 
   async function handleInlinePortalRoleChange(emp, nextRole) {
-    if (!isSuperAdminViewer || !emp?.id) return;
+    if (!canEditPortalRoles || !emp?.id) return;
+    if (!canModifyEmployee(emp)) {
+      showToast({
+        title: "Portal role update failed",
+        message: "HR cannot change Super Admin portal roles.",
+        tone: "error",
+      });
+      return;
+    }
     const resolved = resolvePortalRoleLabel(nextRole);
     const current = resolvePortalRoleLabel(emp.empRole, emp.portalRole, emp.role);
     if (resolved === current) return;
 
-    const empKey = String(emp.id);
+    const targetEmail = String(emp.email ?? "").trim().toLowerCase();
+    if (!targetEmail || !targetEmail.includes("@")) {
+      showToast({
+        title: "Portal role update failed",
+        message: "This employee has no email address, so the portal role cannot be set.",
+        tone: "error",
+      });
+      return;
+    }
+
+    setPendingPortalRoleChange({
+      emp,
+      empKey: String(emp.id),
+      email: targetEmail,
+      current,
+      resolved,
+    });
+  }
+
+  async function confirmInlinePortalRoleChange() {
+    const pending = pendingPortalRoleChange;
+    if (!pending?.email || !pending?.resolved) {
+      setPendingPortalRoleChange(null);
+      return;
+    }
+    const { emp, empKey, email, resolved } = pending;
+    setPendingPortalRoleChange(null);
     setPortalRoleSavingId(empKey);
     try {
-      const apiEmpId = await resolveEmployeeEmpId(emp);
-      await updateEmployee(apiEmpId, { portalRole: resolved, empRole: resolved });
-      const reloaded = await refreshDirectoryAfterMutation();
-      if (!reloaded) {
-        setEmployees((prev) =>
-          prev.map((row) =>
-            String(row.id) === empKey
-              ? { ...row, role: resolved, empRole: resolved, portalRole: resolved }
-              : row,
-          ),
-        );
-      }
+      await setPortalRole({ email, role: resolved });
+      // Always apply optimistic update first — directory reload can still return stale
+      // multi-role rows until Webtrak replaces legacy GLOBAL/NULL portal roles.
+      setEmployees((prev) =>
+        prev.map((row) =>
+          String(row.id) === empKey
+            ? { ...row, role: resolved, empRole: resolved, portalRole: resolved }
+            : row,
+        ),
+      );
+      await refreshDirectoryAfterMutation();
+      setEmployees((prev) =>
+        prev.map((row) => {
+          if (String(row.id) !== empKey) return row;
+          const reloadedRole = resolvePortalRoleLabel(row.empRole, row.portalRole, row.role);
+          // Keep the role we just saved if reload still shows a stale higher privilege.
+          if (reloadedRole !== resolved) {
+            return { ...row, role: resolved, empRole: resolved, portalRole: resolved };
+          }
+          return row;
+        }),
+      );
       showToast({
         title: "Portal role updated",
         message: `${emp.name || empKey} is now ${resolved}.`,
@@ -971,6 +1021,12 @@ export default function EmployeeDirectory({
       await removeEmployee(pendingDeleteEmployee.row, pendingDeleteEmployee.name);
     } finally {
       setPendingDeleteEmployee(null);
+    }
+  }
+
+  function openEmployeeProfile(emp) {
+    if (typeof onOpenProfile === "function") {
+      onOpenProfile(emp);
     }
   }
 
@@ -1355,23 +1411,29 @@ export default function EmployeeDirectory({
     }
   }
 
+  const listEmpty = !Array.isArray(employees) || employees.length === 0;
+
+  if (employeesLoading && listEmpty && !employeesError) {
+    return (
+      <AdminPageShell className="space-y-6" maxWidth="max-w-[1600px]">
+        <AdminPageHeader
+          title="Team list"
+          subtitle="Search people, promote bands, and open or close one person's review window."
+        />
+        <div className="rt-panel flex items-center justify-center gap-2 py-16 text-sm text-[rgb(var(--muted))]">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-[rgb(var(--border))] border-t-[rgb(var(--accent))]" />
+          Loading team list…
+        </div>
+      </AdminPageShell>
+    );
+  }
+
   return (
     <AdminPageShell className="space-y-6" maxWidth="max-w-[1600px]">
       <AdminPageHeader
-        title="Employees"
-        subtitle="Search people, edit profiles, promote bands, and open or close one person's review window. Import replaces the roster from CSV."
-      >
-        <button type="button" onClick={openAdd} className="rt-btn-primary shrink-0 whitespace-nowrap text-sm" title="Add employee">
-          <Plus size={15} /> Add Employee
-        </button>
-        <EntityCsvToolbar
-          entityKey="employees"
-          onImportComplete={() => reloadEmployees?.()}
-          onExport={() => exportEmployeesCsv(employees)}
-          confirmImportMessage="Import the full employee roster from CSV? Anyone not listed will be marked inactive (admins are kept)."
-          showToast={showToast}
-        />
-      </AdminPageHeader>
+        title="Team list"
+        subtitle="Search people, promote bands, and open or close one person's review window."
+      />
 
       <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
@@ -1490,33 +1552,36 @@ export default function EmployeeDirectory({
           <span className="text-sm font-medium">
             {selectedEmployeeIds.size} employee{selectedEmployeeIds.size === 1 ? "" : "s"} selected
           </span>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="rt-btn-ghost text-xs" onClick={() => setSelectedEmployeeIds(new Set())}>
-              Clear selection
-            </button>
-            <button type="button" className="rt-btn-primary !bg-red-600 hover:!bg-red-500 text-xs" onClick={requestBulkDelete}>
-              Delete selected
-            </button>
-          </div>
+          <button type="button" className="rt-btn-ghost text-xs" onClick={() => setSelectedEmployeeIds(new Set())}>
+            Clear selection
+          </button>
         </div>
       ) : null}
 
       {/* ── Desktop roster ── */}
       <div className="pulse-surface hidden lg:block overflow-hidden">
-        <div className="border-b border-[rgb(var(--border))] px-4 py-3 sm:px-5">
-          <h2 className="text-sm font-semibold text-[rgb(var(--text))]">Employee roster</h2>
-          <p className="pulse-section-subtitle mt-0.5">
-            {listPagination.rangeLabel}
-            {searchUniverse.length !== filtered.length ? ` (filtered from ${searchUniverse.length})` : ""}
-            {" · "}
-            {totalEmployeesDisplay} total in directory
-          </p>
+        <div className="border-b border-[rgb(var(--border))] px-4 py-3 sm:px-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-[rgb(var(--text))]">Employee roster</h2>
+            <p className="pulse-section-subtitle mt-0.5">
+              {listPagination.rangeLabel}
+              {searchUniverse.length !== filtered.length ? ` (filtered from ${searchUniverse.length})` : ""}
+              {" · "}
+              {totalEmployeesDisplay} total in directory
+            </p>
+          </div>
+          <TableDensityToggle value={density} onChange={setDensity} />
         </div>
         <div className="overflow-x-auto custom-scrollbar">
-          <table className="w-full min-w-[1180px] text-left">
-            <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))] border-b border-[rgb(var(--border))]">
+          <table
+            className={[
+              "rt-data-table min-w-[1180px]",
+              density === "comfortable" ? "rt-data-table--comfortable" : "rt-data-table--default",
+            ].join(" ")}
+          >
+            <thead>
               <tr>
-                <th className="w-10 px-3 py-3">
+                <th className="w-10">
                   <input
                     type="checkbox"
                     className="rounded border-[rgb(var(--border))]"
@@ -1528,26 +1593,30 @@ export default function EmployeeDirectory({
                     aria-label="Select all visible employees"
                   />
                 </th>
-                <th className="whitespace-nowrap px-4 py-3 font-semibold">Emp ID</th>
-                <th className="min-w-[9rem] whitespace-nowrap px-4 py-3 font-semibold">Name</th>
-                <th className="min-w-[11rem] whitespace-nowrap px-4 py-3 font-semibold">Email</th>
-                <th className="min-w-[9.5rem] whitespace-nowrap px-4 py-3 font-semibold">Portal role</th>
-                <th className="min-w-[10rem] whitespace-nowrap px-4 py-3 font-semibold">Designation</th>
-                <th className="w-[5.5rem] whitespace-nowrap px-4 py-3 font-semibold">Band</th>
-                <th className="min-w-[9rem] whitespace-nowrap px-4 py-3 font-semibold">Department</th>
-                <th className="w-[6rem] whitespace-nowrap px-4 py-3 text-center font-semibold">Last promo</th>
-                <th className="w-[8.5rem] whitespace-nowrap px-4 py-3 text-right font-semibold">Actions</th>
+                <th className="whitespace-nowrap">Emp ID</th>
+                <th className="min-w-[9rem] whitespace-nowrap">Name</th>
+                <th className="min-w-[11rem] whitespace-nowrap">Email</th>
+                <th className="min-w-[9.5rem] whitespace-nowrap">Portal role</th>
+                <th className="min-w-[10rem] whitespace-nowrap">Designation</th>
+                <th className="w-[5.5rem] whitespace-nowrap">Band</th>
+                <th className="min-w-[9rem] whitespace-nowrap">Department</th>
+                <th className="w-[6rem] whitespace-nowrap text-center">Last promo</th>
+                <th className="w-[8.5rem] whitespace-nowrap text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[rgb(var(--border))]">
+            <tbody>
               {visibleEmployees.map((emp) => {
                 const promoteGate = getPromotionPreview(emp.band, "BOTH");
                 const bandCode = employeeBandCode(emp);
                 const bandLabel = bandLabelMap.get(emp.band) || bandLabelMap.get(bandCode);
                 const streamLabel = streamLabelMap.get(emp.stream);
                 return (
-                <tr key={emp.id} className="h-14 hover:bg-[rgb(var(--surface-2))]/50 transition-colors">
-                  <td className="px-3 py-2 align-middle">
+                <tr
+                  key={emp.id}
+                  className="cursor-pointer"
+                  onClick={() => openEmployeeProfile(emp)}
+                >
+                  <td className="align-middle" onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
                       className="rounded border-[rgb(var(--border))]"
@@ -1556,31 +1625,54 @@ export default function EmployeeDirectory({
                       aria-label={`Select ${emp.name}`}
                     />
                   </td>
-                  <td className="px-4 py-2 align-middle">
+                  <td className="align-middle">
                     <DirectoryCell mono title={emp.id}>{emp.id || "—"}</DirectoryCell>
                   </td>
-                  <td className="px-4 py-2 align-middle">
-                    <div className="max-w-[10rem] truncate font-semibold text-sm text-[rgb(var(--text))]" title={emp.name}>
-                      {emp.name}
-                      <DirectoryStatusBadge status={emp.status} />
+                  <td className="align-middle">
+                    <div className="flex min-w-0 max-w-[12rem] items-center gap-2.5">
+                      <div className="relative shrink-0">
+                        <UserAvatar
+                          email={emp.email}
+                          name={emp.name}
+                          auth={{
+                            picture: emp.profilePhoto || emp.picture,
+                            profilePic: emp.profilePhoto || emp.picture,
+                          }}
+                          size={32}
+                          className="h-8 w-8"
+                        />
+                        {emp.isOnline ? (
+                          <span
+                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[rgb(var(--surface))] bg-emerald-500"
+                            title="Online in Webtrak"
+                            aria-label="Online in Webtrak"
+                          />
+                        ) : null}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-sm text-[rgb(var(--text))]" title={emp.name}>
+                          {emp.name}
+                        </div>
+                        <DirectoryStatusBadge status={emp.status} />
+                      </div>
                     </div>
                   </td>
-                  <td className="px-4 py-2 align-middle">
+                  <td className="align-middle">
                     <DirectoryCell title={emp.email}>{emp.email || "—"}</DirectoryCell>
                   </td>
-                  <td className="px-4 py-2 align-middle">
+                  <td className="align-middle" onClick={(e) => e.stopPropagation()}>
                     <PortalRoleCell
                       emp={emp}
-                      canEdit={isSuperAdminViewer}
+                      canEdit={canEditPortalRoles}
                       portalRoleOptions={portalRoleOptions}
                       saving={portalRoleSavingId === String(emp.id)}
                       onChange={handleInlinePortalRoleChange}
                     />
                   </td>
-                  <td className="px-4 py-2 align-middle">
+                  <td className="align-middle">
                     <DirectoryCell title={employeeDesignation(emp)}>{employeeDesignation(emp)}</DirectoryCell>
                   </td>
-                  <td className="px-4 py-2 align-middle">
+                  <td className="align-middle">
                     <div className="font-mono text-sm font-semibold tabular-nums">{bandCode}</div>
                     {bandLabel && bandLabel !== bandCode ? (
                       <div className="text-[10px] text-[rgb(var(--muted))] truncate max-w-[5rem]" title={bandLabel}>
@@ -1588,7 +1680,7 @@ export default function EmployeeDirectory({
                       </div>
                     ) : null}
                   </td>
-                  <td className="px-4 py-2 align-middle">
+                  <td className="align-middle">
                     <DirectoryCell title={streamLabel || emp.stream}>
                       {emp.stream || "—"}
                     </DirectoryCell>
@@ -1598,7 +1690,7 @@ export default function EmployeeDirectory({
                       </div>
                     ) : null}
                   </td>
-                  <td className="px-4 py-2 align-middle text-center">
+                  <td className="align-middle text-center">
                      {emp.lastPromotionDate ? (
                         <span className="rt-badge rt-badge--success whitespace-nowrap tabular-nums">
                            {new Date(emp.lastPromotionDate).toLocaleDateString(undefined, {
@@ -1611,17 +1703,20 @@ export default function EmployeeDirectory({
                         <span className="text-[rgb(var(--muted))]">—</span>
                      )}
                   </td>
-                  <td className="px-4 py-2 align-middle text-right">
+                  <td className="align-middle text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="inline-flex items-center justify-end gap-0.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-0.5">
                       <DirectoryActionButton
                         onClick={() => openEdit(emp)}
                         disabled={!canModifyEmployee(emp)}
-                        title={canModifyEmployee(emp) ? "Edit employee" : "HR cannot edit Super Admin accounts"}
+                        title={
+                          !canModifyEmployee(emp)
+                            ? "HR cannot edit Super Admin accounts"
+                            : "Edit employee"
+                        }
                         ariaLabel={`Edit ${emp.name}`}
                       >
                         <Edit3 size={16} strokeWidth={2} />
                       </DirectoryActionButton>
-
                       <DirectoryActionButton
                         onClick={() => requestPromoteEmployee(emp)}
                         disabled={!canModifyEmployee(emp) || promotingId === emp.id || promoteGate.isMaxBand}
@@ -1636,20 +1731,6 @@ export default function EmployeeDirectory({
                         ariaLabel={`Promote ${emp.name}`}
                       >
                         <ArrowUpCircle size={16} strokeWidth={2} />
-                      </DirectoryActionButton>
-
-                      <DirectoryActionButton
-                        onClick={() => requestRemoveEmployee(emp)}
-                        disabled={isSelf(emp) || !canModifyEmployee(emp)}
-                        variant="danger"
-                        title={
-                          !canModifyEmployee(emp)
-                            ? "HR cannot delete Super Admin accounts"
-                            : "Delete employee from database"
-                        }
-                        ariaLabel={`Remove ${emp.name}`}
-                      >
-                        <Trash2 size={16} strokeWidth={2} />
                       </DirectoryActionButton>
                     </div>
                   </td>
@@ -1694,7 +1775,19 @@ export default function EmployeeDirectory({
         {visibleEmployees.map((emp) => {
           const promoteGate = getPromotionPreview(emp.band, "BOTH");
           return (
-          <div key={emp.id} className="rt-panel rounded-xl p-4 space-y-3">
+          <div
+            key={emp.id}
+            className="rt-panel rounded-xl p-4 space-y-3 cursor-pointer"
+            onClick={() => openEmployeeProfile(emp)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                openEmployeeProfile(emp);
+              }
+            }}
+          >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="font-semibold text-[rgb(var(--text))] truncate flex flex-wrap items-center gap-x-1">
@@ -1703,13 +1796,15 @@ export default function EmployeeDirectory({
                 </div>
                 <div className="text-[11px] text-[rgb(var(--muted))] truncate">{emp.email || "—"}</div>
               </div>
-              <PortalRoleCell
-                emp={emp}
-                canEdit={isSuperAdminViewer}
-                portalRoleOptions={portalRoleOptions}
-                saving={portalRoleSavingId === String(emp.id)}
-                onChange={handleInlinePortalRoleChange}
-              />
+              <div onClick={(e) => e.stopPropagation()}>
+                <PortalRoleCell
+                  emp={emp}
+                  canEdit={canEditPortalRoles}
+                  portalRoleOptions={portalRoleOptions}
+                  saving={portalRoleSavingId === String(emp.id)}
+                  onChange={handleInlinePortalRoleChange}
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-3 gap-2 text-[11px]">
@@ -1729,7 +1824,10 @@ export default function EmployeeDirectory({
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-2 pt-1 border-t border-[rgb(var(--border))]">
+            <div
+              className="flex items-center justify-between gap-2 pt-1 border-t border-[rgb(var(--border))]"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => setEmployeeSubmissionWindow(emp, "open")}
@@ -1750,7 +1848,11 @@ export default function EmployeeDirectory({
                 <DirectoryActionButton
                   onClick={() => openEdit(emp)}
                   disabled={!canModifyEmployee(emp)}
-                  title={canModifyEmployee(emp) ? "Edit" : "HR cannot edit Super Admin accounts"}
+                  title={
+                    !canModifyEmployee(emp)
+                      ? "HR cannot edit Super Admin accounts"
+                      : "Edit employee"
+                  }
                   ariaLabel={`Edit ${emp.name}`}
                 >
                   <Edit3 size={16} strokeWidth={2} />
@@ -1769,15 +1871,6 @@ export default function EmployeeDirectory({
                   ariaLabel={`Promote ${emp.name}`}
                 >
                   <ArrowUpCircle size={16} strokeWidth={2} />
-                </DirectoryActionButton>
-                <DirectoryActionButton
-                  onClick={() => requestRemoveEmployee(emp)}
-                  disabled={isSelf(emp) || !canModifyEmployee(emp)}
-                  variant="danger"
-                  title={canModifyEmployee(emp) ? "Delete from database" : "HR cannot delete Super Admin accounts"}
-                  ariaLabel={`Remove ${emp.name}`}
-                >
-                  <Trash2 size={16} strokeWidth={2} />
                 </DirectoryActionButton>
               </div>
             </div>
@@ -1870,13 +1963,13 @@ export default function EmployeeDirectory({
 
       <ConfirmDialog
         open={pendingSaveEdit}
-        title="Save employee changes?"
+        title="Confirm changes to WebTrak?"
         message={
           editingEmployee
-            ? `Save updates for ${draft.name || editingEmployee.name}?\n\nPortal role, band, department, designation, and contact fields will be updated on the server. Employee ID will not change.`
-            : "Save changes to this employee profile?"
+            ? `Whatever changes you make here will also update WebTrak.\n\nDo you want to confirm saving updates for ${draft.name || editingEmployee.name}?\n\nEmployee ID will not change.`
+            : "Whatever changes you make here will also update WebTrak. Do you want to confirm?"
         }
-        confirmText="Save changes"
+        confirmText="Confirm & save"
         cancelText="Keep editing"
         confirmVariant="primary"
         busy={mutating}
@@ -1885,6 +1978,22 @@ export default function EmployeeDirectory({
           setPendingSaveEdit(false);
           saveEdit();
         }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingPortalRoleChange)}
+        title="Confirm portal role change?"
+        message={
+          pendingPortalRoleChange
+            ? `Whatever changes you make here will also update WebTrak.\n\nChange ${pendingPortalRoleChange.emp?.name || pendingPortalRoleChange.empKey} from ${pendingPortalRoleChange.current} to ${pendingPortalRoleChange.resolved}?\n\nDo you want to confirm?`
+            : "Whatever changes you make here will also update WebTrak. Do you want to confirm?"
+        }
+        confirmText="Confirm role change"
+        cancelText="Cancel"
+        confirmVariant="primary"
+        busy={Boolean(portalRoleSavingId)}
+        onCancel={() => setPendingPortalRoleChange(null)}
+        onConfirm={confirmInlinePortalRoleChange}
       />
 
       <ConfirmDialog
@@ -1942,209 +2051,6 @@ export default function EmployeeDirectory({
       </ConfirmDialog>
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
-
-      
-      {showAddModal ? (
-        <ModalOverlay
-          open={showAddModal}
-          onClose={closeAdd}
-          maxWidth="max-w-xl"
-          zIndex={60}
-          header={
-            <div>
-              <h3 className="rt-section-title">Add Employee</h3>
-              <p className="mt-1 text-sm text-[rgb(var(--muted))]">
-                Register a new person in Pulse. Fields marked with * are required.
-              </p>
-            </div>
-          }
-        >
-          <form onSubmit={submitAdd} className="space-y-5">
-            <AddFormSection
-              title="Identity"
-              subtitle="How this person appears in the directory and signs in."
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <AddFormField label="Full name" required>
-                  <input
-                    value={addDraft.employeeName}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, employeeName: e.target.value }))}
-                    className="rt-input w-full text-sm"
-                    placeholder="e.g., Alice Johnson"
-                    autoComplete="name"
-                  />
-                </AddFormField>
-                <AddFormField
-                  label="Work email"
-                  required
-                  hint={`Must be a ${WEBKNOT_WORK_EMAIL_SUFFIX} address.`}
-                >
-                  <input
-                    type="email"
-                    autoComplete="email"
-                    value={addDraft.email}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, email: e.target.value }))}
-                    className="rt-input w-full text-sm"
-                    placeholder={`name${WEBKNOT_WORK_EMAIL_SUFFIX}`}
-                  />
-                </AddFormField>
-              </div>
-            </AddFormSection>
-
-            <AddFormSection
-              title="Role & access"
-              subtitle="Portal permissions. Project allocations are set up after the person is created."
-            >
-              <AddFormField label="Portal role" required>
-                <select
-                  className="rt-input w-full text-sm"
-                  value={coercePortalRoleSelectValue(addDraft.empRole, portalRoleOptions)}
-                  onChange={(e) => setAddDraft((d) => ({ ...d, empRole: e.target.value }))}
-                >
-                  {portalRoleOptions.map((role) => (
-                    <option key={`add-portal-role:${role}`} value={role}>
-                      {role}
-                    </option>
-                  ))}
-                </select>
-              </AddFormField>
-              {addRoleIsAdmin ? (
-                <div className="rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] px-3 py-2.5 text-[11px] text-[rgb(var(--muted))] leading-relaxed">
-                  Admin profiles do not require band, department, or designation.
-                </div>
-              ) : null}
-            </AddFormSection>
-
-            {!addRoleIsAdmin ? (
-              <AddFormSection
-                title="Organization"
-                subtitle="Must match bands, departments, and designation lookups already in the system."
-              >
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <AddFormField label="Band" required>
-                    <select
-                      value={addDraft.band}
-                      onChange={(e) =>
-                        setAddDraft((d) => ({ ...d, band: e.target.value, designation: "" }))
-                      }
-                      className="rt-input w-full text-sm"
-                    >
-                      {bandSelectOptions.map((band) => (
-                        <option key={`add-band:${band.value}`} value={band.value}>
-                          {band.label}
-                        </option>
-                      ))}
-                    </select>
-                    {directoryBands.length === 0 ? (
-                      <p className="mt-1.5 text-[10px] text-amber-600 dark:text-amber-400">
-                        Band list not loaded — refresh Bands &amp; Departments if options look wrong.
-                      </p>
-                    ) : null}
-                  </AddFormField>
-                  <AddFormField label="Department" required>
-                    <select
-                      value={addDraft.stream}
-                      onChange={(e) =>
-                        setAddDraft((d) => ({ ...d, stream: e.target.value, designation: "" }))
-                      }
-                      className="rt-input w-full text-sm"
-                    >
-                      {streamSelectOptions.length === 0 ? (
-                        <option value="">No departments loaded</option>
-                      ) : null}
-                      {streamSelectOptions.map((stream) => (
-                        <option key={`add-stream:${stream.value}`} value={stream.value}>
-                          {stream.label}
-                        </option>
-                      ))}
-                    </select>
-                  </AddFormField>
-                </div>
-
-                <AddFormField
-                  label="Job title"
-                  required
-                  hint={
-                    addDesignationLoading
-                      ? "Loading job title for this band and department…"
-                      : addDraft.designation.trim()
-                        ? "Auto-filled from your designation lookup. You can edit it before saving."
-                        : "Select band and department — the job title appears here automatically when a lookup exists."
-                  }
-                >
-                  <input
-                    value={addDraft.designation}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, designation: e.target.value }))}
-                    className="rt-input w-full text-sm"
-                    placeholder={
-                      addDesignationLoading
-                        ? "Loading…"
-                        : addDraft.band && addDraft.stream
-                          ? "Job title will appear here"
-                          : "Select band and department first"
-                    }
-                    disabled={addDesignationLoading || !addDraft.band || !addDraft.stream}
-                  />
-                </AddFormField>
-              </AddFormSection>
-            ) : null}
-
-            <AddFormSection
-              title="Employment details"
-              subtitle="Optional metadata stored with the employee record."
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <AddFormField label="User type">
-                  <select
-                    value={addDraft.userType}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, userType: e.target.value }))}
-                    className="rt-input w-full text-sm"
-                  >
-                    <option value="FULLTIME">Full-time</option>
-                    <option value="INTERN">Intern</option>
-                    <option value="FREELANCER">Freelancer</option>
-                  </select>
-                </AddFormField>
-                <AddFormField label="Work mode">
-                  <select
-                    value={addDraft.workMode}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, workMode: e.target.value }))}
-                    className="rt-input w-full text-sm"
-                  >
-                    <option value="HYBRID">Hybrid</option>
-                    <option value="INOFFICE">In office</option>
-                    <option value="REMOTE">Remote</option>
-                  </select>
-                </AddFormField>
-                <AddFormField label="Start date">
-                  <input
-                    type="date"
-                    value={addDraft.startDate}
-                    onChange={(e) => setAddDraft((d) => ({ ...d, startDate: e.target.value }))}
-                    className="rt-input w-full text-sm"
-                  />
-                </AddFormField>
-              </div>
-            </AddFormSection>
-
-            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3 border-t border-[rgb(var(--border))] pt-4">
-              <button type="button" onClick={closeAdd} className="rt-btn-ghost w-full sm:w-auto">
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={!addFormCanSubmit}
-                className={[
-                  "rt-btn-primary w-full sm:w-auto transition-all",
-                  !addFormCanSubmit ? "opacity-60 cursor-not-allowed" : "",
-                ].join(" ")}
-              >
-                {mutating ? "Adding…" : "Create employee"}
-              </button>
-            </div>
-          </form>
-        </ModalOverlay>
-      ) : null}
 
       
       {editingEmployee ? (

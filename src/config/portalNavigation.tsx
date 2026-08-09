@@ -1,14 +1,13 @@
 // @ts-nocheck
 import {
   Award,
-  BadgeCheck,
   Briefcase,
   ClipboardCheck,
   Cloud,
   FileBarChart2,
   FolderKanban,
   History,
-  Layers3,
+  KeyRound,
   LayoutDashboard,
   Sparkles,
   StickyNote,
@@ -84,18 +83,6 @@ export const ADMIN_NAV_GROUPS = [
         description: "Client and internal project list",
       },
       {
-        id: "band-streams",
-        icon: <Layers3 size={20} />,
-        label: "Bands & departments",
-        description: "Job levels and department names",
-      },
-      {
-        id: "designations",
-        icon: <BadgeCheck size={20} />,
-        label: "Job titles",
-        description: "Titles by band and department",
-      },
-      {
         id: "certifications",
         icon: <Award size={20} />,
         label: "Certifications",
@@ -110,7 +97,7 @@ export const ADMIN_NAV_GROUPS = [
       {
         id: "values",
         icon: <Sparkles size={20} />,
-        label: "Company values",
+        label: "Webknot values",
         description: "Culture and values scoring",
       },
     ],
@@ -135,6 +122,12 @@ export const ADMIN_NAV_GROUPS = [
         icon: <Cloud size={20} />,
         label: "File sharing",
         description: "Upload and share files",
+      },
+      {
+        id: "apps",
+        icon: <KeyRound size={20} />,
+        label: "Apps",
+        description: "Create and rotate WebTrak API keys",
       },
     ],
   },
@@ -343,11 +336,6 @@ export const ADMIN_TAB_COPY = {
     subtitle: "Job levels and department names used across the org.",
     sectionLabel: "Company setup",
   },
-  designations: {
-    title: "Job titles",
-    subtitle: "Titles mapped to band and department combinations.",
-    sectionLabel: "Company setup",
-  },
   certifications: {
     title: "Certifications",
     subtitle: "Credentials employees can select during their review.",
@@ -361,6 +349,11 @@ export const ADMIN_TAB_COPY = {
   drive: {
     title: "File sharing",
     subtitle: "Upload and share files from your admin account.",
+    sectionLabel: "More tools",
+  },
+  apps: {
+    title: "Apps",
+    subtitle: "Create WebTrak API keys with optional expiry, then rotate or revoke them.",
     sectionLabel: "More tools",
   },
   settings: {

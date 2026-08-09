@@ -201,6 +201,7 @@ export default function SettingsPanel({
   employees = [],
   employeesLoading = false,
   isSuperAdmin = false,
+  isHrUser = false,
 }) {
   const {
     settings: superSettings,
@@ -470,7 +471,7 @@ export default function SettingsPanel({
     superSettings?.reviewCycleNovEndMonth,
   ]);
 
-  const settingsHasUnsaved = isSuperAdmin ? superHasUnsaved || adminHasUnsaved : adminHasUnsaved;
+  const settingsHasUnsaved = isSuperAdmin ? superHasUnsaved || adminHasUnsaved : false;
 
   function onSaveAll(e) {
     e?.preventDefault?.();
@@ -590,8 +591,10 @@ export default function SettingsPanel({
         title="Settings"
         subtitle={
           isSuperAdmin
-            ? "Platform configuration for super admins, plus operational policies for HR and admin staff."
-            : "Operational policies, submission windows, and admin console preferences."
+            ? "Platform configuration for super admins, plus operational policies for admin staff."
+            : isHrUser
+              ? "Submission windows and reminder emails for HR."
+              : "Operational policies, submission windows, and admin console preferences."
         }
       />
 
@@ -1006,8 +1009,6 @@ export default function SettingsPanel({
         </div>
       </SectionCard>
             </SettingsGroup>
-          </>
-        ) : null}
 
         <SettingsGroup title="Organization" description="Storage limits and workforce-facing policies.">
           <SectionCard icon={Cloud} title="Webknot Drive" description="Object storage quota and upload limits">
@@ -1173,6 +1174,8 @@ export default function SettingsPanel({
             </div>
           </SectionCard>
         </SettingsGroup>
+          </>
+        ) : null}
 
         <SettingsGroup title="Operations" description="Submission windows and reminder emails.">
       <SectionCard icon={Calendar} title="Submission windows" description="Manage submission window schedules for all portals">
