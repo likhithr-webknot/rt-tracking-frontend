@@ -1,0 +1,2 @@
+submissionId,employeeId,employeeName,email,cycleKey,submissionMonth,reviewStatus,weightedScore,submittedAt,managerSubmittedAt
+,EMP001,Jane Doe,jane.d@webknot.in,MAY-OCT-2025,2025-06,APPROVED,4.2,2025-06-01T10:00:00,2025-06-05T14:30:00

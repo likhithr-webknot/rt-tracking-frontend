@@ -1,0 +1,186 @@
+// @ts-nocheck
+import { getAuthHeader } from "./auth";
+import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
+import { buildWebtrakUrl, getWebtrakAuthHeaders } from "./webtrak";
+
+function extractAllocationsArray(data) {
+  const root = data && typeof data === "object" ? data : {};
+  const nested = root?.data && typeof root.data === "object" ? root.data : null;
+  return (
+    (Array.isArray(data) && data) ||
+    (Array.isArray(root?.data) && root.data) ||
+    (Array.isArray(root?.content) && root.content) ||
+    (Array.isArray(root?.items) && root.items) ||
+    (Array.isArray(root?.results) && root.results) ||
+    (Array.isArray(root?.list) && root.list) ||
+    (Array.isArray(root?.allocations) && root.allocations) ||
+    (Array.isArray(nested?.content) && nested.content) ||
+    (Array.isArray(nested?.items) && nested.items) ||
+    (Array.isArray(nested?.data) && nested.data) ||
+    []
+  );
+}
+
+export function normalizeAllocations(data) {
+  const list = extractAllocationsArray(data);
+  return list
+    .map((raw, i) => {
+      if (!raw || typeof raw !== "object") return null;
+      const id = String(raw.id ?? raw.allocationId ?? `alloc_${i}`).trim();
+      const employeeId = String(
+        raw.employeeId ?? raw.empId ?? raw.userId ?? raw.employee?.id ?? raw.employee?.employeeId ?? ""
+      ).trim();
+      const employeeName = String(
+        raw.employeeName ?? raw.employee?.name ?? raw.employee?.employeeName ?? raw.userName ?? ""
+      ).trim();
+      const projectName = String(
+        raw.projectName ?? raw.project?.name ?? raw.project?.projectName ?? raw.projectCode ?? ""
+      ).trim();
+      const projectId = String(raw.projectId ?? raw.project?.id ?? raw.project?.projectId ?? "").trim();
+      const allocationType = String(raw.allocationType ?? raw.type ?? raw.role ?? "—").trim();
+      const pct = Number(raw.percentage ?? raw.utilization ?? raw.percent ?? raw.allocationPercent ?? 0);
+      const percentage = Number.isFinite(pct) ? Math.min(100, Math.max(0, pct)) : 0;
+      return {
+        id,
+        employeeId,
+        employeeName: employeeName || employeeId || "—",
+        projectName: projectName || projectId || "—",
+        projectId,
+        allocationType,
+        percentage,
+      };
+    })
+    .filter(Boolean);
+}
+
+export async function fetchAllocations(options = {}) {
+  const { signal } = options;
+  const auth = getAuthHeader();
+  const headers = auth ? { Authorization: auth } : undefined;
+
+  return requestWithFallbacks(
+    [
+      "/api/v1/allocation/list",
+      "/api/v1/allocation/list?page=0&size=500",
+      "/api/v1/allocation?page=0&size=500",
+      "/api/v1/allocations?page=0&size=500",
+      "/api/v1/allocation/user",
+    ],
+    {
+      signal,
+      headers,
+      fallbackStatuses: [400, 403, 404, 405],
+      notFoundMessage: "Allocation list endpoint not found.",
+    }
+  );
+}
+
+/**
+ * GET /api/v1/allocation/employee?userEmail=…&scope=current_and_future
+ * Uses the Webtrak third-party host + API key (same as Team List).
+ */
+export async function fetchEmployeeAllocations(
+  { userEmail, scope = "current_and_future" } = {},
+  { signal } = {},
+) {
+  const email = String(userEmail ?? "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    throw new Error("A valid employee email is required to load allocations.");
+  }
+  const params = new URLSearchParams();
+  params.set("userEmail", email);
+  if (scope) params.set("scope", String(scope));
+
+  const res = await fetch(
+    buildWebtrakUrl(`/api/v1/allocation/employee?${params.toString()}`),
+    {
+      method: "GET",
+      signal,
+      credentials: "omit",
+      headers: getWebtrakAuthHeaders(),
+    },
+  );
+  if (!res.ok) {
+    throw await toHttpError(res, {
+      method: "GET",
+      path: "/api/v1/allocation/employee",
+    });
+  }
+  return parseResponse(res, {});
+}
+
+export function parseEmployeeAllocationsPayload(raw) {
+  const root = raw && typeof raw === "object" ? raw : {};
+  const data = root.data && typeof root.data === "object" ? root.data : root;
+  const allocations = Array.isArray(data.allocations)
+    ? data.allocations
+    : extractAllocationsArray(data);
+  return {
+    employeeEmail: String(data.employee_email ?? data.employeeEmail ?? "").trim(),
+    employeeName: String(data.employee_name ?? data.employeeName ?? "").trim(),
+    empId: String(data.emp_id ?? data.empId ?? "").trim(),
+    userId: data.user_id ?? data.userId ?? null,
+    totalAllocatedPercent: Number(
+      data.total_allocated_percent ?? data.totalAllocatedPercent ?? 0,
+    ),
+    allocations: allocations.map((row, i) => {
+      const r = row && typeof row === "object" ? row : {};
+      return {
+        id: String(r.id ?? r.allocation_id ?? r.allocationId ?? `alloc_${i}`).trim(),
+        projectName: String(
+          r.project_name ?? r.projectName ?? r.project?.name ?? r.project_code ?? r.projectCode ?? "—",
+        ).trim(),
+        projectCode: String(r.project_code ?? r.projectCode ?? "").trim(),
+        role: String(r.role ?? r.allocation_type ?? r.allocationType ?? "—").trim(),
+        percent: Number(
+          r.allocated_percent ??
+            r.allocatedPercent ??
+            r.percentage ??
+            r.percent ??
+            r.utilization ??
+            0,
+        ),
+        startDate: String(r.start_date ?? r.startDate ?? "").trim(),
+        endDate: String(r.end_date ?? r.endDate ?? "").trim(),
+        status: String(r.status ?? r.allocation_status ?? "").trim(),
+      };
+    }),
+  };
+}
+
+export async function addAllocation(payload, options = {}) {
+  const { signal } = options;
+  const auth = getAuthHeader();
+  await ensureCsrfCookie({ signal, headers: auth ? { Authorization: auth } : undefined }).catch(() => {});
+  const headers = withCsrfHeaders({
+    "Content-Type": "application/json",
+    ...(auth ? { Authorization: auth } : {}),
+  });
+  const body = JSON.stringify({
+    employeeId: payload.employeeId != null ? String(payload.employeeId).trim() : "",
+    projectId: payload.projectId != null ? String(payload.projectId).trim() : "",
+    allocationType: String(payload.allocationType || "FULLTIME").trim(),
+    startDate: String(payload.startDate || "").trim(),
+    percentage: Number(payload.percentage) || 0,
+  });
+
+  const paths = ["/api/v1/allocation", "/api/v1/allocations", "/api/v1/allocation/create"];
+  let lastErr = null;
+  for (const path of paths) {
+    const res = await fetch(buildApiUrl(path), {
+      method: "POST",
+      signal,
+      credentials: "include",
+      headers,
+      body,
+    });
+    if (res.ok) return res.json().catch(() => ({}));
+    const err = await toHttpError(res);
+    if ([404, 405].includes(res.status)) {
+      lastErr = err;
+      continue;
+    }
+    throw err;
+  }
+  throw lastErr || new Error("Could not create allocation.");
+}
