@@ -1,12 +1,11 @@
 /**
  * Webtrak API routing for Team List, profiles, projects, etc.
  *
- * **Local Java webtrak (default):** after Pulse login, calls go to `/api/v1/…`
- * on the same origin (Vite → `VITE_API_DEV_PROXY`, usually localhost:8080)
- * with session cookies + JWT. RBAC is enforced by the backend.
+ * **Local Java webtrak (default):** after Pulse login, Team List calls
+ * `/api/v1/user/onboard` on the same origin with session JWT.
  *
- * **Third-party Webtrak:** when `WEBTRAK_API_KEY` or a remote `VITE_WEBTRAK_API_BASE`
- * is set, calls use `/__webtrak` and the proxy injects the service key.
+ * **Dev + remote roster:** when `VITE_EMPLOYEE_ROSTER_API_BASE` points at a remote
+ * host, Vite proxies `/__webtrak` and injects `WEBTRAK_API_KEY`.
  */
 
 import { getAuthHeader } from "./auth";
@@ -95,6 +94,31 @@ export function webtrakFetchCredentials(): RequestCredentials {
 
 const DEFAULT_EMPLOYEE_ROSTER_BASE = "https://webtrak.webknot-dev.in";
 
+function rosterBaseHost() {
+  const raw = String(
+    import.meta.env?.VITE_EMPLOYEE_ROSTER_API_BASE ??
+      import.meta.env?.VITE_WEBTRAK_API_BASE ??
+      "",
+  ).trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw.startsWith("http") ? raw : `https://${raw}`).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Dev-only: Vite proxies `/__webtrak` when roster env points at a remote host.
+ * Production always uses same-origin `/api/v1/user/onboard` with the login JWT.
+ */
+export function shouldUseRemoteEmployeeRosterProxy() {
+  if (!import.meta.env.DEV) return false;
+  const host = rosterBaseHost();
+  if (!host) return false;
+  return host !== "localhost" && host !== "127.0.0.1";
+}
+
 /** Remote Webtrak host used for HR employee roster (`GET /api/v1/user/onboard`). */
 export function getEmployeeRosterApiBase() {
   const raw = String(
@@ -106,9 +130,13 @@ export function getEmployeeRosterApiBase() {
   return raw.replace(/\/$/, "");
 }
 
-/** Team list / employee directory — always `GET /api/v1/user/onboard` on remote Webtrak. */
+/** Team list uses the logged-in Webtrak session (`/api/v1/user/onboard`). */
 export function buildEmployeeRosterUrl(path: string) {
-  return buildRemoteWebtrakUrl(path);
+  const p = String(path || "").startsWith("/") ? path : `/${path}`;
+  if (import.meta.env.DEV && shouldUseRemoteEmployeeRosterProxy()) {
+    return buildRemoteWebtrakUrl(p);
+  }
+  return buildApiUrl(p);
 }
 
 /** Bands, departments, promotion paths, and other legacy Webtrak HR APIs on webknot-dev.in. */
@@ -121,6 +149,10 @@ export function buildRemoteWebtrakUrl(path: string) {
 }
 
 export function getEmployeeRosterAuthHeaders(extra: Record<string, string> = {}) {
+  if (!shouldUseRemoteEmployeeRosterProxy()) {
+    return getWebtrakAuthHeaders(extra);
+  }
+
   const headers: Record<string, string> = {
     Accept: "application/json",
     ...extra,
@@ -130,13 +162,14 @@ export function getEmployeeRosterAuthHeaders(extra: Record<string, string> = {})
   ).trim();
   if (key) {
     headers.Authorization = asBearer(key);
-    return headers;
   }
-  // Do not attach Pulse session JWT — remote Webtrak rejects it. Vite injects WEBTRAK_API_KEY on /__webtrak.
   return headers;
 }
 
 export function employeeRosterFetchCredentials(): RequestCredentials {
+  if (!shouldUseRemoteEmployeeRosterProxy()) {
+    return "include";
+  }
   const key = String(
     import.meta.env?.VITE_WEBTRAK_API_KEY ?? import.meta.env?.WEBTRAK_API_KEY ?? "",
   ).trim();

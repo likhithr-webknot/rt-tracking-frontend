@@ -319,6 +319,12 @@ async function fetchEmployeeListPage(
     credentials: employeeRosterFetchCredentials(),
     headers,
   });
+  const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+  if (res.ok && !contentType.includes("application/json")) {
+    throw new Error(
+      "Team List received a non-JSON response. Check that /api/v1/user/onboard is proxied to Webtrak, not the SPA.",
+    );
+  }
   if (res.ok) return parseResponse(res, {});
   const err = await toHttpError(res, { method: "GET", path });
   if (fallbackStatuses.includes(res.status)) return null;

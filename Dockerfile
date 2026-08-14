@@ -3,24 +3,28 @@
 # ================================
 FROM node:22-alpine AS builder
 WORKDIR /app
-# Copy dependency files first for Docker layer caching
+
+ARG VITE_GOOGLE_CLIENT_ID
+ARG VITE_FRONTEND_URL
+ARG VITE_API_BASE_URL
+ARG VITE_ADMIN_EMAILS
+
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID \
+    VITE_FRONTEND_URL=$VITE_FRONTEND_URL \
+    VITE_API_BASE_URL=$VITE_API_BASE_URL \
+    VITE_ADMIN_EMAILS=$VITE_ADMIN_EMAILS
+
 COPY package*.json ./
-# Install dependencies
 RUN npm ci
-# Copy application source
 COPY . .
-# Build production frontend
 RUN npm run build
 
 # ================================
 # Stage 2: Serve with Nginx
 # ================================
 FROM nginx:alpine
-# Remove default Nginx website
 RUN rm -rf /usr/share/nginx/html/*
-# Copy Vite production build
 COPY --from=builder /app/dist /usr/share/nginx/html
-# SPA routing support for React Router
 RUN printf 'server {\n\
     listen 80;\n\
     server_name _;\n\
