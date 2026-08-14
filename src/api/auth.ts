@@ -739,16 +739,32 @@ function isLocalDevFrontendHost() {
   return host === "localhost" || host === "127.0.0.1";
 }
 
-/** Spring OAuth sets HttpOnly cookies on :8080; SPA on :3000 needs code exchange + JWT in storage. */
+/** Spring OAuth sets HttpOnly cookies on :8080; SPA needs code exchange + JWT in storage. */
 export function shouldUseFrontendGoogleOAuth() {
+  const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
+  if (clientId) return true;
   return isLocalDevFrontendHost();
+}
+
+function frontendUrlFromEnv() {
+  return String(import.meta.env.VITE_FRONTEND_URL ?? "").trim().replace(/\/+$/, "");
 }
 
 export function getFrontendOAuthRedirectUri() {
   if (typeof window !== "undefined" && window.location?.origin) {
     return `${window.location.origin}/auth/callback`;
   }
-  return "http://localhost:3000/auth/callback";
+
+  const configured = frontendUrlFromEnv();
+  if (configured) {
+    return `${configured}/auth/callback`;
+  }
+
+  if (import.meta.env.DEV) {
+    return "http://localhost:3000/auth/callback";
+  }
+
+  return "/auth/callback";
 }
 
 export function buildFrontendGoogleOAuthUrl() {
