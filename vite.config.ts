@@ -52,7 +52,7 @@ function spaBypass(req: { headers?: { accept?: string }; url?: string }) {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const API_TARGET = env.VITE_API_DEV_PROXY || "http://localhost:8080";
+  const API_TARGET = env.VITE_API_DEV_PROXY || "https://rtportal.webknot-dev.in";
   const WEBTRAK_TARGET =
     env.VITE_EMPLOYEE_ROSTER_API_BASE ||
     env.VITE_WEBTRAK_API_BASE ||

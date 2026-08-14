@@ -25,7 +25,7 @@ export async function readError(res: Response) {
   const details = toOptionalString(parsed?.details);
   const status = res.status;
 
-  // Vite dev proxy returns { message, details } with details like "GET /api/v1/... -> http://localhost:8080: ..."
+  // Vite dev proxy returns { message, details } with details like "GET /api/v1/... -> <api-host>: ..."
   if (
     status === 502 &&
     import.meta.env?.DEV &&
@@ -55,7 +55,7 @@ export async function readError(res: Response) {
 
 /**
  * Vite’s dev proxy returns long 502 lines like
- * "GET /api/v1/... -> http://localhost:8080: Proxy request failed".
+ * "GET /api/v1/... -> <api-host>: Proxy request failed".
  * Use this for employee directory (and similar) UI so users see one clear line.
  */
 export function friendlyProxyUnreachableMessage(message: unknown) {
@@ -217,7 +217,9 @@ export function getApiBaseUrl() {
     const normalized = runtimeBase.endsWith("/") ? runtimeBase.slice(0, -1) : runtimeBase;
     const base = normalizeBase(normalized);
     if (import.meta.env.DEV && base) {
-      const proxy = String(import.meta.env?.VITE_API_DEV_PROXY ?? "http://localhost:8080").trim();
+      const proxy = String(
+        import.meta.env?.VITE_API_DEV_PROXY ?? "https://rtportal.webknot-dev.in"
+      ).trim();
       try {
         if (new URL(base).origin === new URL(proxy).origin) return "";
       } catch {
@@ -234,7 +236,7 @@ function normalizeBase(base) {
   const b = String(base ?? "").trim();
   if (!b) return "";
   if (b.startsWith("http://") || b.startsWith("https://")) return b;
-  // Handle configs like "localhost:8080/api/v1" (no protocol).
+  // Handle configs like "host:port/api/v1" (no protocol).
   return `http://${b}`;
 }
 
@@ -253,8 +255,8 @@ export function buildApiUrl(path) {
 
   // If base already includes "/api/v1" (common), avoid accidental "/api/v1/api/v1".
   // Example:
-  // - base = http://localhost:8080/api/v1
-  // - path = /api/v1/auth/me  -> should become http://localhost:8080/api/v1/auth/me
+  // - base = https://rtportal.webknot-dev.in/api/v1
+  // - path = /api/v1/auth/me  -> should become https://rtportal.webknot-dev.in/api/v1/auth/me
   const baseStr = String(base || "");
   if (baseStr && baseStr.endsWith("/api/v1") && normalizedPath.startsWith("/api/v1/")) {
     normalizedPath = normalizedPath.slice("/api/v1".length);
