@@ -20,6 +20,7 @@ import { useTableDensity } from "../../hooks/useTableDensity";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import { toUserFacingMessage } from "../../utils/userFacingError";
 import { isHrPortalUser } from "../../utils/hrRatingsFilter";
+import { canHrEditEmployee, isSuperAdminPortalUser } from "../../utils/portalAccess";
 import {
   coercePortalRoleSelectValue,
   getPortalRoleSelectOptions,
