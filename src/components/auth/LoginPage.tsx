@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Loader2, Shield, Sparkles, Target, Users } from "lucide-react";
-import { getGoogleSignInUrl, seedDevQaUsers } from "../../api/auth";
+import { getGoogleSignInUrl, seedDevQaUsers, startGoogleSignIn } from "../../api/auth";
 import { WEBKNOT_WORK_EMAIL_SUFFIX, webknotEmailHint } from "../../utils/webknotEmail";
 import { QA_DEV_ACCOUNTS, normalizeQaSeedResponse } from "../../utils/qaDevAccounts";
 import CompanyLogo from "../shared/CompanyLogo";
@@ -80,7 +80,7 @@ function normalizeLoginUrl() {
 }
 
 export default function LoginPage() {
-  const [googleSignInUrl, setGoogleSignInUrl] = useState("");
+  const [googleSignInReady, setGoogleSignInReady] = useState(false);
   const [oauthBusy, setOauthBusy] = useState(false);
   const [seedBusy, setSeedBusy] = useState(false);
   const [seedMessage, setSeedMessage] = useState("");
@@ -96,7 +96,10 @@ export default function LoginPage() {
 
   useEffect(() => {
     normalizeLoginUrl();
-    setGoogleSignInUrl(getGoogleSignInUrl());
+
+    const signInUrl = getGoogleSignInUrl();
+    setGoogleSignInReady(Boolean(signInUrl));
+
     if (toastBootstrapped.current) return;
     toastBootstrapped.current = true;
 
@@ -107,20 +110,30 @@ export default function LoginPage() {
       return;
     }
 
-    if (!googleSignInUrl) {
+    if (!signInUrl) {
       setToast({
         title: "Google sign-in not configured",
-        message: "Add VITE_GOOGLE_CLIENT_ID to .env.local and restart the dev server.",
+        message: "Sign-in is not available on this site yet. Contact your administrator.",
         tone: "error",
         ts: Date.now(),
       });
     }
-  }, [googleSignInUrl]);
+  }, []);
 
   const onGoogleClick = useCallback(() => {
-    if (!googleSignInUrl) return;
     setOauthBusy(true);
-  }, [googleSignInUrl]);
+    try {
+      startGoogleSignIn();
+    } catch {
+      setOauthBusy(false);
+      setToast({
+        title: "Google sign-in not configured",
+        message: "Sign-in is not available on this site yet. Contact your administrator.",
+        tone: "error",
+        ts: Date.now(),
+      });
+    }
+  }, []);
 
   const onSeedQa = useCallback(async () => {
     setSeedMessage("");
@@ -213,11 +226,11 @@ export default function LoginPage() {
                 <p className="pulse-login-v2__card-lead">{webknotEmailHint()}</p>
               </div>
 
-              {googleSignInUrl ? (
-                <a
-                  href={googleSignInUrl}
+              {googleSignInReady ? (
+                <button
+                  type="button"
                   onClick={onGoogleClick}
-                  className="pulse-login-v2__google group"
+                  className="pulse-login-v2__google group w-full"
                   aria-busy={oauthBusy}
                 >
                   {oauthBusy ? (
@@ -239,7 +252,7 @@ export default function LoginPage() {
                       />
                     </>
                   )}
-                </a>
+                </button>
               ) : (
                 <button type="button" disabled className="pulse-login-v2__google opacity-60 cursor-not-allowed">
                   <span className="pulse-login-v2__google-icon">

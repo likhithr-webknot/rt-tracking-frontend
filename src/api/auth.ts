@@ -777,9 +777,17 @@ export function getGoogleSignInUrl() {
   if (shouldUseFrontendGoogleOAuth()) {
     const spaUrl = buildFrontendGoogleOAuthUrl();
     if (spaUrl) return spaUrl;
-    return "";
   }
   return buildApiUrl(GOOGLE_SIGNIN_PATH);
+}
+
+/** Navigate to Google OAuth using the current page origin for redirect_uri. */
+export function startGoogleSignIn() {
+  const url = getGoogleSignInUrl();
+  if (!url) {
+    throw new Error("Google sign-in is not configured.");
+  }
+  window.location.assign(url);
 }
 
 function mapGoogleAuthError(message: unknown) {
