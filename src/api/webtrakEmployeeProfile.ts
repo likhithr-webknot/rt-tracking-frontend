@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { parseResponse, toHttpError } from "./http";
-import { buildWebtrakUrl, getWebtrakAuthHeaders } from "./webtrak";
+import { buildWebtrakUrl, getWebtrakAuthHeaders, webtrakFetchCredentials } from "./webtrak";
 
 function unwrapData(raw) {
   if (!raw || typeof raw !== "object") return {};
@@ -21,7 +21,7 @@ async function webtrakGet(path, { signal } = {}) {
   const res = await fetch(buildWebtrakUrl(path), {
     method: "GET",
     signal,
-    credentials: "omit",
+    credentials: webtrakFetchCredentials(),
     headers: getWebtrakAuthHeaders(),
   });
   if (!res.ok) {
@@ -34,7 +34,7 @@ async function webtrakPut(path, body, { signal } = {}) {
   const res = await fetch(buildWebtrakUrl(path), {
     method: "PUT",
     signal,
-    credentials: "omit",
+    credentials: webtrakFetchCredentials(),
     headers: getWebtrakAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body && typeof body === "object" ? body : {}),
   });

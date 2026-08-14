@@ -14,7 +14,13 @@ import {
   withCsrfHeaders,
 } from "./http";
 import { fetchUser } from "./user";
-import { buildWebtrakUrl, getWebtrakAuthHeaders, resolveWebtrakProfilePhotoUrl, toWebtrakPortalRoleToken } from "./webtrak";
+import {
+  buildWebtrakUrl,
+  getWebtrakAuthHeaders,
+  resolveWebtrakProfilePhotoUrl,
+  toWebtrakPortalRoleToken,
+  webtrakFetchCredentials,
+} from "./webtrak";
 import { loadTeamListCache, saveTeamListCache } from "../utils/teamListCache";
 
 export function normalizeEmployees(data) {
@@ -281,26 +287,19 @@ export async function fetchEmployees({
   const typeQ = String(type ?? "").trim();
   const statusQ = String(onboardingStatus ?? "").trim();
 
-  const webtrakKey = String(import.meta?.env?.VITE_WEBTRAK_API_KEY ?? "").trim();
   const onboardBase = buildWebtrakUrl("/api/v1/user/onboard");
 
   const buildOnboardUrl = (page: number, size: number) => {
     const params = new URLSearchParams();
     params.set("page", String(page));
     params.set("size", String(size));
-    params.set("search", searchQ);
-    params.set("type", typeQ);
-    params.set("onboardingStatus", statusQ);
+    if (searchQ) params.set("search", searchQ);
+    if (typeQ) params.set("type", typeQ);
+    if (statusQ) params.set("onboardingStatus", statusQ);
     return `${onboardBase}?${params.toString()}`;
   };
 
-  // Browser always uses /__webtrak; proxy injects WEBTRAK_API_KEY. Never hit Webtrak origin directly (CORS).
-  const onboardHeaders: Record<string, string> = getWebtrakAuthHeaders();
-  if (webtrakKey && !onboardHeaders.Authorization && typeof window === "undefined") {
-    onboardHeaders.Authorization = /^bearer\s+/i.test(webtrakKey)
-      ? webtrakKey
-      : `Bearer ${webtrakKey}`;
-  }
+  const onboardHeaders = getWebtrakAuthHeaders();
 
   const pageSize = Math.min(safeLimit, 500);
   const collected = [];
@@ -316,9 +315,9 @@ export async function fetchEmployees({
     try {
       const raw = await requestWithFallbacks([buildOnboardUrl(page, size)], {
         signal,
-        credentials: "omit",
+        credentials: webtrakFetchCredentials(),
         headers: onboardHeaders,
-        fallbackStatuses: [400, 403, 404, 405],
+        fallbackStatuses: [404, 405],
         notFoundMessage: "Onboard users endpoint not found.",
       });
       usedOnboard = true;
@@ -736,7 +735,7 @@ export async function setPortalRole(
   const res = await fetch(buildWebtrakUrl("/api/v1/roles/set-portal-role"), {
     method: "POST",
     signal,
-    credentials: "omit",
+    credentials: webtrakFetchCredentials(),
     headers: getWebtrakAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });

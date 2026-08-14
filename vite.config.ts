@@ -54,7 +54,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const API_TARGET = env.VITE_API_DEV_PROXY || "http://localhost:8080";
   const WEBTRAK_TARGET =
-    env.VITE_WEBTRAK_API_BASE || "https://webtrak.webknot-dev.in";
+    env.VITE_WEBTRAK_API_BASE || env.VITE_API_DEV_PROXY || "http://localhost:8080";
   const WEBTRAK_API_KEY = String(
     env.WEBTRAK_API_KEY || env.VITE_WEBTRAK_API_KEY || "",
   ).trim();

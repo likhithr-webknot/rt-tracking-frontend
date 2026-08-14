@@ -5,7 +5,7 @@ import { loadProjectsCache, saveProjectsCache } from "../utils/projectsCache";
 import { loadProjectsCatalog } from "../utils/projectsCatalog";
 import { getAuthHeader } from "./auth";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
-import { buildWebtrakUrl, getWebtrakAuthHeaders } from "./webtrak";
+import { buildWebtrakUrl, getWebtrakAuthHeaders, webtrakFetchCredentials } from "./webtrak";
 
 /* ── helpers ── */
 
@@ -109,7 +109,7 @@ export async function fetchProjects({ signal, includeInactive = false } = {} as 
   try {
     const raw = await requestWithFallbacks([webtrakUrl], {
       signal,
-      credentials: "omit",
+      credentials: webtrakFetchCredentials(),
       headers: getWebtrakAuthHeaders(),
       fallbackStatuses: [400, 403, 404, 405],
       notFoundMessage: "Webtrak projects/all endpoint not found.",

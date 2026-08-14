@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { getAuthHeader } from "./auth";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
-import { buildWebtrakUrl, getWebtrakAuthHeaders } from "./webtrak";
+import { buildWebtrakUrl, getWebtrakAuthHeaders, webtrakFetchCredentials } from "./webtrak";
 
 function extractAllocationsArray(data) {
   const root = data && typeof data === "object" ? data : {};
@@ -96,7 +96,7 @@ export async function fetchEmployeeAllocations(
     {
       method: "GET",
       signal,
-      credentials: "omit",
+      credentials: webtrakFetchCredentials(),
       headers: getWebtrakAuthHeaders(),
     },
   );

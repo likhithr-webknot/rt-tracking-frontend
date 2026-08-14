@@ -5,7 +5,7 @@
  */
 
 import { parseResponse, toHttpError } from "./http";
-import { buildWebtrakUrl, getWebtrakAuthHeaders } from "./webtrak";
+import { buildWebtrakUrl, getWebtrakAuthHeaders, webtrakFetchCredentials } from "./webtrak";
 
 export const ASSIGNABLE_APP_ROLES = [
   "ROLE_EMPLOYEE",
@@ -46,7 +46,7 @@ async function webtrakJson(method, path, { body, signal } = {}) {
   const res = await fetch(buildWebtrakUrl(path), {
     method,
     signal,
-    credentials: "omit",
+    credentials: webtrakFetchCredentials(),
     headers: getWebtrakAuthHeaders(
       body != null ? { "Content-Type": "application/json" } : undefined,
     ),
