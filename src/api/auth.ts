@@ -747,11 +747,18 @@ export function shouldUseFrontendGoogleOAuth() {
 }
 
 export function getFrontendOAuthRedirectUri() {
+  const configured = String(import.meta.env.VITE_FRONTEND_URL ?? "").trim().replace(/\/+$/, "");
+
+  // Production bundles: always use the public URL baked in at build time
+  // (Docker: --build-arg VITE_FRONTEND_URL=https://rtportal.webknot-dev.in).
+  if (configured && import.meta.env.PROD) {
+    return `${configured}/auth/callback`;
+  }
+
   if (typeof window !== "undefined" && window.location?.origin) {
     return `${window.location.origin}/auth/callback`;
   }
 
-  const configured = String(import.meta.env.VITE_FRONTEND_URL ?? "").trim().replace(/\/+$/, "");
   if (configured) {
     return `${configured}/auth/callback`;
   }
