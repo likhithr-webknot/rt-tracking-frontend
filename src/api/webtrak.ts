@@ -93,12 +93,63 @@ export function webtrakFetchCredentials(): RequestCredentials {
   return useWebtrakThirdPartyApi() ? "omit" : "include";
 }
 
+const DEFAULT_EMPLOYEE_ROSTER_BASE = "https://webtrak.webknot-dev.in";
+
+/** Remote Webtrak host used for HR employee roster (`GET /api/v1/user/onboard`). */
+export function getEmployeeRosterApiBase() {
+  const raw = String(
+    import.meta.env?.VITE_EMPLOYEE_ROSTER_API_BASE ??
+      import.meta.env?.VITE_WEBTRAK_API_BASE ??
+      DEFAULT_EMPLOYEE_ROSTER_BASE,
+  ).trim();
+  if (!raw) return DEFAULT_EMPLOYEE_ROSTER_BASE;
+  return raw.replace(/\/$/, "");
+}
+
+/** Team list / employee directory — always `GET /api/v1/user/onboard` on remote Webtrak. */
+export function buildEmployeeRosterUrl(path: string) {
+  return buildRemoteWebtrakUrl(path);
+}
+
+/** Bands, departments, promotion paths, and other legacy Webtrak HR APIs on webknot-dev.in. */
+export function buildRemoteWebtrakUrl(path: string) {
+  const p = String(path || "").startsWith("/") ? path : `/${path}`;
+  if (typeof window !== "undefined") {
+    return `/__webtrak${p}`;
+  }
+  return `${getEmployeeRosterApiBase()}${p}`;
+}
+
+export function getEmployeeRosterAuthHeaders(extra: Record<string, string> = {}) {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    ...extra,
+  };
+  const key = String(
+    import.meta.env?.VITE_WEBTRAK_API_KEY ?? import.meta.env?.WEBTRAK_API_KEY ?? "",
+  ).trim();
+  if (key) {
+    headers.Authorization = asBearer(key);
+    return headers;
+  }
+  // Do not attach Pulse session JWT — remote Webtrak rejects it. Vite injects WEBTRAK_API_KEY on /__webtrak.
+  return headers;
+}
+
+export function employeeRosterFetchCredentials(): RequestCredentials {
+  const key = String(
+    import.meta.env?.VITE_WEBTRAK_API_KEY ?? import.meta.env?.WEBTRAK_API_KEY ?? "",
+  ).trim();
+  return key ? "omit" : "include";
+}
+
 export function buildWebtrakUrl(path: string) {
   const p = String(path || "").startsWith("/") ? path : `/${path}`;
-  if (!useWebtrakThirdPartyApi()) {
-    return buildApiUrl(p);
+  if (useWebtrakThirdPartyApi()) {
+    return `${getWebtrakApiBase()}${p}`;
   }
-  return `${getWebtrakApiBase()}${p}`;
+  // Local Java webtrak (this repo) serves band-list, department-list, promotion-paths, etc.
+  return buildApiUrl(p);
 }
 
 export function resolveWebtrakProfilePhotoUrl(raw: unknown) {

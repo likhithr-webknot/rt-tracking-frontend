@@ -104,9 +104,16 @@ export default function GoogleCallbackPage() {
         }
       } catch (err) {
         if (cancelled) return;
+        const code = String((err as { code?: string })?.code ?? "").trim();
         const message = (err as Error)?.message || "Unable to complete authentication.";
+        const errorKey =
+          code === "unregistered_user" || /not registered/i.test(message)
+            ? "unregistered_user"
+            : code === "invalid_domain"
+              ? "invalid_domain"
+              : "auth_failed";
         setError(`Authentication failed: ${message}. Redirecting to login...`);
-        setTimeout(() => navigate(`/?error=${encodeURIComponent("auth_failed")}`, { replace: true }), 4000);
+        setTimeout(() => navigate(`/?error=${encodeURIComponent(errorKey)}`, { replace: true }), 4000);
       }
     };
 

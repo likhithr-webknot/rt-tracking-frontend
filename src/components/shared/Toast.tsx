@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
+import { toUserFacingMessage } from "../../utils/userFacingError";
 
 /* ── Tone definitions ── */
 const TONES = {
@@ -88,17 +89,20 @@ export default function Toast({ toast, onDismiss, durationMs = 2600 }) {
 
   const displayTitle = useMemo(() => {
     if (!toast) return "";
-    if (toneKey === "error") return toast.title || toast.friendlyTitle || "Something went wrong";
-    return toast.title || "";
+    const rawTitle = String(toast.title || toast.friendlyTitle || "").trim();
+    if (toneKey === "error") {
+      return toUserFacingMessage(rawTitle, "Something went wrong");
+    }
+    return rawTitle;
   }, [toast, toneKey]);
 
   const displayMessage = useMemo(() => {
     if (!toast) return "";
-    const raw = String(toast.message || "").trim();
-    if (toneKey === "error") {
-      return raw || toast.friendlyMessage || "Please try again in a moment.";
+    const raw = String(toast.message || toast.friendlyMessage || "").trim();
+    if (toneKey === "error" || toneKey === "warning") {
+      return toUserFacingMessage(raw, "Please try again in a moment.");
     }
-    return raw;
+    return toUserFacingMessage(raw, raw);
   }, [toast, toneKey]);
 
   const toastKey = useMemo(() => {

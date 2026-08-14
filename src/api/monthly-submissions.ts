@@ -801,25 +801,49 @@ function toMonthlySubmissionDtoPayload(payload) {
   };
 }
 
+function submissionMonthKey(item) {
+  return (
+    normalizeYearMonth(item?.month ?? item?.monthKey ?? item?.submissionMonth) ||
+    String(item?.month ?? item?.monthKey ?? "").trim()
+  );
+}
+
+function filterSubmissionsByMonth(items, monthKey) {
+  if (!monthKey || !Array.isArray(items)) return items;
+  return items.filter((item) => submissionMonthKey(item) === monthKey);
+}
+
+function paginateSubmissionItems(items, page, size) {
+  const safePage = Math.max(Number.parseInt(String(page ?? 0), 10) || 0, 0);
+  const safeSize = Math.max(Number.parseInt(String(size ?? 200), 10) || 200, 1);
+  const start = safePage * safeSize;
+  return {
+    items: items.slice(start, start + safeSize),
+    total: items.length,
+  };
+}
+
+function isMissingRouteStatus(status) {
+  return status === 404 || status === 405 || status === 400;
+}
+
 async function fetchAdminMonthlySubmissionsPage({ month, cycleKey, employeeId, page = 0, size = 200, signal } = {} as ApiOptions) {
   const auth = getAuthHeader();
   const monthKey = normalizeYearMonth(month) || String(month ?? "").trim();
   const ck = resolveCycleKey({ month, cycleKey });
-  const qs = new URLSearchParams();
-  if (monthKey) qs.set("month", monthKey);
-  else if (ck) qs.set("cycleKey", ck);
   const empFilter = sanitizeEmployeeIdForApi(employeeId);
-  if (empFilter) qs.set("employeeId", empFilter);
-  qs.set("page", String(Math.max(Number.parseInt(String(page ?? 0), 10) || 0, 0)));
-  qs.set("size", String(Math.max(Number.parseInt(String(size ?? 200), 10) || 200, 1)));
+  const safePage = Math.max(Number.parseInt(String(page ?? 0), 10) || 0, 0);
+  const safeSize = Math.max(Number.parseInt(String(size ?? 200), 10) || 200, 1);
 
-  const suffix = qs.toString();
-  const paths = [
-    `/api/v1/admin/monthly-submissions?${suffix}`,
-    `/api/v1/monthly-submissions?${suffix}`,
-  ];
+  // Paginated admin route (Render / legacy Pulse APIs).
+  const legacyQs = new URLSearchParams();
+  if (monthKey) legacyQs.set("month", monthKey);
+  else if (ck) legacyQs.set("cycleKey", ck);
+  if (empFilter) legacyQs.set("employeeId", empFilter);
+  legacyQs.set("page", String(safePage));
+  legacyQs.set("size", String(safeSize));
 
-  for (const path of paths) {
+  for (const path of [`/api/v1/admin/monthly-submissions?${legacyQs.toString()}`]) {
     const res = await fetch(buildApiUrl(path), {
       signal,
       credentials: "include",
@@ -829,11 +853,35 @@ async function fetchAdminMonthlySubmissionsPage({ month, cycleKey, employeeId, p
       const raw = await parseResponse(res, {});
       return unwrapGenericPage(raw);
     }
-    if (res.status === 404 || res.status === 405) continue;
+    if (isMissingRouteStatus(res.status)) continue;
     throw await toHttpError(res, { method: "GET", path });
   }
 
-  // Optional admin listing: many deployments omit this route; dashboard still works from directory data.
+  // Java webtrak: GET /monthly-submissions requires employeeId; admin roster uses /all.
+  const javaPaths = empFilter
+    ? [`/api/v1/monthly-submissions?employeeId=${encodeURIComponent(empFilter)}`]
+    : ["/api/v1/monthly-submissions/all"];
+
+  for (const path of javaPaths) {
+    const res = await fetch(buildApiUrl(path), {
+      signal,
+      credentials: "include",
+      headers: auth ? { Authorization: auth } : undefined,
+    });
+    if (!res.ok) {
+      if (isMissingRouteStatus(res.status)) continue;
+      throw await toHttpError(res, { method: "GET", path });
+    }
+
+    const raw = await parseResponse(res, {});
+    let items = unwrapGenericArray(raw)
+      .map((row) => normalizeMonthlySubmission(row))
+      .filter(Boolean);
+    items = filterSubmissionsByMonth(items, monthKey);
+    const paged = paginateSubmissionItems(items, safePage, safeSize);
+    return { ...paged, raw: raw?.data ?? raw };
+  }
+
   return { items: [], total: 0, raw: null };
 }
 

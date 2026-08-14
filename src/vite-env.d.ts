@@ -4,6 +4,7 @@ interface ImportMetaEnv {
   readonly VITE_API_BASE_URL?: string;
   readonly VITE_API_DEV_PROXY?: string;
   readonly VITE_WEBTRAK_API_BASE?: string;
+  readonly VITE_EMPLOYEE_ROSTER_API_BASE?: string;
   readonly VITE_WEBTRAK_API_KEY?: string;
   readonly VITE_SUPABASE_URL?: string;
   readonly VITE_SUPABASE_PUBLISHABLE_KEY?: string;

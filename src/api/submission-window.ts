@@ -5,6 +5,7 @@ import { getAuthHeader } from "./auth";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, toHttpError, withCsrfHeaders } from "./http";
 import { fetchSubmissionCycleByKey } from "./monthly-submissions";
 import { formatYearMonth } from "../utils/reviewCycles";
+import { sanitizeEmployeeIdForApi } from "../utils/employeeId";
 
 function monthCycleKey(date = new Date()) {
   return formatYearMonth(date) || "";
@@ -137,8 +138,8 @@ export async function fetchMonthlySubmissions({ cycleKey, scope, signal } = {} a
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
 
   const endpoints = [
-    `/api/v1/monthly-submissions${suffix}`,
     `/api/v1/submission-cycles${suffix}`,
+    `/api/v1/get-submission-cycle${suffix}`,
   ];
 
   let lastRouteErr = null;
@@ -154,7 +155,7 @@ export async function fetchMonthlySubmissions({ cycleKey, scope, signal } = {} a
     }
 
     const err = await toHttpError(res);
-    if (res.status === 404 || res.status === 405) {
+    if (res.status === 404 || res.status === 405 || res.status === 400) {
       lastRouteErr = err;
       continue;
     }
@@ -188,7 +189,7 @@ export async function fetchCurrentMonthlySubmission(
   const endpoints = [
     `/api/v1/monthly-submissions/current${currentSuffix}`,
     `/api/v1/get-submission-cycle?${searchQs.toString()}`,
-    `/api/v1/monthly-submissions?cycleKey=${encodeURIComponent(key)}&scope=${encodeURIComponent(normalizedScope)}`,
+    `/api/v1/submission-cycles?cycleKey=${encodeURIComponent(key)}&scope=${encodeURIComponent(normalizedScope)}`,
   ];
 
   let lastRouteErr = null;
@@ -214,11 +215,29 @@ export async function fetchCurrentMonthlySubmission(
     }
 
     const err = await toHttpError(res);
-    if (res.status === 404 || res.status === 405) {
+    if (res.status === 404 || res.status === 405 || res.status === 400) {
       lastRouteErr = err;
       continue;
     }
     throw err;
+  }
+
+  try {
+    const empId = sanitizeEmployeeIdForApi(employeeId);
+    if (empId && key) {
+      const selfQs = new URLSearchParams({ month: key, employeeId: empId });
+      const selfRes = await fetch(buildApiUrl(`/api/v1/monthly-submissions/self?${selfQs.toString()}`), {
+        signal,
+        credentials: "include",
+        headers: auth ? { Authorization: auth } : undefined,
+      });
+      if (selfRes.ok) {
+        const data = await selfRes.json().catch(() => ({}));
+        return toWindowResponse(data, { cycleKey: key, scope: normalizedScope });
+      }
+    }
+  } catch {
+    /* fallback below */
   }
 
   try {

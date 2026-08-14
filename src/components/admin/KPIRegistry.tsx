@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { AlertTriangle, Edit3, Layers3, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
 import CursorPagination from "../shared/CursorPagination";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
+import { toUserFacingMessage } from "../../utils/userFacingError";
 
 export default function KPIRegistry({
   kpis,
@@ -235,14 +236,14 @@ export default function KPIRegistry({
       </AdminPageHeader>
 
       {allKpisError ? (
-        <div className="rounded-xl border border-red-500/35 bg-red-500/5 px-4 py-3 text-sm text-red-900 dark:text-red-100">
+        <div className="rounded-xl border border-red-500/35 bg-red-500/5 px-4 py-3 text-sm text-red-800 dark:text-red-100">
           <div className="font-semibold inline-flex items-center gap-2">
             <AlertTriangle size={16} className="shrink-0" />
-            {/proxy request failed/i.test(allKpisError)
-              ? "API unavailable — full KPI list did not load"
-              : "Could not load full KPI list"}
+            Couldn’t load the KPI list
           </div>
-          <p className="mt-1.5 text-xs whitespace-pre-wrap opacity-90">{allKpisError}</p>
+          <p className="mt-1.5 text-xs opacity-90">
+            {toUserFacingMessage(allKpisError, "Please refresh the page or try again in a moment.")}
+          </p>
         </div>
       ) : null}
 

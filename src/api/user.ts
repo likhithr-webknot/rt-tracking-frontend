@@ -1,6 +1,11 @@
 // @ts-nocheck
 import type { ApiOptions } from "../types/api-options";
 import { getAuthHeader } from "./auth";
+import {
+  buildEmployeeRosterUrl,
+  employeeRosterFetchCredentials,
+  getEmployeeRosterAuthHeaders,
+} from "./webtrak";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
 
 function authHeaders({ json = false } = {} as ApiOptions) {
@@ -33,11 +38,11 @@ function toFormData(value) {
 }
 
 export async function fetchUserOnboard({ signal } = {} as ApiOptions) {
-  const res = await fetch(buildApiUrl("/api/v1/user/onboard"), {
+  const res = await fetch(buildEmployeeRosterUrl("/api/v1/user/onboard?page=0&size=500"), {
     method: "GET",
     signal,
-    credentials: "include",
-    headers: authHeaders(),
+    credentials: employeeRosterFetchCredentials(),
+    headers: getEmployeeRosterAuthHeaders(),
   });
   if (!res.ok) throw await toHttpError(res);
   return parseResponse(res, {});

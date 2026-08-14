@@ -52,6 +52,36 @@ const health = await ping(`${apiBase}/actuator/health`);
 if (health.ok) ok("Backend API", `${apiBase} (HTTP ${health.status})`);
 else fail("Backend API", `${apiBase} — ${health.error || "not reachable"}`);
 
+const adminPassword = String(process.env.WEBTRAK_ADMIN_PASSWORD || "moo$aidTheC0W").trim();
+try {
+  const rosterRes = await fetch(`${apiBase}/api/v1/user/onboard?page=0&size=5`, {
+    headers: { Authorization: adminPassword, Accept: "application/json" },
+  });
+  if (rosterRes.ok) {
+    const payload = await rosterRes.json();
+    const data = payload?.data ?? {};
+    const total = Number(data.totalElement ?? data.totalElements ?? 0);
+    if (total <= 5) {
+      warn(
+        "Webtrak employee roster",
+        `${total} user(s) in backend DB — Team List reads local Postgres, not Supabase cloud`,
+      );
+      console.log("    → Add VITE_SUPABASE_URL + VITE_SUPABASE_PUBLISHABLE_KEY to .env.local");
+      console.log("    → Or point webtrak/.env DATASOURCE_URL at your Supabase Postgres URI");
+    } else {
+      ok("Webtrak employee roster", `${total} users visible to backend`);
+    }
+  }
+} catch {
+  warn("Webtrak employee roster", "could not query /api/v1/user/onboard");
+}
+
+const hasSupabase = Boolean(
+  String(process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim(),
+);
+if (hasSupabase) ok("Supabase roster env", "VITE_SUPABASE_URL configured");
+else if (health.ok) warn("Supabase roster env", "not set — Team List will only show local Webtrak DB users");
+
 console.log("\nNext steps:");
 console.log("  1. Backend (webtrak): ./gradlew bootRun  (port 8080, PostgreSQL required)");
 console.log("  2. Frontend:          npm run dev       (port 3000)");

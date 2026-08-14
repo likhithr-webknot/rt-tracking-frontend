@@ -6,6 +6,7 @@ import { Bell, BellDot, Menu } from "lucide-react";
 import { ADMIN_NAV_GROUPS, ADMIN_TAB_COPY } from "../../config/portalNavigation";
 import { isHrPortalUser } from "../../utils/hrRatingsFilter";
 import { filterAdminNavGroups, isSuperAdminPortalUser } from "../../utils/portalAccess";
+import { toUserFacingMessage } from "../../utils/userFacingError";
 import RatingsHistoryWorkspace from "./RatingsHistoryWorkspace";
 import WebknotDrive from "./WebknotDrive";
 import AppShell from "../shared/AppShell";
@@ -214,9 +215,13 @@ export default function AdminControlCenter({ onLogout, auth }) {
     if (!employeesRef.current.length) setEmployeesLoading(true);
     try {
       const page = await fetchEmployees({ limit: 500, cursor: 0 });
-      setEmployees(normalizeEmployees(page));
+      const rows = Array.isArray(page?.items) ? page.items : [];
+      setEmployees(normalizeEmployees({ items: rows }));
+      if (page?.fromCache) {
+        setEmployeesError("Couldn’t refresh the team list. Showing the last saved list.");
+      }
     } catch (err) {
-      setEmployeesError(err.message);
+      setEmployeesError(toUserFacingMessage(err?.message, "Couldn’t load the team list. Please try again."));
     } finally {
       setEmployeesLoading(false);
     }
@@ -239,7 +244,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
     return () => {
       alive = false;
     };
-  }, [reloadEmployees]);
+  }, [reloadEmployees, auth]);
 
   const [portalWindow, setPortalWindow] = useState(() => defaultPortalWindow());
   const [portalWindowLoading, setPortalWindowLoading] = useState(false);

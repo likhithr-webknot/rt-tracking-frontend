@@ -1,11 +1,9 @@
 // @ts-nocheck
 import type { ApiOptions } from "../types/api-options";
 import { sanitizeEmployeeIdForApi } from "../utils/employeeId";
-import { loadProjectsCache, saveProjectsCache } from "../utils/projectsCache";
-import { loadProjectsCatalog } from "../utils/projectsCatalog";
+import { saveProjectsCache } from "../utils/projectsCache";
 import { getAuthHeader } from "./auth";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
-import { buildWebtrakUrl, getWebtrakAuthHeaders, webtrakFetchCredentials } from "./webtrak";
 
 /* ── helpers ── */
 
@@ -99,66 +97,49 @@ export function normalizeProjects(data) {
 /* ── admin endpoints ── */
 
 /**
- * Projects catalog: prefer Webtrak GET /api/v1/projects/all (via /__webtrak proxy).
- * On success, refresh local cache/catalog. On failure, serve last cached snapshot.
+ * Projects catalog from this Java webtrak backend: GET /api/v1/projects/all.
+ * On success, refresh local cache/catalog. The UI may still show cache if the request fails.
  */
 export async function fetchProjects({ signal, includeInactive = false } = {} as ApiOptions & { includeInactive?: boolean }) {
   void includeInactive;
-  const webtrakUrl = buildWebtrakUrl("/api/v1/projects/all");
+  const auth = getAuthHeader();
+  const res = await fetch(buildApiUrl("/api/v1/projects/all"), {
+    signal,
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    },
+  });
+  if (!res.ok) {
+    throw await toHttpError(res, { method: "GET", path: "/api/v1/projects/all" });
+  }
 
-  try {
-    const raw = await requestWithFallbacks([webtrakUrl], {
-      signal,
-      credentials: webtrakFetchCredentials(),
-      headers: getWebtrakAuthHeaders(),
-      fallbackStatuses: [400, 403, 404, 405],
-      notFoundMessage: "Webtrak projects/all endpoint not found.",
-    });
-    const items = normalizeProjects(raw);
-    const root = raw && typeof raw === "object" ? raw : {};
-    const data = root?.data && typeof root.data === "object" && !Array.isArray(root.data) ? root.data : root;
-    const total =
-      typeof data?.total === "number"
-        ? data.total
-        : typeof root?.total === "number"
-          ? root.total
-          : items.length;
-
-    const rawItems = Array.isArray(data?.items)
+  const raw = await parseResponse(res, {});
+  const items = normalizeProjects(raw);
+  const root = raw && typeof raw === "object" ? raw : {};
+  const data = root?.data && typeof root.data === "object" && !Array.isArray(root.data) ? root.data : root;
+  const total =
+    typeof data?.total === "number"
+      ? data.total
+      : typeof root?.total === "number"
+        ? root.total
+        : items.length;
+  const rawItems = Array.isArray(data?.projects)
+    ? data.projects
+    : Array.isArray(data?.items)
       ? data.items
       : Array.isArray(root?.items)
         ? root.items
         : items;
 
-    saveProjectsCache({
-      fetchedAt: new Date().toISOString(),
-      items: rawItems,
-      total,
-    });
+  saveProjectsCache({
+    fetchedAt: new Date().toISOString(),
+    items: rawItems,
+    total,
+  });
 
-    return raw;
-  } catch (err) {
-    if (err?.name === "AbortError") throw err;
-    const cached = loadProjectsCache();
-    if (cached?.items?.length) {
-      return {
-        items: cached.items,
-        total: cached.total ?? cached.items.length,
-        fromCache: true,
-        cachedAt: cached.fetchedAt,
-      };
-    }
-    const catalog = loadProjectsCatalog();
-    if (Array.isArray(catalog) && catalog.length) {
-      return {
-        items: catalog,
-        total: catalog.length,
-        fromCache: true,
-        cachedAt: null,
-      };
-    }
-    throw err;
-  }
+  return raw;
 }
 
 export async function addProject({ code, name, description = "", managerEmployeeId, active = true }, { signal } = {} as ApiOptions) {

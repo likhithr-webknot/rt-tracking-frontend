@@ -1,7 +1,6 @@
 import { coerceDisplayString } from "../utils/coerceDisplayString";
 import { z } from "zod";
 import { buildApiUrl, getCookieValue, readError, safeJsonParse, withCsrfHeaders } from "./http";
-import { loginWithEmailPassword } from "./password-auth";
 const LEGACY_AUTH_STORAGE_KEY = "rt_tracking_auth_v1";
 const SESSION_STORAGE_KEY = "rt_tracking_session_v1";
 const MANUAL_LOGOUT_STORAGE_KEY = "rt_tracking_manual_logout_v1";
@@ -732,7 +731,7 @@ async function fetchRoleHint({ signal, headers, email } = {} as ApiOptions) {
 const GOOGLE_SIGNIN_PATH = "/api/v1/google-signin";
 const OAUTH_BYPASS_PATH_PREFIX = "/oauth/bypass";
 const LOGOUT_PATH_CANDIDATES = ["/api/v1/auth/logout", "/auth/logout", "/logout"];
-const ME_PATH_CANDIDATES = ["/api/v1/profile", "/auth/me", "/api/v1/auth/me", "/api/auth/me"];
+const ME_PATH_CANDIDATES = ["/api/v1/auth/me", "/api/v1/profile", "/auth/me", "/api/auth/me"];
 
 function isLocalDevFrontendHost() {
   if (typeof window === "undefined") return import.meta.env.DEV;
@@ -770,8 +769,25 @@ export function getGoogleSignInUrl() {
   if (shouldUseFrontendGoogleOAuth()) {
     const spaUrl = buildFrontendGoogleOAuthUrl();
     if (spaUrl) return spaUrl;
+    return "";
   }
   return buildApiUrl(GOOGLE_SIGNIN_PATH);
+}
+
+function mapGoogleAuthError(message: unknown) {
+  const msg = String(message ?? "").trim();
+  const lower = msg.toLowerCase();
+  if (lower.includes("not registered") || lower.includes("unregistered")) {
+    const err = new Error(msg || "User not registered.");
+    err.code = "unregistered_user";
+    return err;
+  }
+  if (lower.includes("invalid_domain") || lower.includes("webknot")) {
+    const err = new Error(msg);
+    err.code = "invalid_domain";
+    return err;
+  }
+  return new Error(msg || "Google sign-in failed.");
 }
 
 export async function exchangeGoogleAuthCode(code, redirectUri, { signal } = {} as ApiOptions) {
@@ -790,9 +806,7 @@ export async function exchangeGoogleAuthCode(code, redirectUri, { signal } = {} 
   });
   const payload = await safeJsonParse(res);
   if (!res.ok) {
-    const err = new Error(
-      String(payload?.message ?? payload?.error ?? (await readError(res)) ?? "Google sign-in failed"),
-    );
+    const err = mapGoogleAuthError(payload?.message ?? payload?.error ?? (await readError(res)));
     err.status = res.status;
     throw err;
   }
@@ -818,9 +832,11 @@ export async function completeGoogleAuthCode(code, { signal } = {} as ApiOptions
     email: emailNorm,
     accessToken: token || null,
     tokenType: "Bearer",
+    employeeName: String(loginPayload.name ?? loginPayload.employeeName ?? "").trim() || undefined,
     role:
       explicitRoleFromObject(loginPayload) ||
       extractRole(loginPayload) ||
+      bestRole(loginPayload.roles) ||
       undefined,
     roles: loginPayload.roles,
   });
@@ -864,44 +880,12 @@ export async function seedDevQaUsers({ signal } = {} as ApiOptions) {
   return payload?.data != null ? { ...payload, data: payload.data } : payload;
 }
 
-/** Email + password login (JWT + cookies). */
+/** @deprecated Password login removed — use Google sign-in only. */
 export async function completePasswordLogin(email, password, { signal } = {} as ApiOptions) {
-  clearManualLogoutMark();
-  const data = await loginWithEmailPassword(email, password, { signal });
-
-  const token =
-    String(data?.accessToken ?? data?.access_token ?? data?.token ?? "").trim() ||
-    getCookieValue("accessToken") ||
-    getCookieValue("access_token") ||
-    "";
-
-  const emailNorm = String(data?.email ?? email ?? "").trim().toLowerCase();
-
-  const loginPayload = data && typeof data === "object" ? data : {};
-  setAuth({
-    ...loginPayload,
-    email: emailNorm,
-    accessToken: token || null,
-    tokenType: String(data?.tokenType ?? "Bearer"),
-    role:
-      explicitRoleFromObject(loginPayload) ||
-      extractRole(loginPayload) ||
-      undefined,
-    roles: loginPayload.roles,
-  });
-
-  const session = getAuth();
-  if (!session?.role || !session?.employeeId) {
-    try {
-      const me = await fetchMe({ signal });
-      if (me) setAuth(me);
-    } catch {
-      void 0;
-    }
-  }
-
-  notifyAuthChanged();
-  return getAuth();
+  void email;
+  void password;
+  void signal;
+  throw new Error("Password login is disabled. Use Continue with Google.");
 }
 
 export async function oauthBypass(email, { signal } = {} as ApiOptions) {
@@ -948,6 +932,7 @@ export async function fetchMe({ signal } = {} as ApiOptions) {
   const headers = auth ? { Authorization: auth } : undefined;
   let lastNon404Error = null;
   let any404 = false;
+  let saw401 = false;
 
   for (const path of ME_PATH_CANDIDATES) {
     const res = await fetch(buildApiUrl(path), {
@@ -955,7 +940,10 @@ export async function fetchMe({ signal } = {} as ApiOptions) {
       credentials: "include",
       headers,
     });
-    if (res.status === 401) return null;
+    if (res.status === 401 || res.status === 403) {
+      saw401 = true;
+      continue;
+    }
     if (res.status === 404 || res.status === 405) {
       any404 = true;
       continue;
@@ -1010,6 +998,7 @@ export async function fetchMe({ signal } = {} as ApiOptions) {
   }
 
   if (lastNon404Error) throw lastNon404Error;
+  if (saw401) return null;
   if (any404) {
     throw new Error(
       `Profile endpoint not found (tried ${ME_PATH_CANDIDATES.join(", ")}). Check API base URL and backend routes.`

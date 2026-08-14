@@ -18,7 +18,7 @@ import TableDensityToggle from "../shared/TableDensityToggle";
 import { useClientPagination } from "../../hooks/useClientPagination";
 import { useTableDensity } from "../../hooks/useTableDensity";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
-import { canHrEditEmployee, isSuperAdminPortalUser } from "../../utils/portalAccess";
+import { toUserFacingMessage } from "../../utils/userFacingError";
 import { isHrPortalUser } from "../../utils/hrRatingsFilter";
 import {
   coercePortalRoleSelectValue,
@@ -174,11 +174,7 @@ function DirectoryStatusBadge({ status }) {
   const st = String(status ?? "").trim().toLowerCase();
   if (!st || st === "active" || st === "enabled" || st === "activated") return null;
   const label = st.replace(/_/g, " ");
-  return (
-    <span className="ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide border border-amber-500/35 bg-amber-500/10 text-amber-900 dark:text-amber-100">
-      {label}
-    </span>
-  );
+  return <span className="rt-status-chip mt-1">{label}</span>;
 }
 
 async function fetchDesignationHintForBandStream({ band, stream, bandId, signal }) {
@@ -1464,13 +1460,11 @@ export default function EmployeeDirectory({
       </section>
 
       {employeesError ? (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-          <div className="font-semibold">
-            {/Could not reach the backend API from the dev proxy/i.test(employeesError)
-              ? "API unavailable"
-              : "Failed to load employees"}
-          </div>
-          <p className="mt-1.5 text-xs sm:text-sm opacity-95">{employeesError}</p>
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-800 dark:text-red-100">
+          <div className="font-semibold">Couldn’t load the team list</div>
+          <p className="mt-1.5 text-xs sm:text-sm opacity-95">
+            {toUserFacingMessage(employeesError, "Please refresh the page or try again in a moment.")}
+          </p>
         </div>
       ) : null}
 

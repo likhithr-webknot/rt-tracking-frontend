@@ -54,7 +54,9 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const API_TARGET = env.VITE_API_DEV_PROXY || "http://localhost:8080";
   const WEBTRAK_TARGET =
-    env.VITE_WEBTRAK_API_BASE || env.VITE_API_DEV_PROXY || "http://localhost:8080";
+    env.VITE_EMPLOYEE_ROSTER_API_BASE ||
+    env.VITE_WEBTRAK_API_BASE ||
+    "https://webtrak.webknot-dev.in";
   const WEBTRAK_API_KEY = String(
     env.WEBTRAK_API_KEY || env.VITE_WEBTRAK_API_KEY || "",
   ).trim();
@@ -84,14 +86,16 @@ export default defineConfig(({ mode }) => {
       // on Webtrak and would block the service key injection → 401 / failed calls.
       const incoming = String(proxyReq.getHeader("authorization") || "").trim();
       const isWebtrakAppKey =
-        /\bwtrt_/.test(incoming) || incoming.startsWith("wtrt_");
+        /\b(wtrt_|wtak_)/.test(incoming) ||
+        incoming.startsWith("wtrt_") ||
+        incoming.startsWith("wtak_");
       const asBearer = (token: string) =>
         /^bearer\s+/i.test(token) ? token : `Bearer ${token}`;
-      if (isWebtrakAppKey) {
-        // Normalize caller-provided app key to Bearer scheme.
-        proxyReq.setHeader("Authorization", asBearer(incoming));
-      } else if (WEBTRAK_API_KEY) {
+      // Always prefer the configured service key for roster calls (Pulse JWT is invalid on remote Webtrak).
+      if (WEBTRAK_API_KEY) {
         proxyReq.setHeader("Authorization", asBearer(WEBTRAK_API_KEY));
+      } else if (isWebtrakAppKey) {
+        proxyReq.setHeader("Authorization", asBearer(incoming));
       }
     });
     proxy.on("error", (...args: unknown[]) => {

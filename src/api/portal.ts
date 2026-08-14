@@ -43,7 +43,7 @@ async function firstOk(paths, options = {}) {
 
 export async function fetchPortalEmployee({ signal } = {} as ApiOptions) {
   // Load profile first so a dead backend fails fast (avoids three parallel 502s in the Network tab).
-  const profile = await firstOk(["/api/v1/profile", "/api/v1/user/onboard"], {
+  const profile = await firstOk(["/api/v1/profile"], {
     signal,
     notFoundMessage: "Employee profile endpoint not found.",
   });

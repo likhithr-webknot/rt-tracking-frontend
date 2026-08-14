@@ -21,7 +21,8 @@ export function useProjects(params: ProjectsListParams = {}) {
       const raw = await fetchProjects({ ...params, signal });
       return normalizeProjects(raw);
     },
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 }
 

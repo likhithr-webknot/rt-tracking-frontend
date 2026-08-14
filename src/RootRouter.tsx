@@ -1,9 +1,7 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import App from "./App";
 import AppErrorBoundary from "./components/shared/AppErrorBoundary";
 import GoogleCallbackPage from "./components/auth/GoogleCallbackPage";
-import ForgotPasswordPage from "./components/auth/ForgotPasswordPage";
-import ResetPasswordPage from "./components/auth/ResetPasswordPage";
 
 export default function RootRouter() {
   return (
@@ -11,8 +9,8 @@ export default function RootRouter() {
       <BrowserRouter>
         <Routes>
           <Route path="/auth/callback" element={<GoogleCallbackPage />} />
-          <Route path="/auth/forgot-password" element={<ForgotPasswordPage />} />
-          <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/auth/forgot-password" element={<Navigate to="/" replace />} />
+          <Route path="/auth/reset-password" element={<Navigate to="/" replace />} />
           
           {/* Single App mount — avoids remounting auth/portals when switching workspaces */}
           <Route path="/*" element={<App />} />

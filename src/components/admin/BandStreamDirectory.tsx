@@ -7,6 +7,7 @@ import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import EntityCsvToolbar from "../shared/EntityCsvToolbar";
 import { exportBandsCsv, exportDepartmentsCsv } from "../../utils/entityCsvExport";
 import Toast from "../shared/Toast";
+import { toUserFacingMessage } from "../../utils/userFacingError";
 import ConfirmDialog from "../shared/ConfirmDialog";
 import ModalOverlay, { DialogFooter } from "../shared/ModalOverlay";
 import {
@@ -452,9 +453,11 @@ export default function BandStreamDirectory() {
   return (
     <AdminPageShell className="space-y-6">
       {directoryLoadError ? (
-        <div className="rt-panel-subtle px-4 py-3 text-sm text-amber-900 dark:text-amber-100" role="status">
-          <div className="font-semibold">Directory could not be loaded</div>
-          <p className="mt-1 text-xs whitespace-pre-wrap opacity-90">{directoryLoadError}</p>
+        <div className="rt-panel-subtle px-4 py-3 text-sm text-[rgb(var(--warning))]" role="status">
+          <div className="font-semibold">Couldn’t load bands and departments</div>
+          <p className="mt-1 text-xs opacity-90">
+            {toUserFacingMessage(directoryLoadError, "Please refresh the page or try again in a moment.")}
+          </p>
         </div>
       ) : null}
 

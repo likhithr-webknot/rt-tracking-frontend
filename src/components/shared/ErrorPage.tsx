@@ -2,6 +2,7 @@
 import { motion } from "framer-motion";
 import { Home, ArrowLeft, RotateCcw, Trash2 } from "lucide-react";
 import { clearAuth } from "../../api/auth";
+import { toUserFacingMessage } from "../../utils/userFacingError";
 import CompanyLogo from "./CompanyLogo";
 
 const stagger = {
@@ -26,7 +27,7 @@ export default function ErrorPage({
   error = null,
   onGoHome,
 }) {
-  const errorDetail = error?.message ? String(error.message) : null;
+  const errorDetail = error?.message ? toUserFacingMessage(error.message, "") : null;
 
   return (
     <div className="rt-shell relative min-h-screen w-full flex items-center justify-center p-6 bg-[rgb(var(--bg))] overflow-hidden">

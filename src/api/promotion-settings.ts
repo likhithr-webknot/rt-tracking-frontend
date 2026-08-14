@@ -21,8 +21,8 @@ function extractConfig(raw: unknown): PromotionPathsConfig | null {
 }
 
 export async function fetchPromotionPaths({ signal } = {} as ApiOptions): Promise<PromotionPathsConfig> {
-  const auth = getAuthHeader();
   const path = "/api/v1/settings/promotion-paths";
+  const auth = getAuthHeader();
   const res = await fetch(buildApiUrl(path), {
     signal,
     credentials: "include",
@@ -39,8 +39,8 @@ export async function savePromotionPaths(
   payload: PromotionPathsConfig,
   { signal } = {} as ApiOptions,
 ): Promise<PromotionPathsConfig> {
-  const auth = getAuthHeader();
   const path = "/api/v1/settings/promotion-paths";
+  const auth = getAuthHeader();
   const headers = withCsrfHeaders({
     "Content-Type": "application/json",
     ...(auth ? { Authorization: auth } : {}),

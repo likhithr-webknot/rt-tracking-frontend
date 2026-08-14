@@ -14,6 +14,7 @@ import {
   mergeCatalogWithApiProjects,
 } from "../../utils/projectsCatalog";
 import { loadProjectsCache } from "../../utils/projectsCache";
+import { toUserFacingMessage } from "../../utils/userFacingError";
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 
@@ -48,7 +49,8 @@ export default function ProjectsDirectory() {
         cachedAt: raw?.cachedAt || null,
       };
     },
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const apiProjects = projectsQuery.data?.items ?? [];
@@ -139,10 +141,13 @@ export default function ProjectsDirectory() {
       />
 
       {projectsQuery.isError && !projects.length ? (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-          <div className="font-semibold">Failed to load projects</div>
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-800 dark:text-red-100">
+          <div className="font-semibold">Couldn’t load projects</div>
           <p className="mt-1.5 text-xs sm:text-sm opacity-95">
-            {projectsQuery.error?.message || "Webtrak projects/all was unavailable and no local cache exists."}
+            {toUserFacingMessage(
+              projectsQuery.error?.message,
+              "Please refresh the page or try again in a moment.",
+            )}
           </p>
         </div>
       ) : null}

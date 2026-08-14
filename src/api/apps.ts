@@ -76,6 +76,39 @@ export function resolveExpiresAt({ expiresAtDate = "", expiresInDays = "" } = {}
   return null;
 }
 
+function unwrapListPayload(raw) {
+  const root = raw && typeof raw === "object" ? raw : {};
+  const envelope =
+    root.data && typeof root.data === "object" && !Array.isArray(root.data) ? root.data : root;
+  const list = Array.isArray(envelope.data)
+    ? envelope.data
+    : Array.isArray(envelope.items)
+      ? envelope.items
+      : Array.isArray(root.data)
+        ? root.data
+        : Array.isArray(root.items)
+          ? root.items
+          : Array.isArray(root)
+            ? root
+            : [];
+  return {
+    list,
+    total:
+      Number(
+        envelope.total ??
+          envelope.totalElement ??
+          envelope.totalElements ??
+          root.total ??
+          list.length,
+      ) || 0,
+    page: Number(envelope.page ?? envelope.currentPage ?? root.page ?? 1) || 1,
+    perPage:
+      Number(envelope.per_page ?? envelope.perPage ?? envelope.pageSize ?? root.per_page ?? 20) ||
+      20,
+    hasMore: Boolean(envelope.has_more ?? envelope.hasMore ?? root.has_more ?? root.hasMore),
+  };
+}
+
 export async function listAppKeys({ q = "", page = 1, perPage = 20, signal } = {}) {
   const params = new URLSearchParams();
   if (q) params.set("q", String(q));
@@ -83,22 +116,15 @@ export async function listAppKeys({ q = "", page = 1, perPage = 20, signal } = {
   params.set("per_page", String(perPage));
   const qs = params.toString();
   const raw = await webtrakJson("GET", `/api/v1/admin/api-keys?${qs}`, { signal });
-  const root = raw && typeof raw === "object" ? raw : {};
-  const list = Array.isArray(root.data)
-    ? root.data
-    : Array.isArray(root.items)
-      ? root.items
-      : Array.isArray(root)
-        ? root
-        : [];
+  const parsed = unwrapListPayload(raw);
   return {
-    data: list
+    data: parsed.list
       .map(normalizeAppKey)
       .filter((r) => Number.isFinite(r.id) && String(r.keyPrefix || "").startsWith("wtrt_")),
-    total: Number(root.total ?? list.length) || 0,
-    page: Number(root.page ?? page) || page,
-    perPage: Number(root.per_page ?? root.perPage ?? perPage) || perPage,
-    hasMore: Boolean(root.has_more ?? root.hasMore),
+    total: parsed.total,
+    page: parsed.page,
+    perPage: parsed.perPage,
+    hasMore: parsed.hasMore,
   };
 }
 

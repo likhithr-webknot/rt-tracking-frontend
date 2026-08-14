@@ -15,6 +15,9 @@ import {
 } from "./http";
 import { fetchUser } from "./user";
 import {
+  buildEmployeeRosterUrl,
+  employeeRosterFetchCredentials,
+  getEmployeeRosterAuthHeaders,
   buildWebtrakUrl,
   getWebtrakAuthHeaders,
   resolveWebtrakProfilePhotoUrl,
@@ -22,6 +25,31 @@ import {
   webtrakFetchCredentials,
 } from "./webtrak";
 import { loadTeamListCache, saveTeamListCache } from "../utils/teamListCache";
+import { fetchSupabaseEmployeeRoster, shouldPreferSupabaseRoster } from "./supabase-roster";
+
+function employeeRoleStats(users: unknown[]) {
+  let managerCount = 0;
+  let adminCount = 0;
+  let employeeCount = 0;
+  for (const u of users) {
+    const bucket = resolveRoleStatsBucket(u);
+    if (bucket === "admin") adminCount += 1;
+    else if (bucket === "manager") managerCount += 1;
+    else employeeCount += 1;
+  }
+  return {
+    managerCount,
+    adminCount,
+    employeeCount,
+    bandCount: new Set(
+      users
+        .map((u) =>
+          String((u as { band?: string; level?: string })?.band ?? (u as { level?: string })?.level ?? "").trim(),
+        )
+        .filter(Boolean),
+    ).size,
+  };
+}
 
 export function normalizeEmployees(data) {
   const root = data && typeof data === "object" ? data : {};
@@ -265,6 +293,38 @@ function extractUsersArray(raw) {
   return [];
 }
 
+/** Employee roster — `GET /api/v1/user/onboard` on Webtrak (webknot-dev.in by default). */
+function buildEmployeeListCandidates(page, size, { searchQ = "", typeQ = "", statusQ = "" } = {}) {
+  const onboardParams = new URLSearchParams();
+  onboardParams.set("page", String(page));
+  onboardParams.set("size", String(size));
+  if (searchQ) onboardParams.set("search", searchQ);
+  if (typeQ) onboardParams.set("type", typeQ);
+  if (statusQ) onboardParams.set("onboardingStatus", statusQ);
+
+  return [`/api/v1/user/onboard?${onboardParams.toString()}`];
+}
+
+/** GET employee roster via remote Webtrak (`/__webtrak` → webknot-dev.in). */
+async function fetchEmployeeListPage(
+  path,
+  { signal, headers, fallbackStatuses = [404, 405] }: ApiOptions & {
+    headers?: HeadersInit;
+    fallbackStatuses?: number[];
+  } = {},
+) {
+  const res = await fetch(buildEmployeeRosterUrl(path), {
+    method: "GET",
+    signal,
+    credentials: employeeRosterFetchCredentials(),
+    headers,
+  });
+  if (res.ok) return parseResponse(res, {});
+  const err = await toHttpError(res, { method: "GET", path });
+  if (fallbackStatuses.includes(res.status)) return null;
+  throw err;
+}
+
 export async function fetchEmployees({
   limit = null,
   cursor = null,
@@ -287,20 +347,8 @@ export async function fetchEmployees({
   const typeQ = String(type ?? "").trim();
   const statusQ = String(onboardingStatus ?? "").trim();
 
-  const onboardBase = buildWebtrakUrl("/api/v1/user/onboard");
-
-  const buildOnboardUrl = (page: number, size: number) => {
-    const params = new URLSearchParams();
-    params.set("page", String(page));
-    params.set("size", String(size));
-    if (searchQ) params.set("search", searchQ);
-    if (typeQ) params.set("type", typeQ);
-    if (statusQ) params.set("onboardingStatus", statusQ);
-    return `${onboardBase}?${params.toString()}`;
-  };
-
-  const onboardHeaders = getWebtrakAuthHeaders();
-
+  const onboardBase = buildEmployeeRosterUrl("/api/v1/user/onboard");
+  const onboardHeaders = getEmployeeRosterAuthHeaders();
   const pageSize = Math.min(safeLimit, 500);
   const collected = [];
   let reportedTotal = null;
@@ -313,13 +361,31 @@ export async function fetchEmployees({
     if (remaining <= 0) break;
     const size = Math.min(pageSize, remaining);
     try {
-      const raw = await requestWithFallbacks([buildOnboardUrl(page, size)], {
-        signal,
-        credentials: webtrakFetchCredentials(),
-        headers: onboardHeaders,
-        fallbackStatuses: [404, 405],
-        notFoundMessage: "Onboard users endpoint not found.",
-      });
+      const candidates = buildEmployeeListCandidates(page, size, { searchQ, typeQ, statusQ });
+      let raw = null;
+      let lastListErr = null;
+      for (const candidatePath of candidates) {
+        try {
+          raw = await fetchEmployeeListPage(candidatePath, {
+            signal,
+            headers: onboardHeaders,
+            fallbackStatuses: [404, 405],
+          });
+          if (raw) break;
+        } catch (err) {
+          if (err?.name === "AbortError") throw err;
+          lastListErr = err instanceof Error ? err : new Error(String(err?.message || err || "Employee list failed"));
+          if ([401, 403].includes(Number((lastListErr as { status?: number })?.status))) {
+            throw lastListErr;
+          }
+        }
+      }
+      if (!raw) {
+        throw (
+          lastListErr ||
+          new Error("Employee list endpoint not found.")
+        );
+      }
       usedOnboard = true;
       const batch = extractUsersArray(raw);
       const root = raw && typeof raw === "object" ? raw : {};
@@ -333,7 +399,7 @@ export async function fetchEmployees({
       if (collected.length >= safeLimit) break;
     } catch (err) {
       if (err?.name === "AbortError") throw err;
-      if (!usedOnboard) {
+      if (collected.length === 0) {
         onboardFailed = true;
         onboardError = err instanceof Error ? err : new Error(String(err?.message || err || "Onboard failed"));
       }
@@ -341,28 +407,64 @@ export async function fetchEmployees({
     }
   }
 
-  const roleStats = (users: unknown[]) => {
-    let managerCount = 0;
-    let adminCount = 0;
-    let employeeCount = 0;
-    for (const u of users) {
-      const bucket = resolveRoleStatsBucket(u);
-      if (bucket === "admin") adminCount += 1;
-      else if (bucket === "manager") managerCount += 1;
-      else employeeCount += 1;
-    }
-    return {
-      managerCount,
-      adminCount,
-      employeeCount,
-      bandCount: new Set(
-        users.map((u) => String((u as { band?: string; level?: string })?.band ?? (u as { level?: string })?.level ?? "").trim()).filter(Boolean),
-      ).size,
-    };
-  };
+  const roleStats = employeeRoleStats;
 
-  // Onboard failed: serve last successful Webtrak snapshot (local / Supabase cache).
-  if (onboardFailed || !usedOnboard) {
+  // List fetch failed with no rows: optional Supabase roster, then local cache (never mask 401/403).
+  if ((onboardFailed || !usedOnboard) && collected.length === 0) {
+    const authBlocked = [401, 403].includes(Number((onboardError as { status?: number })?.status));
+
+    if (!authBlocked && shouldPreferSupabaseRoster()) {
+      try {
+        const supabasePage = await fetchSupabaseEmployeeRoster({
+          search: searchQ,
+          limit: safeLimit,
+          offset: safeOffset,
+          signal,
+        });
+        if (supabasePage?.items?.length) {
+          let items = supabasePage.items as unknown[];
+          if (typeQ) {
+            items = items.filter(
+              (u) =>
+                String((u as { type?: string; userType?: string })?.type ?? (u as { userType?: string })?.userType ?? "")
+                  .trim()
+                  .toUpperCase() === typeQ.toUpperCase(),
+            );
+          }
+          if (statusQ) {
+            items = items.filter((u) => {
+              const onboarding = String((u as { onboardingStatus?: string })?.onboardingStatus ?? "").trim().toUpperCase();
+              const status = String((u as { status?: string })?.status ?? "").trim().toUpperCase();
+              if (statusQ.toUpperCase() === "ONBOARDED") {
+                return onboarding === "ONBOARDED" || status === "ACTIVE";
+              }
+              if (statusQ.toUpperCase() === "PENDING") {
+                return onboarding === "PENDING" || status === "ONBOARDING";
+              }
+              return true;
+            });
+          }
+          const total = supabasePage.total ?? items.length;
+          const stats = roleStats(items);
+          return {
+            items,
+            nextCursor: safeOffset + items.length < total ? String(safeOffset + items.length) : null,
+            total,
+            ...stats,
+            fromCache: false,
+            fromSupabase: true,
+          };
+        }
+      } catch (err) {
+        if ((err as { name?: string })?.name === "AbortError") throw err;
+        console.warn("[employees] Supabase roster fallback failed:", err);
+      }
+    }
+
+    if (authBlocked) {
+      throw onboardError;
+    }
+
     const cached = await loadTeamListCache();
     if (cached?.items?.length) {
       const allUsers = cached.items as unknown[];

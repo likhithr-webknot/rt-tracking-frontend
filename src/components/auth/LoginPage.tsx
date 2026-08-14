@@ -1,23 +1,12 @@
 // @ts-nocheck
-import { useCallback, useState } from "react";
-import { Link } from "react-router-dom";
-import {
-  ArrowRight,
-  Loader2,
-  Mail,
-  Shield,
-  Sparkles,
-  Target,
-  Users,
-} from "lucide-react";
-import {
-  completePasswordLogin,
-  getGoogleSignInUrl,
-  seedDevQaUsers,
-} from "../../api/auth";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowRight, Loader2, Shield, Sparkles, Target, Users } from "lucide-react";
+import { getGoogleSignInUrl, seedDevQaUsers } from "../../api/auth";
 import { WEBKNOT_WORK_EMAIL_SUFFIX, webknotEmailHint } from "../../utils/webknotEmail";
 import { QA_DEV_ACCOUNTS, normalizeQaSeedResponse } from "../../utils/qaDevAccounts";
 import CompanyLogo from "../shared/CompanyLogo";
+import ThemeToggle from "../shared/ThemeToggle";
+import Toast from "../shared/Toast";
 
 function GoogleIcon() {
   return (
@@ -31,57 +20,106 @@ function GoogleIcon() {
 }
 
 const FEATURES = [
-  { icon: Target, label: "Monthly goals and reviews in one place" },
-  { icon: Sparkles, label: "Company values with simple scoring" },
-  { icon: Users, label: "Separate spaces for employees, managers, and HR" },
+  { icon: Target, label: "Monthly goals & reviews", detail: "One place for the whole cycle" },
+  { icon: Sparkles, label: "Company values", detail: "Simple, consistent scoring" },
+  { icon: Users, label: "Role-based workspaces", detail: "Employee, manager & HR views" },
 ];
 
+function resolveAuthErrorKey() {
+  if (typeof window === "undefined") return "";
+  const params = new URLSearchParams(window.location.search || "");
+  const fromQuery = String(params.get("error") || "").trim().toLowerCase();
+  if (fromQuery) return fromQuery;
+
+  const segment = window.location.pathname.replace(/^\//, "").split("/").filter(Boolean)[0] || "";
+  const lower = segment.toLowerCase();
+  if (lower.startsWith("error-")) return lower.slice("error-".length);
+  if (lower === "error") return fromQuery || "auth_failed";
+  return "";
+}
+
+function authErrorCopy(key) {
+  if (key === "invalid_domain") {
+    return {
+      title: "Wrong Google account",
+      message: `Please sign in with your Webknot work email (${WEBKNOT_WORK_EMAIL_SUFFIX}).`,
+    };
+  }
+  if (key === "unregistered_user") {
+    return {
+      title: "Account not found",
+      message: "We don't have your profile yet. Ask HR to add you in Webtrak, then try again.",
+    };
+  }
+  if (key === "auth_failed" || key === "oauth_login_cancelled") {
+    return {
+      title: "Sign-in interrupted",
+      message: "Google couldn't complete sign-in. Check your connection and try again.",
+    };
+  }
+  if (key) {
+    return {
+      title: "Sign-in issue",
+      message: "Something went wrong during authentication. Please try again.",
+    };
+  }
+  return null;
+}
+
+function normalizeLoginUrl() {
+  if (typeof window === "undefined") return;
+  const key = resolveAuthErrorKey();
+  const path = window.location.pathname;
+  if (key && path !== "/" && path !== "") {
+    window.history.replaceState({}, "", `/?error=${encodeURIComponent(key)}`);
+  } else if (key && path === "/" && window.location.search.includes("error=")) {
+    return;
+  } else if (!key && (path.startsWith("/error") || window.location.search.includes("error="))) {
+    window.history.replaceState({}, "", "/");
+  }
+}
+
 export default function LoginPage() {
-  const googleSignInUrl = getGoogleSignInUrl() || "/api/v1/google-signin";
+  const googleSignInUrl = getGoogleSignInUrl();
   const [oauthBusy, setOauthBusy] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [passwordBusy, setPasswordBusy] = useState(false);
-  const [formError, setFormError] = useState("");
   const [seedBusy, setSeedBusy] = useState(false);
   const [seedMessage, setSeedMessage] = useState("");
-  const [seededAccounts, setSeededAccounts] = useState(QA_DEV_ACCOUNTS);
+  const [toast, setToast] = useState(null);
+  const toastBootstrapped = useRef(false);
 
-  const authErrorKey =
-    typeof window === "undefined"
-      ? ""
-      : String(new URLSearchParams(window.location.search || "").get("error") || "")
-          .trim()
-          .toLowerCase();
-
-  const authErrorMessage =
-    authErrorKey === "invalid_domain"
-      ? `Please use your Webknot Google account (${WEBKNOT_WORK_EMAIL_SUFFIX}).`
-      : authErrorKey === "unregistered_user"
-        ? "We don't have your account yet. Ask HR to add you, then try again."
-        : authErrorKey === "auth_failed"
-          ? "Sign-in didn't work. Please try again in a moment."
-          : "";
-
-  const onGoogleClick = useCallback(() => {
-    setOauthBusy(true);
+  const dismissToast = useCallback(() => {
+    setToast(null);
+    if (typeof window !== "undefined" && window.location.search.includes("error=")) {
+      window.history.replaceState({}, "", "/");
+    }
   }, []);
 
-  const onPasswordSubmit = useCallback(
-    async (event) => {
-      event.preventDefault();
-      setFormError("");
-      setPasswordBusy(true);
-      try {
-        await completePasswordLogin(email, password);
-      } catch (err) {
-        setFormError(err?.message || "Sign-in failed.");
-      } finally {
-        setPasswordBusy(false);
-      }
-    },
-    [email, password],
-  );
+  useEffect(() => {
+    normalizeLoginUrl();
+    if (toastBootstrapped.current) return;
+    toastBootstrapped.current = true;
+
+    const key = resolveAuthErrorKey();
+    const copy = authErrorCopy(key);
+    if (copy) {
+      setToast({ title: copy.title, message: copy.message, tone: "error", ts: Date.now() });
+      return;
+    }
+
+    if (!googleSignInUrl) {
+      setToast({
+        title: "Google sign-in not configured",
+        message: "Add VITE_GOOGLE_CLIENT_ID to .env.local and restart the dev server.",
+        tone: "error",
+        ts: Date.now(),
+      });
+    }
+  }, [googleSignInUrl]);
+
+  const onGoogleClick = useCallback(() => {
+    if (!googleSignInUrl) return;
+    setOauthBusy(true);
+  }, [googleSignInUrl]);
 
   const onSeedQa = useCallback(async () => {
     setSeedMessage("");
@@ -89,191 +127,164 @@ export default function LoginPage() {
     try {
       const res = await seedDevQaUsers();
       const accounts = normalizeQaSeedResponse(res);
-      if (accounts.length) setSeededAccounts(accounts);
-      setSeedMessage("QA test users seeded (qa.* only). Super Admin accounts are not modified by this app.");
+      setToast({
+        title: "QA users seeded",
+        message: `${accounts.length || QA_DEV_ACCOUNTS.length} dev accounts ready on the backend.`,
+        tone: "success",
+        ts: Date.now(),
+      });
     } catch (err) {
-      setSeedMessage(err?.message || "Could not seed QA users. Is Webtrak running with SPRING_PROFILES_ACTIVE=dev?");
+      setToast({
+        title: "Seed failed",
+        message: err?.message || "Could not seed QA users.",
+        tone: "error",
+        ts: Date.now(),
+      });
     } finally {
       setSeedBusy(false);
     }
   }, []);
 
-  const displayError = formError || authErrorMessage;
-
   return (
-    <div className="pulse-login">
-      <div className="pulse-login-shell">
-        <section className="pulse-login-intro">
-          <div className="flex items-center gap-3">
-            <CompanyLogo size={44} alt="Webknot" className="h-11 w-11" />
-            <div>
-              <p className="text-base font-bold tracking-tight text-[rgb(var(--text))]">Webknot Pulse</p>
-              <p className="text-sm text-[rgb(var(--muted))]">Reviews, goals, and team growth</p>
-            </div>
-          </div>
+    <div className="pulse-login-v2">
+      <Toast toast={toast} onDismiss={dismissToast} durationMs={toast?.tone === "error" ? 6000 : 3200} />
 
-          <div className="mt-10 space-y-4">
-            <p className="pulse-eyebrow">Welcome</p>
-            <h1 className="pulse-title max-w-lg">Simple monthly reviews — no spreadsheets.</h1>
-            <p className="pulse-lead max-w-lg">
-              Employees submit reviews. Managers score their teams. HR oversees the cycle — all in one
-              place.
-            </p>
-          </div>
+      <div className="pulse-login-v2__layout">
+        <aside className="pulse-login-v2__brand" aria-label="Webknot Pulse overview">
+          <div className="pulse-login-v2__brand-glow" aria-hidden />
+          <div className="pulse-login-v2__brand-grid" aria-hidden />
 
-          <ul className="mt-8 space-y-3">
-            {FEATURES.map(({ icon: Icon, label }) => (
-              <li key={label} className="pulse-login-feature">
-                <span className="pulse-section-icon bg-[rgb(var(--accent-soft))] text-[rgb(var(--accent))]">
-                  <Icon size={18} />
-                </span>
-                <span className="text-[15px] font-medium text-[rgb(var(--text))]">{label}</span>
-              </li>
-            ))}
-          </ul>
-
-          <p className="mt-auto hidden pt-10 text-sm text-[rgb(var(--muted))] lg:block">
-            &copy; {new Date().getFullYear()} Webknot Technologies
-          </p>
-        </section>
-
-        <section className="pulse-login-panel-wrap">
-          <div className="pulse-surface pulse-login-card">
-            <div className="lg:hidden mb-6 flex justify-center">
-              <CompanyLogo size={56} alt="Webknot" className="h-14 w-14" />
-            </div>
-
-            <p className="pulse-eyebrow">Sign in</p>
-            <h2 className="mt-2 pulse-title text-[1.65rem] sm:text-[1.85rem]">Continue to Pulse</h2>
-            <p className="mt-2 pulse-lead">{webknotEmailHint()}</p>
-
-            {displayError ? (
-              <div role="alert" className="pulse-callout pulse-callout--warn mt-6">
-                {displayError}
+          <div className="pulse-login-v2__brand-inner">
+            <header className="flex items-center gap-3">
+              <div className="pulse-login-v2__brand-mark">
+                <CompanyLogo size={28} alt="" className="h-7 w-7" />
               </div>
-            ) : null}
-
-            <form className="mt-6 space-y-4" onSubmit={onPasswordSubmit}>
-              <label className="block">
-                <span className="text-sm font-semibold text-[rgb(var(--text))]">Work email</span>
-                <input
-                  type="email"
-                  autoComplete="username"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="rt-input mt-1.5 w-full"
-                  placeholder={`you${WEBKNOT_WORK_EMAIL_SUFFIX}`}
-                  required
-                />
-              </label>
-              <label className="block">
-                <span className="text-sm font-semibold text-[rgb(var(--text))]">Password</span>
-                <input
-                  type="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="rt-input mt-1.5 w-full"
-                  required
-                />
-              </label>
-              <div className="flex items-center justify-between gap-2 text-sm">
-                <Link to="/auth/forgot-password" className="font-semibold text-[rgb(var(--accent))] hover:underline">
-                  Forgot password?
-                </Link>
+              <div className="min-w-0">
+                <p className="truncate text-lg font-bold tracking-tight text-white">Webknot Pulse</p>
+                <p className="truncate text-sm text-blue-100/85">Reviews, goals & team growth</p>
               </div>
-              <button
-                type="submit"
-                disabled={passwordBusy}
-                className="rt-btn-primary flex w-full items-center justify-center gap-2 py-3"
-              >
-                {passwordBusy ? (
-                  <>
-                    <Loader2 size={20} className="animate-spin" />
-                    Signing in…
-                  </>
-                ) : (
-                  <>
-                    <Mail size={18} />
-                    Sign in with password
-                  </>
-                )}
-              </button>
-            </form>
+            </header>
 
-            <div className="pulse-login-divider my-7">
-              <span>or</span>
-            </div>
-
-            <a
-              href={googleSignInUrl}
-              onClick={onGoogleClick}
-              className="pulse-login-oauth group"
-              aria-busy={oauthBusy}
-            >
-              {oauthBusy ? (
-                <>
-                  <Loader2 size={22} className="animate-spin text-[rgb(var(--accent))]" />
-                  <span className="flex-1 text-center font-semibold">Opening Google…</span>
-                </>
-              ) : (
-                <>
-                  <GoogleIcon />
-                  <span className="flex-1 text-center font-semibold">Continue with Google</span>
-                  <ArrowRight
-                    size={20}
-                    className="opacity-50 transition-transform group-hover:translate-x-0.5 group-hover:opacity-80"
-                  />
-                </>
-              )}
-            </a>
-
-            <div className="pulse-callout pulse-callout--info mt-6">
-              <Shield size={20} className="mt-0.5 shrink-0 text-[rgb(var(--accent))]" />
-              <p className="text-[14px] leading-relaxed">
-                Google uses your <strong className="font-semibold text-[rgb(var(--text))]">{WEBKNOT_WORK_EMAIL_SUFFIX}</strong>{" "}
-                account. Password login uses a secure hash stored on the server.
+            <div className="mt-8 space-y-4 sm:mt-10 lg:mt-14">
+              <span className="pulse-login-v2__eyebrow">Welcome back</span>
+              <h1 className="pulse-login-v2__headline">
+                Monthly reviews without the spreadsheet chaos.
+              </h1>
+              <p className="pulse-login-v2__subcopy max-w-lg">
+                Employees submit, managers score, HR oversees — one calm workspace for your whole
+                review cycle.
               </p>
             </div>
 
-            {import.meta.env?.DEV && String(import.meta.env?.VITE_ENABLE_DEV_QA ?? "") === "true" ? (
-              <div className="pulse-surface-muted mt-6 text-[13px] leading-relaxed text-[rgb(var(--muted))]">
-                <p className="font-semibold text-[rgb(var(--text))]">Dev QA accounts</p>
-                <p className="mt-1 text-[12px]">
-                  Run <code className="text-[11px]">npm run seed:minimal</code> for directory rows + QA Demo Project.
-                </p>
-                <div className="mt-3 overflow-x-auto rounded-lg border border-[rgb(var(--border))]">
-                  <table className="w-full min-w-[20rem] text-left text-[12px]">
-                    <thead className="bg-[rgb(var(--surface-2))] text-[10px] uppercase tracking-wider text-[rgb(var(--muted))]">
-                      <tr>
-                        <th className="px-3 py-2 font-semibold">Role</th>
-                        <th className="px-3 py-2 font-semibold">Email</th>
-                        <th className="px-3 py-2 font-semibold">Password</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {seededAccounts.map((row) => (
-                        <tr key={row.email} className="border-t border-[rgb(var(--border))]">
-                          <td className="px-3 py-2 text-[rgb(var(--text))]">{row.role}</td>
-                          <td className="px-3 py-2 font-mono text-[11px] break-all">{row.email}</td>
-                          <td className="px-3 py-2 font-mono text-[11px] text-[rgb(var(--text))]">{row.password}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <button type="button" onClick={onSeedQa} disabled={seedBusy} className="rt-btn-secondary mt-3 w-full text-sm py-2.5">
-                  {seedBusy ? "Seeding…" : "Seed QA users on backend"}
-                </button>
-                {seedMessage ? <p className="mt-2 text-[rgb(var(--text))]">{seedMessage}</p> : null}
-              </div>
-            ) : null}
+            <ul className="mt-8 hidden space-y-3 md:block lg:mt-10">
+              {FEATURES.map(({ icon: Icon, label, detail }) => (
+                <li key={label} className="pulse-login-v2__feature">
+                  <span className="pulse-login-v2__feature-icon">
+                    <Icon size={18} strokeWidth={2} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[15px] font-semibold text-white">{label}</span>
+                    <span className="mt-0.5 block text-[13px] text-blue-100/75">{detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+            <p className="pulse-login-v2__brand-footer hidden md:block">
+              &copy; {new Date().getFullYear()} Webknot Technologies
+            </p>
+          </div>
+        </aside>
+
+        <main className="pulse-login-v2__panel">
+          <div className="pulse-login-v2__panel-toolbar">
+            <ThemeToggle compact />
           </div>
 
-          <p className="mt-6 text-center text-sm text-[rgb(var(--muted))] lg:hidden">
-            &copy; {new Date().getFullYear()} Webknot Technologies
-          </p>
-        </section>
+          <div className="pulse-login-v2__panel-body">
+            <div className="pulse-login-v2__card">
+              <div className="pulse-login-v2__card-header">
+                <div className="pulse-login-v2__card-logo md:hidden">
+                  <CompanyLogo size={32} alt="Webknot" className="h-8 w-8" />
+                </div>
+                <p className="pulse-login-v2__kicker">Sign in</p>
+                <h2 className="pulse-login-v2__card-title">Continue to Pulse</h2>
+                <p className="pulse-login-v2__card-lead">{webknotEmailHint()}</p>
+              </div>
+
+              {googleSignInUrl ? (
+                <a
+                  href={googleSignInUrl}
+                  onClick={onGoogleClick}
+                  className="pulse-login-v2__google group"
+                  aria-busy={oauthBusy}
+                >
+                  {oauthBusy ? (
+                    <>
+                      <Loader2 size={22} className="animate-spin text-[rgb(var(--accent))]" />
+                      <span className="flex-1 text-center text-[15px] font-semibold">Opening Google…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="pulse-login-v2__google-icon">
+                        <GoogleIcon />
+                      </span>
+                      <span className="flex-1 text-center text-[15px] font-semibold text-[rgb(var(--text))]">
+                        Continue with Google
+                      </span>
+                      <ArrowRight
+                        size={18}
+                        className="text-[rgb(var(--muted))] transition-transform group-hover:translate-x-0.5 group-hover:text-[rgb(var(--accent))]"
+                      />
+                    </>
+                  )}
+                </a>
+              ) : (
+                <button type="button" disabled className="pulse-login-v2__google opacity-60 cursor-not-allowed">
+                  <span className="pulse-login-v2__google-icon">
+                    <GoogleIcon />
+                  </span>
+                  <span className="flex-1 text-center text-[15px] font-semibold text-[rgb(var(--muted))]">
+                    Google sign-in unavailable
+                  </span>
+                </button>
+              )}
+
+              <div className="pulse-login-v2__notice">
+                <Shield size={18} className="mt-0.5 shrink-0 text-[rgb(var(--accent))]" strokeWidth={2} />
+                <p>
+                  Use your{" "}
+                  <strong className="font-semibold text-[rgb(var(--text))]">{WEBKNOT_WORK_EMAIL_SUFFIX}</strong>{" "}
+                  Google account. Password login is disabled.
+                </p>
+              </div>
+
+              <ul className="mt-5 flex flex-wrap gap-2 md:hidden">
+                {FEATURES.map(({ icon: Icon, label }) => (
+                  <li key={label} className="pulse-login-v2__chip">
+                    <Icon size={13} className="text-[rgb(var(--accent))]" />
+                    {label}
+                  </li>
+                ))}
+              </ul>
+
+              {import.meta.env?.DEV && String(import.meta.env?.VITE_ENABLE_DEV_QA ?? "") === "true" ? (
+                <details className="pulse-login-v2__dev mt-5">
+                  <summary>Dev: QA seed</summary>
+                  <p className="mt-2">Run <code>npm run seed:minimal</code> for demo data.</p>
+                  <button type="button" onClick={onSeedQa} disabled={seedBusy} className="rt-btn-secondary mt-3 w-full py-2 text-sm">
+                    {seedBusy ? "Seeding…" : "Seed QA users on backend"}
+                  </button>
+                  {seedMessage ? <p className="mt-2 text-[rgb(var(--text))]">{seedMessage}</p> : null}
+                </details>
+              ) : null}
+            </div>
+
+            <p className="pulse-login-v2__mobile-footer md:hidden">
+              &copy; {new Date().getFullYear()} Webknot Technologies
+            </p>
+          </div>
+        </main>
       </div>
     </div>
   );

@@ -23,10 +23,18 @@ export function useEmployees(params: EmployeesListParams = {}) {
   return useQuery({
     queryKey: queryKeys.employees.list(params as Record<string, unknown>),
     queryFn: async ({ signal }) => {
-      const raw = await fetchEmployees({ ...params, signal });
+      const { page = 0, size = 50, search, band, type, status } = params;
+      const raw = await fetchEmployees({
+        limit: size,
+        cursor: page * size,
+        search: search ?? undefined,
+        type: type ?? band ?? undefined,
+        onboardingStatus: status ?? undefined,
+        signal,
+      });
       return {
         ...raw,
-        items: normalizeEmployees(raw),
+        items: normalizeEmployees({ items: raw.items ?? [] }),
       };
     },
     staleTime: 30_000,

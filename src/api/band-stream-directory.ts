@@ -411,7 +411,6 @@ function resolveNextListCursor(raw, { resolvedPage, itemsLength, limit }) {
 
 export async function fetchBands(options: DirectoryListOptions = {}) {
   const { search = null, page = 0, limit = null, cursor = null, signal } = options || {};
-  const auth = getAuthHeader();
 
   const resolvedPage =
     cursor != null && cursor !== ""
@@ -432,7 +431,10 @@ export async function fetchBands(options: DirectoryListOptions = {}) {
       signal,
       credentials: "include",
       cache: "no-store",
-      headers: auth ? { Authorization: auth } : undefined,
+      headers: (() => {
+        const auth = getAuthHeader();
+        return auth ? { Authorization: auth } : undefined;
+      })(),
     });
     if (res.ok) {
       const raw = await res.json().catch(() => ({}));
@@ -482,7 +484,6 @@ export async function fetchBandById(id: string | number | null | undefined, opti
 
 export async function fetchStreams(options: FetchStreamsOptions = {}) {
   const { activeOnly = null, search = null, page = 0, limit = null, cursor = null, signal } = options || {};
-  const auth = getAuthHeader();
 
   const resolvedPage =
     cursor != null && cursor !== ""
@@ -507,7 +508,10 @@ export async function fetchStreams(options: FetchStreamsOptions = {}) {
     const res = await fetch(buildApiUrl(endpoint), {
       signal,
       credentials: "include",
-      headers: auth ? { Authorization: auth } : undefined,
+      headers: (() => {
+        const auth = getAuthHeader();
+        return auth ? { Authorization: auth } : undefined;
+      })(),
     });
     if (res.ok) {
       const raw = await res.json().catch(() => ({}));
