@@ -746,25 +746,17 @@ export function shouldUseFrontendGoogleOAuth() {
   return isLocalDevFrontendHost();
 }
 
-function frontendUrlFromEnv() {
-  return String(import.meta.env.VITE_FRONTEND_URL ?? "").trim().replace(/\/+$/, "");
-}
-
 export function getFrontendOAuthRedirectUri() {
   if (typeof window !== "undefined" && window.location?.origin) {
     return `${window.location.origin}/auth/callback`;
   }
 
-  const configured = frontendUrlFromEnv();
+  const configured = String(import.meta.env.VITE_FRONTEND_URL ?? "").trim().replace(/\/+$/, "");
   if (configured) {
     return `${configured}/auth/callback`;
   }
 
-  if (import.meta.env.DEV) {
-    return "http://localhost:3000/auth/callback";
-  }
-
-  return "/auth/callback";
+  return "";
 }
 
 export function buildFrontendGoogleOAuthUrl() {

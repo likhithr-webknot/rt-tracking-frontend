@@ -80,7 +80,7 @@ function normalizeLoginUrl() {
 }
 
 export default function LoginPage() {
-  const googleSignInUrl = getGoogleSignInUrl();
+  const [googleSignInUrl, setGoogleSignInUrl] = useState("");
   const [oauthBusy, setOauthBusy] = useState(false);
   const [seedBusy, setSeedBusy] = useState(false);
   const [seedMessage, setSeedMessage] = useState("");
@@ -96,6 +96,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     normalizeLoginUrl();
+    setGoogleSignInUrl(getGoogleSignInUrl());
     if (toastBootstrapped.current) return;
     toastBootstrapped.current = true;
 
