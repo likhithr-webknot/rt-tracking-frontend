@@ -1,6 +1,38 @@
 import { coerceDisplayString } from "../utils/coerceDisplayString";
 import { z } from "zod";
-import { buildApiUrl, getCookieValue, readError, safeJsonParse, withCsrfHeaders } from "./http";
+import type { ApiOptions } from "../types/api-options";
+import { buildApiUrl, getCookieValue, parseResponse, readError, safeJsonParse, withCsrfHeaders } from "./http";
+
+type AuthError = Error & { code?: string; status?: number };
+type ApiRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): ApiRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as ApiRecord) : {};
+}
+
+function readApiField(value: unknown, ...keys: string[]) {
+  const obj = asRecord(value);
+  for (const key of keys) {
+    const raw = obj[key];
+    if (raw == null) continue;
+    const text = String(raw).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function unwrapApiData(payload: unknown) {
+  const root = asRecord(payload);
+  const data = root.data;
+  return data != null && typeof data === "object" && !Array.isArray(data) ? (data as ApiRecord) : root;
+}
+
+function createAuthError(message: string, { code, status }: { code?: string; status?: number } = {}) {
+  const err = new Error(message) as AuthError;
+  if (code) err.code = code;
+  if (typeof status === "number") err.status = status;
+  return err;
+}
 const LEGACY_AUTH_STORAGE_KEY = "rt_tracking_auth_v1";
 const SESSION_STORAGE_KEY = "rt_tracking_session_v1";
 const MANUAL_LOGOUT_STORAGE_KEY = "rt_tracking_manual_logout_v1";
@@ -591,10 +623,10 @@ export function clearAuth() {
 
 /** Session established by password/OAuth login (survives stale bootstrap). */
 export function hasRecoverableSession() {
+  if (getAuthHeader()) return true;
   const session = getAuth();
   const email = String(session?.email ?? "").trim();
-  if (!email) return false;
-  return Boolean(session?.accessToken || getAuthHeader());
+  return Boolean(email && session?.accessToken);
 }
 
 export function markManualLogout() {
@@ -641,7 +673,7 @@ export function getAuthHeader() {
   const type = String(auth?.tokenType ?? "Bearer").trim();
 
   // Support sending raw token (no scheme), e.g. tokenType="".
-  if (!type || type.toLowerCase() === "raw" || type.toLowerCase() === "none") return String(auth.accessToken);
+  if (!type || type.toLowerCase() === "raw" || type.toLowerCase() === "none") return String(token);
 
   return `${type} ${token}`;
 }
@@ -747,18 +779,11 @@ export function shouldUseFrontendGoogleOAuth() {
 }
 
 export function getFrontendOAuthRedirectUri() {
-  const configured = String(import.meta.env.VITE_FRONTEND_URL ?? "").trim().replace(/\/+$/, "");
-
-  // Production bundles: always use the public URL baked in at build time
-  // (Docker: --build-arg VITE_FRONTEND_URL=https://rtportal.webknot-dev.in).
-  if (configured && import.meta.env.PROD) {
-    return `${configured}/auth/callback`;
-  }
-
   if (typeof window !== "undefined" && window.location?.origin) {
     return `${window.location.origin}/auth/callback`;
   }
 
+  const configured = String(import.meta.env.VITE_FRONTEND_URL ?? "").trim().replace(/\/+$/, "");
   if (configured) {
     return `${configured}/auth/callback`;
   }
@@ -801,16 +826,12 @@ function mapGoogleAuthError(message: unknown) {
   const msg = String(message ?? "").trim();
   const lower = msg.toLowerCase();
   if (lower.includes("not registered") || lower.includes("unregistered")) {
-    const err = new Error(msg || "User not registered.");
-    err.code = "unregistered_user";
-    return err;
+    return createAuthError(msg || "User not registered.", { code: "unregistered_user" });
   }
   if (lower.includes("invalid_domain") || lower.includes("webknot")) {
-    const err = new Error(msg);
-    err.code = "invalid_domain";
-    return err;
+    return createAuthError(msg, { code: "invalid_domain" });
   }
-  return new Error(msg || "Google sign-in failed.");
+  return createAuthError(msg || "Google sign-in failed.");
 }
 
 export async function exchangeGoogleAuthCode(code, redirectUri, { signal } = {} as ApiOptions) {
@@ -827,41 +848,42 @@ export async function exchangeGoogleAuthCode(code, redirectUri, { signal } = {} 
       redirect_uri: String(redirectUri ?? "").trim(),
     }),
   });
-  const payload = await safeJsonParse(res);
+  const payload = await parseResponse(res, {});
   if (!res.ok) {
-    const err = mapGoogleAuthError(payload?.message ?? payload?.error ?? (await readError(res)));
+    const err = mapGoogleAuthError(
+      readApiField(payload, "message", "error") || (await readError(res)),
+    );
     err.status = res.status;
     throw err;
   }
-  return payload?.data != null && typeof payload.data === "object" ? payload.data : payload;
+  return unwrapApiData(payload);
 }
 
 export async function completeGoogleAuthCode(code, { signal } = {} as ApiOptions) {
   clearManualLogoutMark();
   const redirectUri = getFrontendOAuthRedirectUri();
-  const data = await exchangeGoogleAuthCode(code, redirectUri, { signal });
+  const data = asRecord(await exchangeGoogleAuthCode(code, redirectUri, { signal }));
 
   const token =
-    String(data?.accessToken ?? data?.access_token ?? data?.token ?? "").trim() ||
+    readApiField(data, "accessToken", "access_token", "token") ||
     getCookieValue("accessToken") ||
     getCookieValue("access_token") ||
     "";
 
-  const emailNorm = String(data?.email ?? "").trim().toLowerCase();
-  const loginPayload = data && typeof data === "object" ? data : {};
+  const emailNorm = readApiField(data, "email").toLowerCase();
 
   setAuth({
-    ...loginPayload,
+    ...data,
     email: emailNorm,
     accessToken: token || null,
     tokenType: "Bearer",
-    employeeName: String(loginPayload.name ?? loginPayload.employeeName ?? "").trim() || undefined,
+    employeeName: readApiField(data, "name", "employeeName") || undefined,
     role:
-      explicitRoleFromObject(loginPayload) ||
-      extractRole(loginPayload) ||
-      bestRole(loginPayload.roles) ||
+      explicitRoleFromObject(data) ||
+      extractRole(data) ||
+      bestRole(data.roles) ||
       undefined,
-    roles: loginPayload.roles,
+    roles: data.roles,
   });
 
   try {
@@ -892,15 +914,15 @@ export async function seedDevQaUsers({ signal } = {} as ApiOptions) {
     credentials: "include",
     headers: withCsrfHeaders({ Accept: "application/json" }),
   });
-  const payload = await safeJsonParse(res);
+  const payload = await parseResponse(res, {});
   if (!res.ok) {
-    const err = new Error(
-      String(payload?.message ?? (await readError(res)) ?? "Could not seed QA users"),
+    throw createAuthError(
+      readApiField(payload, "message") || (await readError(res)) || "Could not seed QA users",
+      { status: res.status },
     );
-    err.status = res.status;
-    throw err;
   }
-  return payload?.data != null ? { ...payload, data: payload.data } : payload;
+  const data = asRecord(payload).data;
+  return data != null ? { ...asRecord(payload), data } : payload;
 }
 
 /** @deprecated Password login removed — use Google sign-in only. */
@@ -941,8 +963,7 @@ export async function logout({ signal } = {} as ApiOptions) {
     });
     if (res.ok || res.status === 401) return true;
     if (res.status === 404 || res.status === 405) continue;
-    lastErr = new Error(await readError(res));
-    lastErr.status = res.status;
+    lastErr = createAuthError(await readError(res), { status: res.status });
     break;
   }
 

@@ -17,8 +17,10 @@ function asBearer(token: string) {
   return /^bearer\s+/i.test(token) ? token : `Bearer ${token}`;
 }
 
-/** True when using remote Webtrak + API key instead of logged-in session. */
+/** True when using remote Webtrak + API key instead of logged-in session (dev only). */
 export function useWebtrakThirdPartyApi() {
+  if (import.meta.env.PROD) return false;
+
   const apiKey = String(
     import.meta.env?.WEBTRAK_API_KEY ?? import.meta.env?.VITE_WEBTRAK_API_KEY ?? "",
   ).trim();

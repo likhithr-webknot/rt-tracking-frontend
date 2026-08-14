@@ -288,6 +288,7 @@ export default function App() {
           setAuth({
             ...existing,
             token: callbackToken,
+            accessToken: callbackToken,
             email: email || existing.email,
             employeeName:
               existing.employeeName ||

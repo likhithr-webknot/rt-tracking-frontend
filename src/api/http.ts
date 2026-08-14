@@ -205,21 +205,13 @@ export async function parseResponse(res: Response, fallback?: unknown) {
 }
 
 export function getApiBaseUrl() {
-  const rawEnv = (import.meta?.env?.VITE_API_BASE_URL ?? "").toString().trim();
-  if (rawEnv) {
-    const normalized = rawEnv.endsWith("/") ? rawEnv.slice(0, -1) : rawEnv;
-    return normalizeBase(normalized);
-  }
-
   const runtime = getAppSettings()?.apiBaseUrl;
   const runtimeBase = String(runtime ?? "").trim();
   if (runtimeBase) {
     const normalized = runtimeBase.endsWith("/") ? runtimeBase.slice(0, -1) : runtimeBase;
     const base = normalizeBase(normalized);
     if (import.meta.env.DEV && base) {
-      const proxy = String(
-        import.meta.env?.VITE_API_DEV_PROXY ?? "https://rtportal.webknot-dev.in"
-      ).trim();
+      const proxy = String(import.meta.env?.VITE_API_DEV_PROXY ?? "http://localhost:8080").trim();
       try {
         if (new URL(base).origin === new URL(proxy).origin) return "";
       } catch {
@@ -227,6 +219,12 @@ export function getApiBaseUrl() {
       }
     }
     return base;
+  }
+
+  const rawEnv = (import.meta?.env?.VITE_API_BASE_URL ?? "").toString().trim();
+  if (rawEnv) {
+    const normalized = rawEnv.endsWith("/") ? rawEnv.slice(0, -1) : rawEnv;
+    return normalizeBase(normalized);
   }
 
   return "";
