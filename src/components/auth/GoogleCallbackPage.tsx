@@ -5,6 +5,8 @@ import {
   fetchMe,
   clearAuth,
   consumeOAuthTokenFromUrl,
+  completeGoogleAuthCode,
+  stripOAuthParamsFromUrl,
   decodeJwtPayload,
   extractEmailFromSources,
   getAuth,
@@ -41,6 +43,18 @@ export default function GoogleCallbackPage() {
         if (callbackError) {
           clearAuth();
           navigate(`/?error=${encodeURIComponent(callbackError)}`, { replace: true });
+          return;
+        }
+
+        const authCode =
+          getCallbackParam("code") ||
+          String(searchParams.get("code") || "").trim();
+
+        if (authCode) {
+          await completeGoogleAuthCode(authCode);
+          if (cancelled) return;
+          stripOAuthParamsFromUrl();
+          navigate("/", { replace: true });
           return;
         }
 

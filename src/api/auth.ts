@@ -734,8 +734,106 @@ const OAUTH_BYPASS_PATH_PREFIX = "/oauth/bypass";
 const LOGOUT_PATH_CANDIDATES = ["/api/v1/auth/logout", "/auth/logout", "/logout"];
 const ME_PATH_CANDIDATES = ["/api/v1/profile", "/auth/me", "/api/v1/auth/me", "/api/auth/me"];
 
+function isLocalDevFrontendHost() {
+  if (typeof window === "undefined") return import.meta.env.DEV;
+  const host = window.location.hostname.toLowerCase();
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+/** Spring OAuth sets HttpOnly cookies on :8080; SPA on :3000 needs code exchange + JWT in storage. */
+export function shouldUseFrontendGoogleOAuth() {
+  return isLocalDevFrontendHost();
+}
+
+export function getFrontendOAuthRedirectUri() {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin}/auth/callback`;
+  }
+  return "http://localhost:3000/auth/callback";
+}
+
+export function buildFrontendGoogleOAuthUrl() {
+  const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
+  if (!clientId) return "";
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: getFrontendOAuthRedirectUri(),
+    response_type: "code",
+    scope: "openid email profile",
+    prompt: "consent",
+    access_type: "offline",
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
 export function getGoogleSignInUrl() {
+  if (shouldUseFrontendGoogleOAuth()) {
+    const spaUrl = buildFrontendGoogleOAuthUrl();
+    if (spaUrl) return spaUrl;
+  }
   return buildApiUrl(GOOGLE_SIGNIN_PATH);
+}
+
+export async function exchangeGoogleAuthCode(code, redirectUri, { signal } = {} as ApiOptions) {
+  const res = await fetch(buildApiUrl("/api/v1/auth/google/exchange"), {
+    method: "POST",
+    signal,
+    credentials: "include",
+    headers: withCsrfHeaders({
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      code: String(code ?? "").trim(),
+      redirect_uri: String(redirectUri ?? "").trim(),
+    }),
+  });
+  const payload = await safeJsonParse(res);
+  if (!res.ok) {
+    const err = new Error(
+      String(payload?.message ?? payload?.error ?? (await readError(res)) ?? "Google sign-in failed"),
+    );
+    err.status = res.status;
+    throw err;
+  }
+  return payload?.data != null && typeof payload.data === "object" ? payload.data : payload;
+}
+
+export async function completeGoogleAuthCode(code, { signal } = {} as ApiOptions) {
+  clearManualLogoutMark();
+  const redirectUri = getFrontendOAuthRedirectUri();
+  const data = await exchangeGoogleAuthCode(code, redirectUri, { signal });
+
+  const token =
+    String(data?.accessToken ?? data?.access_token ?? data?.token ?? "").trim() ||
+    getCookieValue("accessToken") ||
+    getCookieValue("access_token") ||
+    "";
+
+  const emailNorm = String(data?.email ?? "").trim().toLowerCase();
+  const loginPayload = data && typeof data === "object" ? data : {};
+
+  setAuth({
+    ...loginPayload,
+    email: emailNorm,
+    accessToken: token || null,
+    tokenType: "Bearer",
+    role:
+      explicitRoleFromObject(loginPayload) ||
+      extractRole(loginPayload) ||
+      undefined,
+    roles: loginPayload.roles,
+  });
+
+  try {
+    const me = await fetchMe({ signal });
+    if (me) setAuth(me);
+  } catch {
+    void 0;
+  }
+
+  notifyAuthChanged();
+  return getAuth();
 }
 
 export function getOAuthBypassUrl(email) {

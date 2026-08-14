@@ -135,10 +135,34 @@ Preview also listens on `0.0.0.0:4173` by default. Set `VITE_API_BASE_URL` to yo
 
 | Problem | Fix |
 |---------|-----|
+| Data in Supabase but empty/wrong in app | Webtrak reads **its own Postgres**, not Supabase directly. Point `webtrak/.env` `DATASOURCE_URL` at your Supabase **database connection string** (Settings → Database → URI), then restart `./gradlew bootRun`. |
+| Google sign-in then blank login / no profile | Use frontend OAuth: add `http://localhost:3000/auth/callback` to Google Cloud **Authorized redirect URIs**. Local dev uses code exchange (not `:8080` cookies). |
 | Login cookies not kept | Backend `.env`: `JWT_COOKIE_SECURE=false` |
 | 502 / proxy errors | Start Webtrak on port 8080; check `VITE_API_DEV_PROXY` |
 | KPIs empty for employee | Band + department must match KPI definitions (see Admin → KPI registry) |
 | `npm run setup:check` fails backend | Run `./gradlew bootRun` in `webtrak` first |
+
+### Using the shared Supabase database
+
+If your team roster lives in Supabase (Table Editor → `users`, ~200 rows):
+
+1. In Supabase: **Project Settings → Database → Connection string** (URI mode).
+2. Set in `webtrak/.env`:
+
+```env
+DATASOURCE_URL=jdbc:postgresql://db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+DATASOURCE_USERNAME=postgres
+DATASOURCE_PASSWORD=<your-db-password>
+```
+
+3. Restart Webtrak. The Pulse UI calls `GET /api/v1/user/onboard` on that backend — it does **not** read Supabase from the browser unless `VITE_SUPABASE_URL` is set (cache only).
+
+Optional frontend cache mirror:
+
+```env
+VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=<anon-key>
+```
 
 ## Quick daily workflow
 

@@ -12,6 +12,7 @@
     "setup:check": "node scripts/check-local-setup.mjs",
     "seed:huge": "node scripts/seed-huge-data.mjs",
     "seed:minimal": "node scripts/seed-minimal-data.mjs",
+    "bootstrap:user": "node scripts/bootstrap-local-user.mjs",
     "build:hr-csv": "node scripts/build-hr-csv-samples.mjs"
   },
   "dependencies": {
