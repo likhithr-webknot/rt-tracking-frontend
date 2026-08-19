@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Loader2, Shield, Sparkles, Target, Users } from "lucide-react";
-import { getGoogleSignInUrl, seedDevQaUsers, startGoogleSignIn } from "../../api/auth";
+import { getGoogleSignInUrl, prefetchGoogleSignInConfig, seedDevQaUsers, startGoogleSignIn } from "../../api/auth";
 import { WEBKNOT_WORK_EMAIL_SUFFIX, webknotEmailHint } from "../../utils/webknotEmail";
 import { QA_DEV_ACCOUNTS, normalizeQaSeedResponse } from "../../utils/qaDevAccounts";
 import CompanyLogo from "../shared/CompanyLogo";
@@ -100,6 +100,16 @@ export default function LoginPage() {
     const signInUrl = getGoogleSignInUrl();
     setGoogleSignInReady(Boolean(signInUrl));
 
+    if (!signInUrl && typeof window !== "undefined") {
+      prefetchGoogleSignInConfig()
+        .then((ready) => {
+          if (ready) setGoogleSignInReady(true);
+        })
+        .catch(() => {
+          void 0;
+        });
+    }
+
     if (toastBootstrapped.current) return;
     toastBootstrapped.current = true;
 
@@ -120,10 +130,10 @@ export default function LoginPage() {
     }
   }, []);
 
-  const onGoogleClick = useCallback(() => {
+  const onGoogleClick = useCallback(async () => {
     setOauthBusy(true);
     try {
-      startGoogleSignIn();
+      await startGoogleSignIn();
     } catch {
       setOauthBusy(false);
       setToast({

@@ -761,6 +761,11 @@ async function fetchRoleHint({ signal, headers, email } = {} as ApiOptions) {
 }
 
 const GOOGLE_SIGNIN_PATH = "/api/v1/google-signin";
+const GOOGLE_CONFIG_PATHS = [
+  "/api/v1/auth/google/config",
+  "/api/v1/google-oauth-config",
+];
+const FRONTEND_REDIRECT_QUERY = "frontend_redirect";
 const OAUTH_BYPASS_PATH_PREFIX = "/oauth/bypass";
 const LOGOUT_PATH_CANDIDATES = ["/api/v1/auth/logout", "/auth/logout", "/logout"];
 const ME_PATH_CANDIDATES = ["/api/v1/auth/me", "/api/v1/profile", "/auth/me", "/api/auth/me"];
@@ -771,10 +776,49 @@ function isLocalDevFrontendHost() {
   return host === "localhost" || host === "127.0.0.1";
 }
 
+let cachedGoogleClientId = "";
+
+function resolveConfiguredGoogleClientId() {
+  const envClientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
+  if (envClientId) return envClientId;
+  return cachedGoogleClientId;
+}
+
+export async function fetchGoogleClientIdFromBackend({ signal } = {} as ApiOptions) {
+  const configured = String(import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
+  if (configured) {
+    cachedGoogleClientId = configured;
+    return configured;
+  }
+  if (cachedGoogleClientId) return cachedGoogleClientId;
+
+  for (const configPath of GOOGLE_CONFIG_PATHS) {
+    try {
+      const res = await fetch(buildApiUrl(configPath), {
+        method: "GET",
+        signal,
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      const payload = await parseResponse(res, {});
+      if (!res.ok) continue;
+      const data = unwrapApiData(payload);
+      const clientId = readApiField(data, "clientId", "client_id");
+      if (clientId) {
+        cachedGoogleClientId = clientId;
+        return clientId;
+      }
+    } catch {
+      void 0;
+    }
+  }
+
+  return "";
+}
+
 /** Spring OAuth sets HttpOnly cookies on :8080; SPA needs code exchange + JWT in storage. */
 export function shouldUseFrontendGoogleOAuth() {
-  const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
-  if (clientId) return true;
+  if (resolveConfiguredGoogleClientId()) return true;
   return isLocalDevFrontendHost();
 }
 
@@ -791,11 +835,11 @@ export function getFrontendOAuthRedirectUri() {
   return "";
 }
 
-export function buildFrontendGoogleOAuthUrl() {
-  const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
-  if (!clientId) return "";
+export function buildFrontendGoogleOAuthUrl(clientId = resolveConfiguredGoogleClientId()) {
+  const resolvedClientId = String(clientId ?? "").trim();
+  if (!resolvedClientId) return "";
   const params = new URLSearchParams({
-    client_id: clientId,
+    client_id: resolvedClientId,
     redirect_uri: getFrontendOAuthRedirectUri(),
     response_type: "code",
     scope: "openid email profile",
@@ -805,17 +849,60 @@ export function buildFrontendGoogleOAuthUrl() {
   return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }
 
+function buildBackendGoogleSignInUrl() {
+  const base = buildApiUrl(GOOGLE_SIGNIN_PATH);
+  if (!base) return GOOGLE_SIGNIN_PATH;
+
+  if (typeof window === "undefined" || isLocalDevFrontendHost()) {
+    return base;
+  }
+
+  const origin = String(window.location.origin || "").trim();
+  if (!origin) return base;
+
+  const params = new URLSearchParams({
+    [FRONTEND_REDIRECT_QUERY]: origin,
+  });
+  const joiner = base.includes("?") ? "&" : "?";
+  return `${base}${joiner}${params.toString()}`;
+}
+
 export function getGoogleSignInUrl() {
   if (shouldUseFrontendGoogleOAuth()) {
     const spaUrl = buildFrontendGoogleOAuthUrl();
     if (spaUrl) return spaUrl;
   }
-  return buildApiUrl(GOOGLE_SIGNIN_PATH);
+  return buildBackendGoogleSignInUrl();
+}
+
+export async function resolveGoogleSignInUrl({ signal } = {} as ApiOptions) {
+  const configuredClientId = resolveConfiguredGoogleClientId();
+  if (configuredClientId) {
+    const spaUrl = buildFrontendGoogleOAuthUrl(configuredClientId);
+    if (spaUrl) return spaUrl;
+  }
+
+  if (!isLocalDevFrontendHost()) {
+    const clientId = await fetchGoogleClientIdFromBackend({ signal });
+    if (clientId) {
+      const spaUrl = buildFrontendGoogleOAuthUrl(clientId);
+      if (spaUrl) return spaUrl;
+    }
+  }
+
+  return buildBackendGoogleSignInUrl();
+}
+
+export async function prefetchGoogleSignInConfig({ signal } = {} as ApiOptions) {
+  if (resolveConfiguredGoogleClientId()) return true;
+  if (isLocalDevFrontendHost()) return true;
+  const clientId = await fetchGoogleClientIdFromBackend({ signal });
+  return Boolean(clientId);
 }
 
 /** Navigate to Google OAuth using the current page origin for redirect_uri. */
-export function startGoogleSignIn() {
-  const url = getGoogleSignInUrl();
+export async function startGoogleSignIn({ signal } = {} as ApiOptions) {
+  const url = await resolveGoogleSignInUrl({ signal });
   if (!url) {
     throw new Error("Google sign-in is not configured.");
   }

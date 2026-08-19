@@ -204,21 +204,43 @@ export async function parseResponse(res: Response, fallback?: unknown) {
   return res.text().catch(() => "");
 }
 
+function isLocalhostApiBase(base: string) {
+  const normalized = String(base ?? "").trim();
+  if (!normalized) return false;
+  try {
+    const url = new URL(normalized.startsWith("http") ? normalized : `http://${normalized}`);
+    const host = url.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
+function isProductionBrowserHost() {
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname.toLowerCase();
+  return host !== "localhost" && host !== "127.0.0.1";
+}
+
 export function getApiBaseUrl() {
   const runtime = getAppSettings()?.apiBaseUrl;
   const runtimeBase = String(runtime ?? "").trim();
   if (runtimeBase) {
     const normalized = runtimeBase.endsWith("/") ? runtimeBase.slice(0, -1) : runtimeBase;
     const base = normalizeBase(normalized);
-    if (import.meta.env.DEV && base) {
+    if (isProductionBrowserHost() && isLocalhostApiBase(base)) {
+      // Ignore stale local dev Settings values on deployed hosts.
+    } else if (import.meta.env.DEV && base) {
       const proxy = String(import.meta.env?.VITE_API_DEV_PROXY ?? "http://localhost:8080").trim();
       try {
         if (new URL(base).origin === new URL(proxy).origin) return "";
       } catch {
         void 0;
       }
+      return base;
+    } else if (base) {
+      return base;
     }
-    return base;
   }
 
   const rawEnv = (import.meta?.env?.VITE_API_BASE_URL ?? "").toString().trim();
