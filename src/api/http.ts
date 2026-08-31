@@ -222,23 +222,31 @@ function isProductionBrowserHost() {
   return host !== "localhost" && host !== "127.0.0.1";
 }
 
+/** Never prefix API calls with localhost when the SPA runs on a deployed host. */
+function isUsableApiBase(base: string) {
+  const normalized = String(base ?? "").trim();
+  if (!normalized) return false;
+  if (isProductionBrowserHost() && isLocalhostApiBase(normalized)) {
+    return false;
+  }
+  return true;
+}
+
 export function getApiBaseUrl() {
   const runtime = getAppSettings()?.apiBaseUrl;
   const runtimeBase = String(runtime ?? "").trim();
   if (runtimeBase) {
     const normalized = runtimeBase.endsWith("/") ? runtimeBase.slice(0, -1) : runtimeBase;
     const base = normalizeBase(normalized);
-    if (isProductionBrowserHost() && isLocalhostApiBase(base)) {
-      // Ignore stale local dev Settings values on deployed hosts.
-    } else if (import.meta.env.DEV && base) {
-      const proxy = String(import.meta.env?.VITE_API_DEV_PROXY ?? "http://localhost:8080").trim();
-      try {
-        if (new URL(base).origin === new URL(proxy).origin) return "";
-      } catch {
-        void 0;
+    if (isUsableApiBase(base)) {
+      if (import.meta.env.DEV && base) {
+        const proxy = String(import.meta.env?.VITE_API_DEV_PROXY ?? "http://localhost:8080").trim();
+        try {
+          if (new URL(base).origin === new URL(proxy).origin) return "";
+        } catch {
+          void 0;
+        }
       }
-      return base;
-    } else if (base) {
       return base;
     }
   }
@@ -246,10 +254,24 @@ export function getApiBaseUrl() {
   const rawEnv = (import.meta?.env?.VITE_API_BASE_URL ?? "").toString().trim();
   if (rawEnv) {
     const normalized = rawEnv.endsWith("/") ? rawEnv.slice(0, -1) : rawEnv;
-    return normalizeBase(normalized);
+    const envBase = normalizeBase(normalized);
+    if (isUsableApiBase(envBase)) {
+      return envBase;
+    }
   }
 
   return "";
+}
+
+/** Same-origin API path for deployed hosts — avoids localhost build-time defaults. */
+export function buildSameOriginApiUrl(path: string) {
+  const p = String(path || "");
+  if (!p) return p;
+  if (p.startsWith("http://") || p.startsWith("https://")) return p;
+  if (isProductionBrowserHost()) {
+    return p.startsWith("/") ? p : `/${p}`;
+  }
+  return buildApiUrl(p);
 }
 
 function normalizeBase(base) {

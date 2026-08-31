@@ -1,7 +1,15 @@
 import { coerceDisplayString } from "../utils/coerceDisplayString";
 import { z } from "zod";
 import type { ApiOptions } from "../types/api-options";
-import { buildApiUrl, getCookieValue, parseResponse, readError, safeJsonParse, withCsrfHeaders } from "./http";
+import {
+  buildApiUrl,
+  buildSameOriginApiUrl,
+  getCookieValue,
+  parseResponse,
+  readError,
+  safeJsonParse,
+  withCsrfHeaders,
+} from "./http";
 
 type AuthError = Error & { code?: string; status?: number };
 type ApiRecord = Record<string, unknown>;
@@ -794,7 +802,7 @@ export async function fetchGoogleClientIdFromBackend({ signal } = {} as ApiOptio
 
   for (const configPath of GOOGLE_CONFIG_PATHS) {
     try {
-      const res = await fetch(buildApiUrl(configPath), {
+      const res = await fetch(buildSameOriginApiUrl(configPath), {
         method: "GET",
         signal,
         credentials: "include",
@@ -816,9 +824,10 @@ export async function fetchGoogleClientIdFromBackend({ signal } = {} as ApiOptio
   return "";
 }
 
-/** Spring OAuth sets HttpOnly cookies on :8080; SPA needs code exchange + JWT in storage. */
+/** Prefer SPA Google OAuth; client ID may come from build env or /api/v1/google-oauth-config. */
 export function shouldUseFrontendGoogleOAuth() {
   if (resolveConfiguredGoogleClientId()) return true;
+  if (typeof window !== "undefined") return true;
   return isLocalDevFrontendHost();
 }
 
@@ -850,8 +859,7 @@ export function buildFrontendGoogleOAuthUrl(clientId = resolveConfiguredGoogleCl
 }
 
 function buildBackendGoogleSignInUrl() {
-  const base = buildApiUrl(GOOGLE_SIGNIN_PATH);
-  if (!base) return GOOGLE_SIGNIN_PATH;
+  const base = buildSameOriginApiUrl(GOOGLE_SIGNIN_PATH) || GOOGLE_SIGNIN_PATH;
 
   if (typeof window === "undefined" || isLocalDevFrontendHost()) {
     return base;
