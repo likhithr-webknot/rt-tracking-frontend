@@ -22,11 +22,7 @@ import {
   RefreshCw,
   Search,
   Activity,
-  StickyNote,
-  Cloud,
 } from "lucide-react";
-import PortalNotesWorkspace from "../shared/PortalNotesWorkspace";
-import WebknotDrive from "../admin/WebknotDrive";
 import Toast from "../shared/Toast";
 import UserAvatar from "../shared/UserAvatar";
 import ModalOverlay from "../shared/ModalOverlay";
@@ -1953,7 +1949,7 @@ function AlreadyRespondedScreen({
               Submitted & locked
             </div>
             <p className="mt-1 text-sm text-[rgb(var(--text))] leading-relaxed">
-              Your {monthLabel} self-review is submitted. The form is locked for this month — you can still browse notes, drive, and settings.
+              Your {monthLabel} self-review is submitted. The form is locked for this month — you can still browse settings and your ratings history.
             </p>
           </div>
         </div>
@@ -1980,7 +1976,7 @@ function AlreadyRespondedScreen({
                   {employee?.name || authEmail || "—"} · Submitted {submittedLabel}
                 </p>
                 <div className="mt-2 inline-flex items-center gap-1.5 text-[10px] font-semibold text-[rgb(var(--muted))] uppercase tracking-wider">
-                  <Lock size={11} /> Your self-review form is locked for this month — the portal stays open to browse notes, drive, and settings.
+                  <Lock size={11} /> Your self-review form is locked for this month — the portal stays open to browse settings and your ratings history.
                 </div>
               </div>
             </div>
@@ -2194,7 +2190,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   });
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
   const EMP_VALID_TABS = useMemo(
-    () => new Set(["profile", "account", "projects", "kpis", "values", "certifications", "recognitions", "review", "performance", "notes", "drive", "settings"]),
+    () => new Set(["profile", "account", "projects", "kpis", "values", "certifications", "recognitions", "review", "performance", "settings"]),
     [],
   );
 
@@ -2202,6 +2198,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
     if (parts[0] === "employee") {
       const tab = parts[1] || "profile";
+      if (tab === "notes" || tab === "drive") return "profile";
       return EMP_VALID_TABS.has(tab) ? tab : "profile";
     }
     const legacy = parts[0] || "profile";
@@ -2215,6 +2212,14 @@ export default function EmployeePortal({ onLogout, auth }) {
     const path = tab === "profile" ? "/employee" : `/employee/${tab}`;
     if (window.location.pathname !== path) {
       window.history.pushState(null, "", path);
+    }
+  }, []);
+
+  useEffect(() => {
+    const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
+    if (parts[0] === "employee" && (parts[1] === "notes" || parts[1] === "drive")) {
+      window.history.replaceState(null, "", "/employee");
+      setActiveTabRaw("profile");
     }
   }, []);
 
@@ -3645,19 +3650,6 @@ export default function EmployeePortal({ onLogout, auth }) {
     if (activeTab === "performance") {
       return <EmployeePerformanceHistory />;
     }
-    if (activeTab === "notes") {
-      return (
-        <PortalNotesWorkspace
-          portal="employee"
-          auth={auth}
-          title="My notes"
-          subtitle="Private to your account — managers and other employees cannot see these."
-        />
-      );
-    }
-    if (activeTab === "drive") {
-      return <WebknotDrive auth={auth} portalLabel="your employee account" />;
-    }
     if (activeTab === "review") {
       if (locked && !needsResubmission) {
         return (
@@ -3743,11 +3735,9 @@ export default function EmployeePortal({ onLogout, auth }) {
       isSidebarOpen={isSidebarOpen}
       setIsSidebarOpen={setIsSidebarOpen}
       maxWidth={
-        activeTab === "notes" || activeTab === "drive"
-          ? "max-w-[1600px]"
-          : activeTab === "settings"
-            ? "max-w-3xl"
-            : "max-w-5xl"
+        activeTab === "settings"
+          ? "max-w-3xl"
+          : "max-w-5xl"
       }
       sidebar={
         <PortalSidebar

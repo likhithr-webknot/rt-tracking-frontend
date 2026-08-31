@@ -28,11 +28,7 @@ import {
   XCircle,
   History,
   Activity,
-  StickyNote,
-  Cloud,
 } from "lucide-react";
-import PortalNotesWorkspace from "../shared/PortalNotesWorkspace";
-import WebknotDrive from "../admin/WebknotDrive";
 
 import { fetchMe } from "../../api/auth";
 import { fetchPortalManager } from "../../api/portal";
@@ -855,12 +851,13 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [filter, setFilter] = useState("PENDING_MANAGER_REVIEW"); // SUBMITTED | ALL | PENDING_MANAGER_REVIEW
   const [teamSearch, setTeamSearch] = useState("");
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
-  const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review", "account", "notes", "drive", "settings"]), []);
+  const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review", "account", "settings"]), []);
 
   const getMgrTabFromPath = useCallback(() => {
     const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
     if (parts[0] === "manager") {
       const tab = parts[1] || "team";
+      if (tab === "notes" || tab === "drive") return "team";
       return MGR_VALID_TABS.has(tab) ? tab : "team";
     }
     const legacy = parts[0] || "team";
@@ -874,6 +871,14 @@ export default function ManagerPortal({ onLogout, auth }) {
     const path = tab === "team" ? "/manager" : `/manager/${tab}`;
     if (window.location.pathname !== path) {
       window.history.pushState(null, "", path);
+    }
+  }, []);
+
+  useEffect(() => {
+    const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
+    if (parts[0] === "manager" && (parts[1] === "notes" || parts[1] === "drive")) {
+      window.history.replaceState(null, "", "/manager");
+      setActiveTabRaw("team");
     }
   }, []);
 
@@ -2595,11 +2600,9 @@ export default function ManagerPortal({ onLogout, auth }) {
       isSidebarOpen={isSidebarOpen}
       setIsSidebarOpen={setIsSidebarOpen}
       maxWidth={
-        activeTab === "notes" || activeTab === "drive"
-          ? "max-w-[1600px]"
-          : activeTab === "settings"
-            ? "max-w-3xl"
-            : "max-w-7xl"
+        activeTab === "settings"
+          ? "max-w-3xl"
+          : "max-w-7xl"
       }
       sidebar={
         <PortalSidebar
@@ -2758,15 +2761,6 @@ export default function ManagerPortal({ onLogout, auth }) {
           <UserProfilePage auth={auth} roleLabel={account.role} onBack={() => setActiveTab("team")} />
         ) : activeTab === "settings" ? (
           <ManagerSettingsPanel />
-        ) : activeTab === "notes" ? (
-          <PortalNotesWorkspace
-            portal="manager"
-            auth={auth}
-            title="Manager notes"
-            subtitle="Private to your account — reportees cannot see your notes."
-          />
-        ) : activeTab === "drive" ? (
-          <WebknotDrive auth={auth} portalLabel="your manager account" />
         ) : (
         <>
         <PortalPageHeader

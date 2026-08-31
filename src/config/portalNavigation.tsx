@@ -9,7 +9,6 @@ import {
   KeyRound,
   LayoutDashboard,
   Sparkles,
-  StickyNote,
   Target,
   UserCircle2,
   Users,
@@ -179,18 +178,6 @@ export const EMPLOYEE_NAV_GROUPS = [
         label: "My ratings",
         description: "All-time scores by month and cycle",
       },
-      {
-        id: "notes",
-        icon: <StickyNote size={20} />,
-        label: "Private notes",
-        description: "Only you can see these",
-      },
-      {
-        id: "drive",
-        icon: <Cloud size={20} />,
-        label: "My files",
-        description: "Your personal file space",
-      },
     ],
   },
 ];
@@ -212,23 +199,6 @@ export const MANAGER_NAV_GROUPS = [
         icon: <ClipboardCheck size={20} />,
         label: "Your review",
         description: "Submit your manager self-review",
-      },
-    ],
-  },
-  {
-    title: "Personal",
-    items: [
-      {
-        id: "notes",
-        icon: <StickyNote size={20} />,
-        label: "Private notes",
-        description: "Not visible to your team",
-      },
-      {
-        id: "drive",
-        icon: <Cloud size={20} />,
-        label: "My files",
-        description: "Your personal file space",
       },
     ],
   },
@@ -254,8 +224,6 @@ export const EMPLOYEE_TAB_COPY = {
     title: "My ratings",
     subtitle: "Your all-time performance — month-by-month and grouped by review cycle.",
   },
-  notes: { title: "Private notes", subtitle: "Personal notebooks — not shared with HR or your manager." },
-  drive: { title: "My files", subtitle: "Store files here. Only you can open them." },
 };
 
 export const MANAGER_TAB_COPY = {
@@ -266,14 +234,6 @@ export const MANAGER_TAB_COPY = {
   "self-review": {
     title: "Your manager review",
     subtitle: "Complete your monthly self-review for this cycle.",
-  },
-  notes: {
-    title: "Private notes",
-    subtitle: "Your notebooks stay private — reportees cannot see them.",
-  },
-  drive: {
-    title: "My files",
-    subtitle: "Personal storage. Not visible to your team.",
   },
 };
 

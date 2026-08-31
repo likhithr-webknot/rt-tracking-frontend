@@ -40,10 +40,8 @@ const EMPLOYEE_LEGACY_TABS = new Set([
   "certifications",
   "recognitions",
   "review",
-  "notes",
-  "drive",
 ]);
-const MANAGER_LEGACY_TABS = new Set(["team", "self-review", "account", "notes", "drive"]);
+const MANAGER_LEGACY_TABS = new Set(["team", "self-review", "account"]);
 
 function normalizePortalRole(value) {
   const raw = String(value ?? "").trim().toLowerCase();
