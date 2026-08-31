@@ -216,18 +216,32 @@ function isLocalhostApiBase(base: string) {
   }
 }
 
-function isProductionBrowserHost() {
+export function isProductionBrowserHost() {
   if (typeof window === "undefined") return false;
   const host = window.location.hostname.toLowerCase();
   return host !== "localhost" && host !== "127.0.0.1";
 }
 
-/** Never prefix API calls with localhost when the SPA runs on a deployed host. */
+function apiBaseOrigin(base: string) {
+  const normalized = String(base ?? "").trim();
+  if (!normalized) return "";
+  try {
+    const url = normalized.startsWith("http") ? normalized : `https://${normalized}`;
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+}
+
+/** Never use localhost or cross-origin API bases when the SPA runs on a deployed host. */
 function isUsableApiBase(base: string) {
   const normalized = String(base ?? "").trim();
   if (!normalized) return false;
-  if (isProductionBrowserHost() && isLocalhostApiBase(normalized)) {
-    return false;
+  if (!isProductionBrowserHost()) return true;
+  if (isLocalhostApiBase(normalized)) return false;
+  if (typeof window !== "undefined") {
+    const baseOrigin = apiBaseOrigin(normalized);
+    if (baseOrigin && baseOrigin !== window.location.origin) return false;
   }
   return true;
 }

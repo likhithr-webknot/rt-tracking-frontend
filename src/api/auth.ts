@@ -5,6 +5,7 @@ import {
   buildApiUrl,
   buildSameOriginApiUrl,
   getCookieValue,
+  isProductionBrowserHost,
   parseResponse,
   readError,
   safeJsonParse,
@@ -72,11 +73,38 @@ export const SESSION_INACTIVITY_MS = 30 * 60 * 1000;
 const JwtPayloadSchema = z.object({}).passthrough();
 
 function shouldPersistAccessToken() {
+  // Deployed hosts must persist JWT in sessionStorage — HttpOnly cookies are not readable from JS.
+  if (isProductionBrowserHost()) return true;
   const disable = String(import.meta?.env?.VITE_DISABLE_PERSIST_ACCESS_TOKEN ?? "").trim().toLowerCase();
   if (disable === "1" || disable === "true" || disable === "yes") return false;
   const legacy = String(import.meta?.env?.VITE_PERSIST_ACCESS_TOKEN ?? "").trim().toLowerCase();
   if (legacy === "0" || legacy === "false" || legacy === "no") return false;
   return true;
+}
+
+function isAccessTokenUsable(token: unknown, now = Date.now()) {
+  const raw = String(token ?? "").trim();
+  if (!raw) return false;
+  const claims = decodeJwtPayload(raw);
+  if (!claims || typeof claims !== "object") return false;
+  const exp = claims.exp;
+  if (typeof exp === "number" && exp * 1000 <= now) return false;
+  return true;
+}
+
+function resolveBearerToken() {
+  const auth = getAuth();
+  const cookieToken = firstNonEmptyString(
+    getCookieValue("accessToken"),
+    getCookieValue("access_token"),
+    getCookieValue("jwt"),
+    getCookieValue("token")
+  );
+  const candidates = [auth?.accessToken, cookieToken].filter(Boolean);
+  for (const candidate of candidates) {
+    if (isAccessTokenUsable(candidate)) return String(candidate).trim();
+  }
+  return "";
 }
 
 function firstNonEmptyString(...values) {
@@ -661,27 +689,20 @@ export function hasManualLogoutMark() {
 }
 
 export function getAuthHeader() {
-  const auth = getAuth();
   const rawEnvToken = String(import.meta?.env?.VITE_RAW_AUTHORIZATION_TOKEN ?? "").trim();
 
   // If a raw Authorization token is provided via env, use it.
   // This sends: `Authorization: <token>` (no Bearer prefix).
   if (rawEnvToken) return rawEnvToken;
 
-  const cookieToken =
-    firstNonEmptyString(
-      getCookieValue("accessToken"),
-      getCookieValue("access_token"),
-      getCookieValue("jwt"),
-      getCookieValue("token")
-    ) || "";
-  const token = auth?.accessToken || cookieToken;
+  const token = resolveBearerToken();
   if (!token) return null;
 
+  const auth = getAuth();
   const type = String(auth?.tokenType ?? "Bearer").trim();
 
   // Support sending raw token (no scheme), e.g. tokenType="".
-  if (!type || type.toLowerCase() === "raw" || type.toLowerCase() === "none") return String(token);
+  if (!type || type.toLowerCase() === "raw" || type.toLowerCase() === "none") return token;
 
   return `${type} ${token}`;
 }
@@ -743,7 +764,7 @@ async function fetchRoleHint({ signal, headers, email } = {} as ApiOptions) {
     : ["/api/v1/user/role"];
 
   for (const path of candidates) {
-    const res = await fetch(buildApiUrl(path), {
+    const res = await fetch(buildSameOriginApiUrl(path), {
       method: "GET",
       signal,
       credentials: "include",
@@ -931,7 +952,7 @@ function mapGoogleAuthError(message: unknown) {
 }
 
 export async function exchangeGoogleAuthCode(code, redirectUri, { signal } = {} as ApiOptions) {
-  const res = await fetch(buildApiUrl("/api/v1/auth/google/exchange"), {
+  const res = await fetch(buildSameOriginApiUrl("/api/v1/auth/google/exchange"), {
     method: "POST",
     signal,
     credentials: "include",
@@ -1051,7 +1072,7 @@ export async function logout({ signal } = {} as ApiOptions) {
   let lastErr = null;
 
   for (const path of LOGOUT_PATH_CANDIDATES) {
-    const res = await fetch(buildApiUrl(path), {
+    const res = await fetch(buildSameOriginApiUrl(path), {
       method: "POST",
       signal,
       credentials: "include",
@@ -1075,7 +1096,7 @@ export async function fetchMe({ signal } = {} as ApiOptions) {
   let saw401 = false;
 
   for (const path of ME_PATH_CANDIDATES) {
-    const res = await fetch(buildApiUrl(path), {
+    const res = await fetch(buildSameOriginApiUrl(path), {
       signal,
       credentials: "include",
       headers,
