@@ -31,6 +31,7 @@ import PortalUserMenu from "../shared/PortalUserMenu";
 import PortalNotificationsBell, { resolveNotificationUserId } from "../shared/PortalNotificationsBell";
 import AppShell from "../shared/AppShell";
 import PortalSidebar from "../shared/PortalSidebar";
+import PortalUsageGuideModal from "../shared/PortalUsageGuideModal";
 import UserProfilePage from "../shared/UserProfilePage";
 import EmployeeSettingsPanel from "../shared/settings/EmployeeSettingsPanel";
 import PortalPageHeader from "../shared/PortalPageHeader";
@@ -41,6 +42,7 @@ import { computeSubmissionWindowOpen } from "../../utils/submissionWindow";
 import { fetchMe, getAuth, notifyAuthChanged, setAuth } from "../../api/auth";
 import { formatPortalRoleLabel, resolvePortalRoleLabel } from "../../utils/portalRole";
 import { filterHrPeerReviewRows, isHrPortalUser } from "../../utils/hrRatingsFilter";
+import { resolveUsageGuideKey } from "../../utils/portalUsageGuide";
 import ProjectSelectionPanel, { MAX_PROJECT_SELECTIONS } from "./ProjectSelectionPanel";
 import { notifyProjectStakeholdersOnSubmit } from "../../api/project-submit-notifications";
 import { fetchAllCertifications, normalizeCertifications } from "../../api/certifications";
@@ -2297,6 +2299,11 @@ export default function EmployeePortal({ onLogout, auth }) {
     [auth?.claims?.role, auth?.empRole, auth?.role, auth?.userRole, employee?.role],
   );
   const isHrUser = useMemo(() => isHrPortalUser(auth), [auth]);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const usageGuideKey = useMemo(
+    () => resolveUsageGuideKey({ portalShell: "employee", auth, isHrUser }),
+    [auth, isHrUser],
+  );
   const subjectEmployeeId = useMemo(
     () => String(
       employee?.id ??
@@ -3696,6 +3703,7 @@ export default function EmployeePortal({ onLogout, auth }) {
           showThemeToggle
           onSettingsClick={() => setActiveTab("settings")}
           settingsActive={activeTab === "settings"}
+          onGuideClick={() => setGuideOpen(true)}
         />
       }
       topbar={
@@ -3901,6 +3909,11 @@ export default function EmployeePortal({ onLogout, auth }) {
     </AppShell>
 
     <Toast toast={toast} onDismiss={() => setToast(null)} durationMs={2800} />
+    <PortalUsageGuideModal
+      open={guideOpen}
+      onClose={() => setGuideOpen(false)}
+      guideKey={usageGuideKey}
+    />
     </>
   );
 }

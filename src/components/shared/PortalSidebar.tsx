@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { PanelLeftClose, PanelLeftOpen, ExternalLink, HelpCircle, Settings } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, ExternalLink, BookOpen, Settings } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import { SidebarLogoMark } from "./CompanyLogo";
 import { WEBKNOT_WEBSITE_URL } from "../../constants/brand";
@@ -121,6 +121,7 @@ export default function PortalSidebar({
   showThemeToggle = false,
   onSettingsClick = null,
   settingsActive = false,
+  onGuideClick = null,
   helpUrl = WEBKNOT_WEBSITE_URL,
 }) {
   const settingsIsHandler = typeof onSettingsClick === "function";
@@ -201,14 +202,29 @@ export default function PortalSidebar({
           />
         ) : null}
 
-        <SidebarFooterItem
-          icon={HelpCircle}
-          label="Help & support"
-          description="Open help in a new tab"
-          isOpen={isOpen}
-          href={helpUrl}
-          external
-        />
+        {typeof onGuideClick === "function" ? (
+          <SidebarFooterItem
+            icon={BookOpen}
+            label="How to use"
+            description="Role-based guide for this portal"
+            isOpen={isOpen}
+            onClick={() => {
+              onGuideClick();
+              if (typeof window !== "undefined" && window.innerWidth < 768 && isOpen) {
+                setIsOpen(false);
+              }
+            }}
+          />
+        ) : (
+          <SidebarFooterItem
+            icon={BookOpen}
+            label="Help & support"
+            description="Open help in a new tab"
+            isOpen={isOpen}
+            href={helpUrl}
+            external
+          />
+        )}
 
         {showThemeToggle ? (
           <div className={["px-1 py-1", !isOpen ? "flex justify-center" : ""].join(" ")}>

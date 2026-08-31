@@ -57,6 +57,7 @@ import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-defi
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi";
 import { enhanceReviewText, fetchActiveAiAgent } from "../../api/ai-agents";
 import { getManagerSettings } from "../../utils/appSettings";
+import { resolveUsageGuideKey } from "../../utils/portalUsageGuide";
 import { extractEmploymentDetails } from "../../utils/employmentProfile";
 import {
   buildCycleMeta,
@@ -76,6 +77,7 @@ import ModalOverlay from "../shared/ModalOverlay";
 import PortalUserMenu from "../shared/PortalUserMenu";
 import AppShell from "../shared/AppShell";
 import PortalSidebar from "../shared/PortalSidebar";
+import PortalUsageGuideModal from "../shared/PortalUsageGuideModal";
 import UserProfilePage from "../shared/UserProfilePage";
 import ManagerSettingsPanel from "../shared/settings/ManagerSettingsPanel";
 import PortalPageHeader from "../shared/PortalPageHeader";
@@ -998,6 +1000,11 @@ export default function ManagerPortal({ onLogout, auth }) {
   });
   const [teamInsightsRows, setTeamInsightsRows] = useState([]);
   const [teamInsightsLoading, setTeamInsightsLoading] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const usageGuideKey = useMemo(
+    () => resolveUsageGuideKey({ portalShell: "manager", auth }),
+    [auth],
+  );
   const teamCursorRef = useRef(null);
   const [reviewDrafts, setReviewDrafts] = useState(() => loadManagerReviewDrafts());
   const [managerRatings, setManagerRatings] = useState({});
@@ -2614,6 +2621,7 @@ export default function ManagerPortal({ onLogout, auth }) {
           showThemeToggle
           onSettingsClick={() => setActiveTab("settings")}
           settingsActive={activeTab === "settings"}
+          onGuideClick={() => setGuideOpen(true)}
         />
       }
       topbar={
@@ -3780,6 +3788,11 @@ export default function ManagerPortal({ onLogout, auth }) {
     </AppShell>
 
     <Toast toast={toast} onDismiss={() => setToast(null)} durationMs={2800} />
+    <PortalUsageGuideModal
+      open={guideOpen}
+      onClose={() => setGuideOpen(false)}
+      guideKey={usageGuideKey}
+    />
     </>
   );
 }

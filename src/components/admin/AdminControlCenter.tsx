@@ -6,10 +6,12 @@ import { Bell, BellDot, Menu } from "lucide-react";
 import { ADMIN_NAV_GROUPS, ADMIN_TAB_COPY } from "../../config/portalNavigation";
 import { isHrPortalUser } from "../../utils/hrRatingsFilter";
 import { filterAdminNavGroups, isSuperAdminPortalUser } from "../../utils/portalAccess";
+import { resolveUsageGuideKey } from "../../utils/portalUsageGuide";
 import { toUserFacingMessage } from "../../utils/userFacingError";
 import RatingsHistoryWorkspace from "./RatingsHistoryWorkspace";
 import AppShell from "../shared/AppShell";
 import PortalSidebar from "../shared/PortalSidebar";
+import PortalUsageGuideModal from "../shared/PortalUsageGuideModal";
 import AdminDashboard from "./AdminDashboard";
 import AdminSubmissions from "./AdminSubmissions";
 import AdminCertificationsBridge from "./AdminCertificationsBridge";
@@ -170,6 +172,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
   const isHrUser = useMemo(() => isHrPortalUser(auth), [auth]);
   const isSuperAdmin = useMemo(() => isSuperAdminPortalUser(auth), [auth]);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const usageGuideKey = useMemo(
+    () => resolveUsageGuideKey({ portalShell: "admin", auth, isHrUser, isSuperAdmin }),
+    [auth, isHrUser, isSuperAdmin],
+  );
 
   const activeTab = useMemo(() => {
     if (!VALID_TABS.has(resolvedTab)) return ADMIN_NOT_FOUND_TAB;
@@ -394,6 +401,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
           showThemeToggle
           onSettingsClick={() => setActiveTab("settings")}
           settingsActive={activeTab === "settings"}
+          onGuideClick={() => setGuideOpen(true)}
         />
       }
       topbar={
@@ -608,6 +616,11 @@ export default function AdminControlCenter({ onLogout, auth }) {
 
 
       <Toast toast={toast} onDismiss={() => setToast(null)} />
+      <PortalUsageGuideModal
+        open={guideOpen}
+        onClose={() => setGuideOpen(false)}
+        guideKey={usageGuideKey}
+      />
     </>
   );
 }
