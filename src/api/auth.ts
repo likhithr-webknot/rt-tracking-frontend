@@ -789,7 +789,8 @@ async function fetchRoleHint({ signal, headers, email } = {} as ApiOptions) {
   return "";
 }
 
-const GOOGLE_OAUTH_CALLBACK_PATH = "/google/callback";
+// Must match an Authorized redirect URI in Google Cloud Console (typically /auth/callback).
+const GOOGLE_OAUTH_CALLBACK_PATH = "/auth/callback";
 const GOOGLE_SIGNIN_PATH = "/api/v1/google-signin";
 const GOOGLE_CONFIG_PATHS = [
   "/api/v1/auth/google/config",
