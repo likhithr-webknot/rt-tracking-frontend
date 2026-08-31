@@ -17,6 +17,28 @@ function pick(obj, keys) {
   return undefined;
 }
 
+function pickReportingManager(data) {
+  const row = data && typeof data === "object" ? data : {};
+  const raw =
+    row.reporting_manager ??
+    row.reportingManager ??
+    row.manager_name ??
+    row.managerName ??
+    row.manager ??
+    null;
+  if (raw && typeof raw === "object") {
+    return String(
+      raw.name ??
+        raw.employee_name ??
+        raw.employeeName ??
+        raw.emp_id ??
+        raw.empId ??
+        "",
+    ).trim();
+  }
+  return String(raw ?? "").trim();
+}
+
 async function webtrakGet(path, { signal } = {}) {
   const res = await fetch(buildWebtrakUrl(path), {
     method: "GET",
@@ -153,15 +175,8 @@ export function normalizeWebtrakEmployeeProfile(raw) {
       pick(data, ["work_location_type", "workLocationType", "work_location", "workLocation"]) ?? "",
     ).trim(),
     doj: pick(data, ["doj", "date_of_joining", "dateOfJoining", "joining_date"]),
-    reportingManager: String(
-      pick(data, [
-        "reporting_manager",
-        "reportingManager",
-        "manager_name",
-        "managerName",
-        "manager",
-      ]) ?? "",
-    ).trim(),
+    doi: pick(data, ["doi", "date_of_internship", "dateOfInternship", "internship_start"]),
+    reportingManager: pickReportingManager(data),
     primarySkills: skills("primary_skills", "primarySkills"),
     secondarySkills: skills("secondary_skills", "secondarySkills"),
     webknotExperience: String(

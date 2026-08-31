@@ -7,6 +7,7 @@ import {
   getEmployeeRosterAuthHeaders,
 } from "./webtrak";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
+import { normalizeWebtrakEmployeeProfile } from "./webtrakEmployeeProfile";
 
 function authHeaders({ json = false } = {} as ApiOptions) {
   const auth = getAuthHeader();
@@ -235,6 +236,12 @@ export async function fetchProfile({ signal } = {} as ApiOptions) {
   });
   if (!res.ok) throw await toHttpError(res);
   return parseResponse(res, {});
+}
+
+/** Webtrak-shaped profile from GET /api/v1/profile (read-only display). */
+export async function fetchNormalizedProfile({ signal } = {} as ApiOptions) {
+  const raw = await fetchProfile({ signal });
+  return normalizeWebtrakEmployeeProfile(raw);
 }
 
 export async function updateProfileWithPhoto(

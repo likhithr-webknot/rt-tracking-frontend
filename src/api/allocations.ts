@@ -77,7 +77,6 @@ export async function fetchAllocations(options = {}) {
 
 /**
  * GET /api/v1/allocation/employee?userEmail=…&scope=current_and_future
- * Uses the Webtrak third-party host + API key (same as Team List).
  */
 export async function fetchEmployeeAllocations(
   { userEmail, scope = "current_and_future" } = {},
@@ -107,6 +106,69 @@ export async function fetchEmployeeAllocations(
     });
   }
   return parseResponse(res, {});
+}
+
+export function normalizeAllocationDetailRow(raw, index = 0) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const pct = Number(
+    r.allocated_percent ?? r.allocatedPercent ?? r.percentage ?? r.percent ?? 0,
+  );
+  const hours = Number(r.allocated_hours ?? r.allocatedHours ?? r.hours ?? 0);
+  return {
+    id: String(r.id ?? r.allocation_id ?? r.allocationId ?? `alloc_${index}`).trim(),
+    projectCode: String(r.project_code ?? r.projectCode ?? "").trim(),
+    projectName: String(
+      r.project_name ?? r.projectName ?? r.project?.name ?? r.project_code ?? r.projectCode ?? "—",
+    ).trim(),
+    role: String(r.role ?? "—").trim(),
+    allocatedPercent: Number.isFinite(pct) ? pct : 0,
+    allocatedHours: Number.isFinite(hours) ? hours : 0,
+    startDate: String(r.start_date ?? r.startDate ?? "").trim(),
+    endDate: String(r.end_date ?? r.endDate ?? "").trim(),
+    isActive: Boolean(r.is_active ?? r.isActive ?? r.active),
+    allocationType: String(r.allocation_type ?? r.allocationType ?? "").trim(),
+    billingStatus: String(r.billing_status ?? r.billingStatus ?? "").trim(),
+    workLocationType: String(r.work_location_type ?? r.workLocationType ?? "").trim(),
+  };
+}
+
+/** GET /api/v1/allocation/user/detail — current projects + history for signed-in user. */
+export function normalizeUserAllocationDetail(raw) {
+  const root = raw && typeof raw === "object" ? raw : {};
+  const data = root.data && typeof root.data === "object" ? root.data : root;
+  const mapRows = (list) =>
+    (Array.isArray(list) ? list : [])
+      .map((row, i) => normalizeAllocationDetailRow(row, i))
+      .filter((row) => row.projectName || row.projectCode);
+
+  const currentProjects = mapRows(data.current_projects ?? data.currentProjects);
+  const history = mapRows(data.history ?? data.past_allocations ?? data.pastAllocations);
+
+  return {
+    employeeEmail: String(data.employee_email ?? data.employeeEmail ?? "").trim(),
+    employeeName: String(data.employee_name ?? data.employeeName ?? "").trim(),
+    currentProjects,
+    history,
+    all: [...currentProjects, ...history],
+  };
+}
+
+export async function fetchUserAllocationDetail({ signal } = {}) {
+  const auth = getAuthHeader();
+  const res = await fetch(buildSameOriginApiUrl("/api/v1/allocation/user/detail"), {
+    method: "GET",
+    signal,
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      ...(auth ? { Authorization: auth } : {}),
+    },
+  });
+  if (!res.ok) {
+    throw await toHttpError(res, { method: "GET", path: "/api/v1/allocation/user/detail" });
+  }
+  const raw = await parseResponse(res, {});
+  return normalizeUserAllocationDetail(raw);
 }
 
 export function parseEmployeeAllocationsPayload(raw) {
