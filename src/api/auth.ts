@@ -167,8 +167,36 @@ export function extractEmailFromSources(obj, claims) {
 }
 
 function applyAdminEmailAllowlist(email, role) {
-  if (!isAdminAllowlistedEmail(email)) return role;
-  return "Admin";
+  void email;
+  return role;
+}
+
+/** Collect normalized backend role keys from JWT claims and session (RBAC source of truth). */
+export function collectBackendRoleKeys(auth = getAuth()) {
+  const keys = new Set();
+  const obj = auth && typeof auth === "object" ? auth : {};
+  const claims =
+    (obj.claims && typeof obj.claims === "object" ? obj.claims : null) ||
+    (obj.accessToken ? decodeJwtPayload(obj.accessToken) : null);
+  const sources = [obj.roles, claims?.roles, obj.authorities, claims?.authorities];
+  for (const source of sources) {
+    if (!Array.isArray(source)) continue;
+    for (const entry of source) {
+      const raw =
+        typeof entry === "string"
+          ? entry
+          : firstNonEmptyString(entry?.authority, entry?.role, entry?.name, entry?.value);
+      const key = normalizeRoleKey(raw);
+      if (key) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+/** True when JWT/session includes HR or Admin backend roles (matches Webtrak SecurityConfig). */
+export function canAccessHrAdminApi(auth = getAuth()) {
+  const keys = collectBackendRoleKeys(auth);
+  return keys.has("admin") || keys.has("hr");
 }
 
 function normalizeRoleKey(value) {
@@ -594,6 +622,11 @@ export function setAuth(auth) {
     managerId,
     needsOnboarding,
     claims,
+    roles: Array.isArray(obj.roles)
+      ? obj.roles
+      : Array.isArray(claims?.roles)
+        ? claims.roles
+        : prev?.roles,
     issuedAt,
     lastActivityAt,
   };

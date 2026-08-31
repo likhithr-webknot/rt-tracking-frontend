@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { getAuthHeader } from "./auth";
-import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
+import { getAuthHeader, canAccessHrAdminApi } from "./auth";
+import { buildApiUrl, buildSameOriginApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
 import { buildWebtrakUrl, getWebtrakAuthHeaders, webtrakFetchCredentials } from "./webtrak";
 
 function extractAllocationsArray(data) {
@@ -55,21 +55,21 @@ export function normalizeAllocations(data) {
 
 export async function fetchAllocations(options = {}) {
   const { signal } = options;
+  if (!canAccessHrAdminApi()) {
+    return [];
+  }
   const auth = getAuthHeader();
   const headers = auth ? { Authorization: auth } : undefined;
 
   return requestWithFallbacks(
     [
-      "/api/v1/allocation/list",
-      "/api/v1/allocation/list?page=0&size=500",
       "/api/v1/allocation?page=0&size=500",
       "/api/v1/allocations?page=0&size=500",
-      "/api/v1/allocation/user",
     ],
     {
       signal,
       headers,
-      fallbackStatuses: [400, 403, 404, 405],
+      fallbackStatuses: [404, 405],
       notFoundMessage: "Allocation list endpoint not found.",
     }
   );

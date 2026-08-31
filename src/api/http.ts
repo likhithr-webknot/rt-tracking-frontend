@@ -160,7 +160,7 @@ export async function requestWithFallbacks(candidates: unknown, options: Record<
 
     let res;
     try {
-      res = await fetch(buildApiUrl(path), {
+      res = await fetch(buildSameOriginApiUrl(path), {
         method: requestMethod,
         signal: signal as AbortSignal | undefined,
         credentials: credentials as RequestCredentials,

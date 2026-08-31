@@ -1,7 +1,7 @@
 // @ts-nocheck
-import { isPortalAdminEmail } from "../api/auth";
 import { isHrPortalUser, isHrRoleValue, normalizeRoleToken } from "./hrRatingsFilter";
 import { PORTAL_ROLE_LABELS, resolvePortalRoleLabel } from "./portalRole";
+import { collectBackendRoleKeys } from "../api/auth";
 
 export function isSuperAdminRoleValue(value) {
   const raw = normalizeRoleToken(value);
@@ -12,15 +12,15 @@ export function isSuperAdminRoleValue(value) {
 export function isSuperAdminPortalUser(auth) {
   if (isHrPortalUser(auth)) return false;
   const obj = auth && typeof auth === "object" ? auth : {};
+  const jwtRoles = [...collectBackendRoleKeys(auth)];
   const label = resolvePortalRoleLabel(
     obj.empRole,
     obj.portalRole,
     obj.role,
     obj?.claims?.role,
+    ...jwtRoles,
   );
-  if (label === "Super Admin" || label === "Admin") return true;
-  const email = String(obj.email ?? obj?.claims?.email ?? "").trim().toLowerCase();
-  return Boolean(email && isPortalAdminEmail(email));
+  return label === "Super Admin" || label === "Admin";
 }
 
 export function isSuperAdminEmployee(emp) {

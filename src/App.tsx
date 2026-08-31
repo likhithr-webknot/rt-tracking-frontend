@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, Navigate, useNavigate } from "react-router-dom";
+import { consumeSpaPathRedirect } from "./utils/spaPathRedirect";
 
 /* ── Lazy-loaded portals (code-split per role) ─────────────── */
 const AdminControlCenter = lazy(() => import("./components/admin/AdminControlCenter"));
@@ -20,7 +21,6 @@ import {
   getSessionExpiryReason,
   hasManualLogoutMark,
   hasRecoverableSession,
-  isPortalAdminEmail,
   logout as logoutApi,
   markManualLogout,
   setAuth,
@@ -187,18 +187,20 @@ function AppNotFound() {
 
 export default function App() {
   const location = useLocation();
+  const navigate = useNavigate();
   const path = location.pathname;
+
+  useEffect(() => {
+    const spaPath = consumeSpaPathRedirect();
+    if (spaPath) navigate(spaPath, { replace: true });
+  }, [navigate]);
 
   const [auth, setAuthState] = useState(() => getAuth());
   const [authChecking, setAuthChecking] = useState(true);
   const [hasReportees, setHasReportees] = useState(null);
   const bootstrapGeneration = useRef(0);
 
-  const roleLabel = useMemo(() => {
-    const email = getAuthEmailForPortal(auth);
-    if (email && isPortalAdminEmail(email)) return "Admin";
-    return resolvePortalRole(auth);
-  }, [auth]);
+  const roleLabel = useMemo(() => resolvePortalRole(auth), [auth]);
 
   const isHrUser = useMemo(() => isHrPortalUser(auth), [auth]);
 
