@@ -1595,7 +1595,6 @@ export default function EmployeeDirectory({
                 <th className="min-w-[10rem] whitespace-nowrap">Designation</th>
                 <th className="w-[5.5rem] whitespace-nowrap">Band</th>
                 <th className="min-w-[9rem] whitespace-nowrap">Department</th>
-                <th className="w-[6rem] whitespace-nowrap text-center">Last promo</th>
                 <th className="w-[8.5rem] whitespace-nowrap text-right">Actions</th>
               </tr>
             </thead>
@@ -1684,19 +1683,6 @@ export default function EmployeeDirectory({
                         {streamLabel}
                       </div>
                     ) : null}
-                  </td>
-                  <td className="align-middle text-center">
-                     {emp.lastPromotionDate ? (
-                        <span className="rt-badge rt-badge--success whitespace-nowrap tabular-nums">
-                           {new Date(emp.lastPromotionDate).toLocaleDateString(undefined, {
-                            month: "short",
-                            day: "2-digit",
-                            year: "numeric",
-                          })}
-                        </span>
-                     ) : (
-                        <span className="text-[rgb(var(--muted))]">—</span>
-                     )}
                   </td>
                   <td className="align-middle text-right" onClick={(e) => e.stopPropagation()}>
                     <div className="inline-flex items-center justify-end gap-0.5 rounded-lg border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-0.5">

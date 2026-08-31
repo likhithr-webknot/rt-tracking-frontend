@@ -20,25 +20,12 @@ import {
   evaluationCriteriaDisplayLabel,
   evaluationCriteriaGroupKey,
 } from "../../utils/evaluationCriteria";
+import { buildCriteriaColorMap, paletteForCriteria } from "../../utils/evaluationCriteriaPalette";
 import { computeKpiWeightIntegrity } from "../../utils/kpiWeightIntegrity";
-
-const GROUP_PALETTE = [
-  { ring: "ring-blue-500/25", dot: "bg-blue-500", band: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20", dept: "bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/20" },
-  { ring: "ring-emerald-500/25", dot: "bg-emerald-500", band: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20", dept: "bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-500/20" },
-  { ring: "ring-amber-500/25", dot: "bg-amber-500", band: "bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/20", dept: "bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/20" },
-  { ring: "ring-cyan-500/25", dot: "bg-cyan-500", band: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border-cyan-500/20", dept: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20" },
-];
 
 function normKey(v) {
   const s = String(v ?? "").trim();
   return s ? s.toLowerCase() : "unassigned";
-}
-
-function paletteForKey(key) {
-  const k = normKey(key);
-  let hash = 0;
-  for (let i = 0; i < k.length; i++) hash = (hash * 31 + k.charCodeAt(i)) | 0;
-  return GROUP_PALETTE[Math.abs(hash) % GROUP_PALETTE.length];
 }
 
 function parseWeightPercent(value) {
@@ -177,6 +164,11 @@ export default function KPIGoalsWorkspace({
       a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
     );
   }, [filtered]);
+
+  const criteriaColorMap = useMemo(
+    () => buildCriteriaColorMap(grouped.map((group) => group.label)),
+    [grouped],
+  );
 
   const weightReport = useMemo(() => computeKpiWeightIntegrity(searchUniverse), [searchUniverse]);
 
@@ -323,7 +315,7 @@ export default function KPIGoalsWorkspace({
         <div className="space-y-5">
           <AnimatePresence mode="popLayout">
             {grouped.map((group) => {
-              const palette = paletteForKey(group.key);
+              const palette = paletteForCriteria(group.label, criteriaColorMap);
               const groupOverweight = weightReport.overweight.filter((c) => c.criteriaKey === group.key);
               return (
                 <motion.section
@@ -360,8 +352,8 @@ export default function KPIGoalsWorkspace({
                         ) : null}
                       </div>
                     </div>
-                    <span className={`rt-badge shrink-0 border ${palette.dept}`}>
-                      Evaluation criteria
+                    <span className={`rt-badge shrink-0 border ${palette.badge}`}>
+                      {group.label}
                     </span>
                   </div>
                   <ul className="divide-y divide-[rgb(var(--border))]">

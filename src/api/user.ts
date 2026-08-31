@@ -1,10 +1,14 @@
 // @ts-nocheck
 import type { ApiOptions } from "../types/api-options";
-import { getAuthHeader } from "./auth";
+import { getAuth, getAuthHeader } from "./auth";
 import {
   buildEmployeeRosterUrl,
+  buildEmployeeWebtrakUrl,
   employeeRosterFetchCredentials,
+  employeeWebtrakFetchCredentials,
   getEmployeeRosterAuthHeaders,
+  getEmployeeWebtrakAuthHeaders,
+  shouldUseRemoteEmployeeWebtrak,
 } from "./webtrak";
 import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
 import { normalizeWebtrakEmployeeProfile } from "./webtrakEmployeeProfile";
@@ -227,7 +231,30 @@ export async function updateLeave(empId, payload, { signal } = {} as ApiOptions)
   return parseResponse(res, {});
 }
 
-export async function fetchProfile({ signal } = {} as ApiOptions) {
+function employeeWebtrakEmailQuery(email = null) {
+  if (!shouldUseRemoteEmployeeWebtrak()) return "";
+  const safeEmail = String(email ?? getAuth()?.email ?? "").trim().toLowerCase();
+  if (!safeEmail || !safeEmail.includes("@")) return "";
+  return `?userEmail=${encodeURIComponent(safeEmail)}`;
+}
+
+export async function fetchProfile({ signal, email = null } = {} as ApiOptions & { email?: string | null }) {
+  const remoteQuery = employeeWebtrakEmailQuery(email);
+  const remotePath = `/api/v1/profile${remoteQuery}`;
+
+  if (shouldUseRemoteEmployeeWebtrak()) {
+    const res = await fetch(buildEmployeeWebtrakUrl(remotePath), {
+      method: "GET",
+      signal,
+      credentials: employeeWebtrakFetchCredentials(),
+      headers: getEmployeeWebtrakAuthHeaders(),
+    });
+    if (res.ok) return parseResponse(res, {});
+    if (res.status !== 404 && res.status !== 405) {
+      throw await toHttpError(res, { method: "GET", path: remotePath });
+    }
+  }
+
   const res = await fetch(buildApiUrl("/api/v1/profile"), {
     method: "GET",
     signal,

@@ -1,7 +1,15 @@
 // @ts-nocheck
-import { getAuthHeader, canAccessHrAdminApi } from "./auth";
+import { getAuth, getAuthHeader, canAccessHrAdminApi } from "./auth";
 import { buildApiUrl, buildSameOriginApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
-import { buildWebtrakUrl, getWebtrakAuthHeaders, webtrakFetchCredentials } from "./webtrak";
+import {
+  buildEmployeeWebtrakUrl,
+  buildWebtrakUrl,
+  employeeWebtrakFetchCredentials,
+  getEmployeeWebtrakAuthHeaders,
+  getWebtrakAuthHeaders,
+  shouldUseRemoteEmployeeWebtrak,
+  webtrakFetchCredentials,
+} from "./webtrak";
 
 function extractAllocationsArray(data) {
   const root = data && typeof data === "object" ? data : {};
@@ -153,21 +161,108 @@ export function normalizeUserAllocationDetail(raw) {
   };
 }
 
+/** Pulse legacy GET /api/v1/allocation/user — active allocations only. */
+export function normalizeUserAllocationFromLegacyList(raw) {
+  const root = raw && typeof raw === "object" ? raw : {};
+  const data = root.data ?? root;
+  const list = Array.isArray(data) ? data : [];
+  const currentProjects = list.map((row, i) => {
+    const r = row && typeof row === "object" ? row : {};
+    const hours = Number(r.allocatedHours ?? r.allocated_hours ?? 0);
+    const pct = hours > 0 ? Math.min(100, Math.round((hours / 8) * 100)) : 0;
+    return normalizeAllocationDetailRow(
+      {
+        id: r.id ?? `legacy_${i}`,
+        project_name: r.projectName ?? r.project_name,
+        role: r.role ?? "—",
+        allocated_hours: hours,
+        allocated_percent: pct,
+        is_active: true,
+      },
+      i,
+    );
+  });
+
+  return {
+    employeeEmail: "",
+    employeeName: "",
+    currentProjects,
+    history: [],
+    all: currentProjects,
+  };
+}
+
 export async function fetchUserAllocationDetail({ signal } = {}) {
   const auth = getAuthHeader();
-  const res = await fetch(buildSameOriginApiUrl("/api/v1/allocation/user/detail"), {
-    method: "GET",
-    signal,
-    credentials: "include",
-    headers: {
-      Accept: "application/json",
-      ...(auth ? { Authorization: auth } : {}),
-    },
-  });
-  if (!res.ok) {
-    throw await toHttpError(res, { method: "GET", path: "/api/v1/allocation/user/detail" });
+  const email = String(getAuth()?.email ?? "").trim().toLowerCase();
+  const emailQuery =
+    email && email.includes("@") ? `?userEmail=${encodeURIComponent(email)}` : "";
+
+  if (shouldUseRemoteEmployeeWebtrak()) {
+    const remotePaths = [
+      `/api/v1/allocation/user/detail${emailQuery}`,
+      email
+        ? `/api/v1/allocation/employee?userEmail=${encodeURIComponent(email)}&scope=all`
+        : "/api/v1/allocation/employee?scope=all",
+      "/api/v1/allocation/user",
+    ];
+    let lastStatus = null;
+    for (const path of remotePaths) {
+      const res = await fetch(buildEmployeeWebtrakUrl(path), {
+        method: "GET",
+        signal,
+        credentials: employeeWebtrakFetchCredentials(),
+        headers: getEmployeeWebtrakAuthHeaders(),
+      });
+      if (res.ok) {
+        const raw = await parseResponse(res, {});
+        const root = raw && typeof raw === "object" ? raw : {};
+        const data = root.data ?? root;
+        if (Array.isArray(data)) {
+          return normalizeUserAllocationFromLegacyList(raw);
+        }
+        if (data?.allocations && !data?.current_projects && !data?.currentProjects) {
+          return normalizeUserAllocationDetail({
+            data: {
+              employee_email: data.employee_email ?? data.employeeEmail ?? email,
+              employee_name: data.employee_name ?? data.employeeName ?? "",
+              current_projects: data.allocations,
+              history: [],
+            },
+          });
+        }
+        return normalizeUserAllocationDetail(raw);
+      }
+      lastStatus = res.status;
+      if (![404, 405].includes(res.status)) {
+        throw await toHttpError(res, { method: "GET", path });
+      }
+    }
+    if (lastStatus && ![404, 405].includes(lastStatus)) {
+      throw new Error("Could not load allocations from Webtrak.");
+    }
   }
-  const raw = await parseResponse(res, {});
+
+  const headers = {
+    Accept: "application/json",
+    ...(auth ? { Authorization: auth } : {}),
+  };
+
+  const raw = await requestWithFallbacks(
+    ["/api/v1/allocation/user/detail", "/api/v1/allocation/user"],
+    {
+      signal,
+      headers,
+      fallbackStatuses: [404, 405],
+      notFoundMessage: "Allocation detail endpoint not found.",
+    },
+  );
+
+  const root = raw && typeof raw === "object" ? raw : {};
+  const data = root.data ?? root;
+  if (Array.isArray(data)) {
+    return normalizeUserAllocationFromLegacyList(raw);
+  }
   return normalizeUserAllocationDetail(raw);
 }
 

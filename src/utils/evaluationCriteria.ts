@@ -12,39 +12,48 @@ function cleanText(value, depth = 0) {
       .trim();
   }
   if (typeof value !== "object") return "";
-  const obj = value;
-  for (const key of [
-    "evaluationCriteria",
-    "evaluation_criteria",
-    "evaluationcriteria",
-    "criteria",
-    "roles",
-    "role",
-    "pillar",
-    "valuePillar",
-    "pillarName",
-    "pillarType",
-    "category",
-    "group",
-    "domain",
-  ]) {
-    const s = cleanText(obj[key], depth + 1);
+  return "";
+}
+
+const CRITERIA_FIELD_KEYS = [
+  "evaluationCriteria",
+  "evaluation_criteria",
+  "evaluationcriteria",
+  "criteria",
+  "evaluationPillar",
+  "evaluation_pillar",
+  "pillar",
+  "valuePillar",
+  "pillarName",
+  "pillarType",
+];
+
+function readCriteriaFromObject(obj) {
+  if (!obj || typeof obj !== "object") return "";
+  for (const key of CRITERIA_FIELD_KEYS) {
+    const s = cleanText(obj[key], 0);
     if (s && s !== "—" && s !== "-") return s;
   }
   return "";
 }
 
-/** Resolve evaluation criteria from API/KPI/value rows (never treat department/stream as criteria). */
+/** Resolve evaluation criteria from API/KPI/value rows (never treat employee role/department as criteria). */
 export function extractEvaluationCriteria(row, fallback = "") {
-  const direct = cleanText(row);
+  if (row == null) return String(fallback ?? "").trim();
+  if (typeof row === "string") return row.trim();
+
+  const direct = readCriteriaFromObject(row);
   if (direct) return direct;
+
+  const obj = row && typeof row === "object" ? row : {};
   const nested =
-    cleanText(row?.raw) ||
-    cleanText(row?.attributes) ||
-    cleanText(row?.metadata) ||
-    cleanText(row?.kpiDefinition) ||
-    cleanText(row?.definition);
+    readCriteriaFromObject(obj.raw) ||
+    readCriteriaFromObject(obj.attributes) ||
+    readCriteriaFromObject(obj.metadata) ||
+    readCriteriaFromObject(obj.kpiDefinition) ||
+    readCriteriaFromObject(obj.definition);
   if (nested) return nested;
+
   return String(fallback ?? "").trim();
 }
 

@@ -1,6 +1,7 @@
 // @ts-nocheck
 import type { ApiOptions } from "../../types/api-options";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Calendar,
@@ -84,6 +85,7 @@ import {
 import { formatPerformanceRating, performanceRatingLabel, performanceRatingScaleText, parseIntegerPerformanceRating } from "../../utils/ratingLabels";
 import { IntegerPerformanceRatingSelect } from "../shared/PerformanceRatingField";
 import { ensurePromotionPathsLoaded, extractWebtrakBandCode, getPromotionPreview } from "../../utils/careerPromotion";
+import { buildCriteriaColorMap, paletteForCriteria } from "../../utils/evaluationCriteriaPalette";
 import CycleReplayPanel from "../shared/CycleReplayPanel";
 import EmployeePerformanceHistory from "./EmployeePerformanceHistory";
 import { EMPLOYEE_NAV_GROUPS, EMPLOYEE_REVIEW_STEP_IDS, EMPLOYEE_TAB_COPY } from "../../config/portalNavigation";
@@ -1096,32 +1098,17 @@ function ValuesTab({
   locked,
   canProceed,
 }) {
-  const pillarPalette = useMemo(
-    () => [
-      { bg: "bg-blue-500/10", text: "text-blue-500", border: "border-blue-500/20" },
-      { bg: "bg-emerald-500/10", text: "text-emerald-500", border: "border-emerald-500/20" },
-      { bg: "bg-amber-500/10", text: "text-amber-600", border: "border-amber-500/30" },
-      { bg: "bg-blue-500/10", text: "text-blue-500", border: "border-blue-500/20" },
-      { bg: "bg-rose-500/10", text: "text-rose-500", border: "border-rose-500/20" },
-      { bg: "bg-cyan-500/10", text: "text-cyan-500", border: "border-cyan-500/20" },
-      { bg: "bg-blue-500/10", text: "text-blue-500", border: "border-blue-500/20" },
-      { bg: "bg-teal-500/10", text: "text-teal-500", border: "border-teal-500/20" },
-    ],
-    []
+  const list = useMemo(() => (Array.isArray(items) ? items : []), [items]);
+  const criteriaColorMap = useMemo(
+    () => buildCriteriaColorMap(list.map((v) => v?.pillar)),
+    [list],
   );
-
   const colorForPillar = useCallback(
     (pillar) => {
-      const key = String(pillar || "").toLowerCase().trim();
-      if (!key) return { bg: "bg-[rgb(var(--surface-2))]", text: "text-[rgb(var(--muted))]", border: "border-[rgb(var(--border))]" };
-      let hash = 0;
-      for (let i = 0; i < key.length; i++) {
-        hash = (hash * 31 + key.charCodeAt(i)) | 0;
-      }
-      const idx = Math.abs(hash) % pillarPalette.length;
-      return pillarPalette[idx];
+      const palette = paletteForCriteria(pillar, criteriaColorMap);
+      return { bg: palette.bg, text: palette.text, border: palette.border };
     },
-    [pillarPalette]
+    [criteriaColorMap],
   );
   const valueRatings = useMemo(
     () => normalizeWebknotValueRatingsForState(selectedValues),
@@ -1131,7 +1118,6 @@ function ValuesTab({
     () => normalizeValueCommentsForState(valueComments),
     [valueComments]
   );
-  const list = useMemo(() => (Array.isArray(items) ? items : []), [items]);
   const ratedCount = useMemo(() => {
     if (!list.length) return 0;
     let count = 0;
@@ -2188,48 +2174,48 @@ export default function EmployeePortal({ onLogout, auth }) {
     } catch { void 0; }
     return window.innerWidth >= 1024;
   });
+  const location = useLocation();
+  const navigate = useNavigate();
+
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
   const EMP_VALID_TABS = useMemo(
     () => new Set(["profile", "account", "projects", "kpis", "values", "certifications", "recognitions", "review", "performance", "settings"]),
     [],
   );
 
-  const getEmpTabFromPath = useCallback(() => {
-    const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
-    if (parts[0] === "employee") {
-      const tab = parts[1] || "profile";
-      if (tab === "notes" || tab === "drive") return "profile";
-      return EMP_VALID_TABS.has(tab) ? tab : "profile";
-    }
-    const legacy = parts[0] || "profile";
-    return EMP_VALID_TABS.has(legacy) ? legacy : "profile";
-  }, [EMP_VALID_TABS]);
+  const getEmpTabFromPath = useCallback(
+    (pathname = location.pathname) => {
+      const parts = String(pathname || "")
+        .replace(/\/$/, "")
+        .split("/")
+        .filter(Boolean);
+      if (parts[0] === "employee") {
+        const tab = parts[1] || "profile";
+        if (tab === "notes" || tab === "drive") return "profile";
+        return EMP_VALID_TABS.has(tab) ? tab : "profile";
+      }
+      const legacy = parts[0] || "profile";
+      return EMP_VALID_TABS.has(legacy) ? legacy : "profile";
+    },
+    [EMP_VALID_TABS, location.pathname],
+  );
 
-  const [activeTab, setActiveTabRaw] = useState(() => getEmpTabFromPath());
+  const activeTab = useMemo(() => getEmpTabFromPath(), [getEmpTabFromPath]);
 
-  const setActiveTab = useCallback((tab) => {
-    setActiveTabRaw(tab);
-    const path = tab === "profile" ? "/employee" : `/employee/${tab}`;
-    if (window.location.pathname !== path) {
-      window.history.pushState(null, "", path);
-    }
-  }, []);
+  const setActiveTab = useCallback(
+    (tab) => {
+      const path = tab === "profile" ? "/employee" : `/employee/${tab}`;
+      if (location.pathname !== path) navigate(path);
+    },
+    [location.pathname, navigate],
+  );
 
   useEffect(() => {
-    const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
+    const parts = location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
     if (parts[0] === "employee" && (parts[1] === "notes" || parts[1] === "drive")) {
-      window.history.replaceState(null, "", "/employee");
-      setActiveTabRaw("profile");
+      navigate("/employee", { replace: true });
     }
-  }, []);
-
-  useEffect(() => {
-    const onPathChange = () => setActiveTabRaw(getEmpTabFromPath());
-    window.addEventListener("popstate", onPathChange);
-    return () => {
-      window.removeEventListener("popstate", onPathChange);
-    };
-  }, [getEmpTabFromPath]);
+  }, [location.pathname, navigate]);
 
   const [employee, setEmployee] = useState(() =>
     normalizeEmployeeFromAuth(auth, {
@@ -2460,30 +2446,6 @@ export default function EmployeePortal({ onLogout, auth }) {
   }, []);
 
   const kpiPrefetchCursorRef = useRef(null);
-  useEffect(() => {
-    const key = "rt_tracking_employee_portal_tab_token_v1";
-    const randomToken =
-      typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : Math.random().toString(36).slice(2);
-
-    try {
-      const sessionToken = window.sessionStorage.getItem(key);
-      const globalToken = window.localStorage.getItem(key);
-
-      if (sessionToken && globalToken === sessionToken) {
-        setActiveTab("profile");
-        window.sessionStorage.setItem(key, randomToken);
-        window.localStorage.setItem(key, randomToken);
-        return;
-      }
-
-      if (!sessionToken) {
-        window.sessionStorage.setItem(key, randomToken);
-        window.localStorage.setItem(key, randomToken);
-      }
-    } catch { void 0; }
-  }, [authEmail, onLogout, role, submissionMonth]);
 
   useEffect(() => {
     let mounted = true;

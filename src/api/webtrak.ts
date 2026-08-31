@@ -100,7 +100,7 @@ function rosterBaseHost() {
   const raw = String(
     import.meta.env?.VITE_EMPLOYEE_ROSTER_API_BASE ??
       import.meta.env?.VITE_WEBTRAK_API_BASE ??
-      "",
+      DEFAULT_EMPLOYEE_ROSTER_BASE,
   ).trim();
   if (!raw) return "";
   try {
@@ -110,15 +110,19 @@ function rosterBaseHost() {
   }
 }
 
-/**
- * Dev-only: Vite proxies `/__webtrak` when roster env points at a remote host.
- * Production always uses same-origin `/api/v1/user/onboard` with the login JWT.
- */
-export function shouldUseRemoteEmployeeRosterProxy() {
-  if (!import.meta.env.DEV) return false;
+/** Employee roster + profile + allocations read from hosted Webtrak (not Pulse-local DB). */
+export function shouldUseRemoteEmployeeWebtrak() {
+  if (String(import.meta.env?.VITE_USE_LOCAL_EMPLOYEE_WEBTRAK ?? "").trim().toLowerCase() === "true") {
+    return false;
+  }
   const host = rosterBaseHost();
   if (!host) return false;
   return host !== "localhost" && host !== "127.0.0.1";
+}
+
+/** @deprecated Alias — use {@link shouldUseRemoteEmployeeWebtrak}. */
+export function shouldUseRemoteEmployeeRosterProxy() {
+  return shouldUseRemoteEmployeeWebtrak();
 }
 
 /** Remote Webtrak host used for HR employee roster (`GET /api/v1/user/onboard`). */
@@ -132,13 +136,18 @@ export function getEmployeeRosterApiBase() {
   return raw.replace(/\/$/, "");
 }
 
-/** Team list uses the logged-in Webtrak session (`/api/v1/user/onboard`). */
+/** Team list uses hosted Webtrak when configured (browser: `/__webtrak/...` proxy). */
 export function buildEmployeeRosterUrl(path: string) {
   const p = String(path || "").startsWith("/") ? path : `/${path}`;
-  if (import.meta.env.DEV && shouldUseRemoteEmployeeRosterProxy()) {
+  if (shouldUseRemoteEmployeeWebtrak()) {
     return buildRemoteWebtrakUrl(p);
   }
   return buildApiUrl(p);
+}
+
+/** Profile, allocations, and other employee read APIs on hosted Webtrak. */
+export function buildEmployeeWebtrakUrl(path: string) {
+  return buildEmployeeRosterUrl(path);
 }
 
 /** Bands, departments, promotion paths, and other legacy Webtrak HR APIs on webknot-dev.in. */
@@ -151,7 +160,7 @@ export function buildRemoteWebtrakUrl(path: string) {
 }
 
 export function getEmployeeRosterAuthHeaders(extra: Record<string, string> = {}) {
-  if (!shouldUseRemoteEmployeeRosterProxy()) {
+  if (!shouldUseRemoteEmployeeWebtrak()) {
     return getWebtrakAuthHeaders(extra);
   }
 
@@ -164,18 +173,30 @@ export function getEmployeeRosterAuthHeaders(extra: Record<string, string> = {})
   ).trim();
   if (key) {
     headers.Authorization = asBearer(key);
+  } else {
+    const sessionAuth = String(getAuthHeader?.() || "").trim();
+    if (sessionAuth) headers.Authorization = sessionAuth;
   }
   return headers;
 }
 
 export function employeeRosterFetchCredentials(): RequestCredentials {
-  if (!shouldUseRemoteEmployeeRosterProxy()) {
+  if (!shouldUseRemoteEmployeeWebtrak()) {
     return "include";
   }
   const key = String(
     import.meta.env?.VITE_WEBTRAK_API_KEY ?? import.meta.env?.WEBTRAK_API_KEY ?? "",
   ).trim();
   return key ? "omit" : "include";
+}
+
+/** Same as roster helpers — credentials for employee Webtrak reads. */
+export function employeeWebtrakFetchCredentials() {
+  return employeeRosterFetchCredentials();
+}
+
+export function getEmployeeWebtrakAuthHeaders(extra: Record<string, string> = {}) {
+  return getEmployeeRosterAuthHeaders(extra);
 }
 
 export function buildWebtrakUrl(path: string) {
@@ -199,7 +220,11 @@ export function resolveWebtrakProfilePhotoUrl(raw: unknown) {
     .replace(/^\/+/, "");
   filename = filename.split("/").pop() || "";
   if (!filename || filename.includes("..")) return "";
-  return buildWebtrakUrl(`/api/v1/profile/photo/${encodeURIComponent(filename)}`);
+  const photoPath = `/api/v1/profile/photo/${encodeURIComponent(filename)}`;
+  if (shouldUseRemoteEmployeeWebtrak()) {
+    return buildRemoteWebtrakUrl(photoPath);
+  }
+  return buildWebtrakUrl(photoPath);
 }
 
 export function toWebtrakPortalRoleToken(role: unknown) {

@@ -1,6 +1,7 @@
 // @ts-nocheck
 import type { ApiOptions } from "../../types/api-options";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Bell,
@@ -850,45 +851,44 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [managerStream, setManagerStream] = useState(() => String(auth?.stream || "").trim());
   const [filter, setFilter] = useState("PENDING_MANAGER_REVIEW"); // SUBMITTED | ALL | PENDING_MANAGER_REVIEW
   const [teamSearch, setTeamSearch] = useState("");
+  const location = useLocation();
+  const navigate = useNavigate();
   /* ── Path-based routing: sync activeTab ↔ URL path ── */
   const MGR_VALID_TABS = useMemo(() => new Set(["team", "self-review", "account", "settings"]), []);
 
-  const getMgrTabFromPath = useCallback(() => {
-    const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
-    if (parts[0] === "manager") {
-      const tab = parts[1] || "team";
-      if (tab === "notes" || tab === "drive") return "team";
-      return MGR_VALID_TABS.has(tab) ? tab : "team";
-    }
-    const legacy = parts[0] || "team";
-    return MGR_VALID_TABS.has(legacy) ? legacy : "team";
-  }, [MGR_VALID_TABS]);
+  const getMgrTabFromPath = useCallback(
+    (pathname = location.pathname) => {
+      const parts = String(pathname || "")
+        .replace(/\/$/, "")
+        .split("/")
+        .filter(Boolean);
+      if (parts[0] === "manager") {
+        const tab = parts[1] || "team";
+        if (tab === "notes" || tab === "drive") return "team";
+        return MGR_VALID_TABS.has(tab) ? tab : "team";
+      }
+      const legacy = parts[0] || "team";
+      return MGR_VALID_TABS.has(legacy) ? legacy : "team";
+    },
+    [MGR_VALID_TABS, location.pathname],
+  );
 
-  const [activeTab, setActiveTabRaw] = useState(() => getMgrTabFromPath());
+  const activeTab = useMemo(() => getMgrTabFromPath(), [getMgrTabFromPath]);
 
-  const setActiveTab = useCallback((tab) => {
-    setActiveTabRaw(tab);
-    const path = tab === "team" ? "/manager" : `/manager/${tab}`;
-    if (window.location.pathname !== path) {
-      window.history.pushState(null, "", path);
-    }
-  }, []);
+  const setActiveTab = useCallback(
+    (tab) => {
+      const path = tab === "team" ? "/manager" : `/manager/${tab}`;
+      if (location.pathname !== path) navigate(path);
+    },
+    [location.pathname, navigate],
+  );
 
   useEffect(() => {
-    const parts = window.location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
+    const parts = location.pathname.replace(/\/$/, "").split("/").filter(Boolean);
     if (parts[0] === "manager" && (parts[1] === "notes" || parts[1] === "drive")) {
-      window.history.replaceState(null, "", "/manager");
-      setActiveTabRaw("team");
+      navigate("/manager", { replace: true });
     }
-  }, []);
-
-  useEffect(() => {
-    const onPathChange = () => setActiveTabRaw(getMgrTabFromPath());
-    window.addEventListener("popstate", onPathChange);
-    return () => {
-      window.removeEventListener("popstate", onPathChange);
-    };
-  }, [getMgrTabFromPath]);
+  }, [location.pathname, navigate]);
   const [managerSelfReviewText, setManagerSelfReviewText] = useState("");
   const [managerSelfKpiRatings, setManagerSelfKpiRatings] = useState({});
   const [managerSelfValueRatings, setManagerSelfValueRatings] = useState({});

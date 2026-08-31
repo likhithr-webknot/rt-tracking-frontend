@@ -1,6 +1,7 @@
 // @ts-nocheck
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Edit3, Plus, Search, Trash2 } from "lucide-react";
+import { buildCriteriaColorMap, paletteForCriteria } from "../../utils/evaluationCriteriaPalette";
 export default function WebknotValueDirectory({
   values = [],
   searchQuery = "",
@@ -31,33 +32,6 @@ export default function WebknotValueDirectory({
     return { key: collapsed.toLowerCase(), label: pretty || collapsed };
   }, [toTitleCase]);
 
-  const pillarPalette = useMemo(
-    () => [
-      { bg: "bg-blue-500/10", text: "text-blue-500", border: "border-blue-500/20" },
-      { bg: "bg-emerald-500/10", text: "text-emerald-500", border: "border-emerald-500/20" },
-      { bg: "bg-amber-500/10", text: "text-amber-600", border: "border-amber-500/30" },
-      { bg: "bg-blue-500/10", text: "text-blue-500", border: "border-blue-500/20" },
-      { bg: "bg-rose-500/10", text: "text-rose-500", border: "border-rose-500/20" },
-      { bg: "bg-cyan-500/10", text: "text-cyan-500", border: "border-cyan-500/20" },
-      { bg: "bg-blue-500/10", text: "text-blue-500", border: "border-blue-500/20" },
-      { bg: "bg-teal-500/10", text: "text-teal-500", border: "border-teal-500/20" },
-    ],
-    []
-  );
-
-  const colorForPillar = useCallback(
-    (pillar) => {
-      const { key } = canonicalizePillar(pillar);
-      if (!key || key === "--") return { bg: "bg-[rgb(var(--surface-2))]", text: "text-[rgb(var(--muted))]", border: "border-[rgb(var(--border))]" };
-      let hash = 0;
-      for (let i = 0; i < key.length; i++) {
-        hash = (hash * 31 + key.charCodeAt(i)) | 0;
-      }
-      const idx = Math.abs(hash) % pillarPalette.length;
-      return pillarPalette[idx];
-    },
-    [pillarPalette, canonicalizePillar]
-  );
   const filtered = useMemo(() => {
     const q = normalizeText(searchQuery);
     if (!q) return values;
@@ -90,6 +64,27 @@ export default function WebknotValueDirectory({
       }))
       .sort((a, b) => a.pillar.localeCompare(b.pillar, undefined, { sensitivity: "base" }));
   }, [filtered, canonicalizePillar, normalizeText]);
+
+  const criteriaColorMap = useMemo(
+    () => buildCriteriaColorMap(grouped.map((group) => group.pillar)),
+    [grouped],
+  );
+
+  const colorForPillar = useCallback(
+    (pillar) => {
+      const { key, label } = canonicalizePillar(pillar);
+      if (!key || key === "--") {
+        return {
+          bg: "bg-[rgb(var(--surface-2))]",
+          text: "text-[rgb(var(--muted))]",
+          border: "border-[rgb(var(--border))]",
+        };
+      }
+      const palette = paletteForCriteria(label, criteriaColorMap);
+      return { bg: palette.bg, text: palette.text, border: palette.border };
+    },
+    [canonicalizePillar, criteriaColorMap],
+  );
 
   const groupedPages = useMemo(() => {
     const pages = [];

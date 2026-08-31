@@ -31,6 +31,7 @@ import {
   evaluationCriteriaDisplayLabel,
   evaluationCriteriaGroupKey,
 } from "../../utils/evaluationCriteria";
+import { buildCriteriaColorMap, paletteForCriteria } from "../../utils/evaluationCriteriaPalette";
 
 /** UI/domain shape — evaluation criteria from API pillar / criteria fields */
 function mapApiValueToWebknotValue(row) {
@@ -73,22 +74,6 @@ function titleCase(text) {
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
-}
-
-const CRITERIA_PALETTE = [
-  { ring: "ring-blue-500/25", dot: "bg-blue-500", badge: "bg-blue-500/10 text-blue-600 dark:text-blue-300 border-blue-500/20" },
-  { ring: "ring-emerald-500/25", dot: "bg-emerald-500", badge: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border-emerald-500/20" },
-  { ring: "ring-amber-500/25", dot: "bg-amber-500", badge: "bg-amber-700/10 text-amber-700 dark:text-amber-300 border-amber-500/20" },
-  { ring: "ring-cyan-500/25", dot: "bg-cyan-500", badge: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-300 border-cyan-500/20" },
-  { ring: "ring-rose-500/25", dot: "bg-rose-500", badge: "bg-rose-500/10 text-rose-600 dark:text-rose-300 border-rose-500/20" },
-  { ring: "ring-sky-500/25", dot: "bg-sky-500", badge: "bg-sky-500/10 text-sky-600 dark:text-sky-300 border-sky-500/20" },
-];
-
-function paletteForCriteria(key) {
-  const k = normalizeSearchText(key) || "uncategorized";
-  let hash = 0;
-  for (let i = 0; i < k.length; i++) hash = (hash * 31 + k.charCodeAt(i)) | 0;
-  return CRITERIA_PALETTE[Math.abs(hash) % CRITERIA_PALETTE.length];
 }
 
 const EMPTY_DRAFT = { name: "", evaluationCriteria: "", description: "" };
@@ -169,6 +154,11 @@ export default function CompanyValuesWorkspace() {
       a.label.localeCompare(b.label, undefined, { sensitivity: "base" })
     );
   }, [pagination.slice]);
+
+  const criteriaColorMap = useMemo(
+    () => buildCriteriaColorMap(groupedByCriteria.map((group) => group.label)),
+    [groupedByCriteria],
+  );
 
   const stats = useMemo(
     () => ({
@@ -346,7 +336,7 @@ export default function CompanyValuesWorkspace() {
           <div className="space-y-5 p-4 sm:p-5">
             <AnimatePresence mode="popLayout">
               {groupedByCriteria.map((group) => {
-                const palette = paletteForCriteria(group.key);
+                const palette = paletteForCriteria(group.label, criteriaColorMap);
                 return (
                   <motion.section
                     key={group.key}
