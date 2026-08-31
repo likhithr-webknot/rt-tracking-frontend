@@ -56,12 +56,8 @@ import { fetchEmployeePortalKpiDefinitions, normalizeCursorPage } from "../../ap
 import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions";
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi";
 import { enhanceReviewText, fetchActiveAiAgent } from "../../api/ai-agents";
-import {
-  fetchNotifications,
-  markAllNotificationsRead,
-  markNotificationAsRead,
-} from "../../api/notifications";
 import { getManagerSettings } from "../../utils/appSettings";
+import { extractEmploymentDetails } from "../../utils/employmentProfile";
 import {
   buildCycleMeta,
   getCycleForMonth,
@@ -849,6 +845,7 @@ export default function ManagerPortal({ onLogout, auth }) {
   const [managerId, setManagerId] = useState(() => String(auth?.employeeId || "").trim() || "");
   const [managerBand, setManagerBand] = useState(() => String(auth?.band || "").trim());
   const [managerStream, setManagerStream] = useState(() => String(auth?.stream || "").trim());
+  const [managerProfileReady, setManagerProfileReady] = useState(false);
   const [filter, setFilter] = useState("PENDING_MANAGER_REVIEW"); // SUBMITTED | ALL | PENDING_MANAGER_REVIEW
   const [teamSearch, setTeamSearch] = useState("");
   const location = useLocation();
@@ -1434,55 +1431,55 @@ export default function ManagerPortal({ onLogout, auth }) {
   useEffect(() => {
     let mounted = true;
     const controller = new AbortController();
+
+    const applyManagerProfile = (profile) => {
+      if (!profile || typeof profile !== "object") return;
+      const root =
+        profile?.data && typeof profile.data === "object" && !Array.isArray(profile.data)
+          ? profile.data
+          : profile;
+      const details = extractEmploymentDetails({ profile: root, auth });
+      if (details.empId) {
+        setManagerId((prev) => prev || details.empId);
+      }
+      if (details.band) {
+        setManagerBand((prev) => prev || details.band);
+      }
+      if (details.stream) {
+        setManagerStream((prev) => prev || details.stream);
+      }
+    };
+
     (async () => {
+      setManagerProfileReady(false);
       try {
-        await fetchPortalManager({ signal: controller.signal });
+        const portal = await fetchPortalManager({ signal: controller.signal });
+        if (!mounted) return;
+        applyManagerProfile(portal?.data?.manager ?? portal?.data?.me ?? portal?.data ?? null);
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!mounted) return;
         if (err?.status === 401) onLogout?.();
       }
-    })();
-    return () => {
-      mounted = false;
-      controller.abort();
-    };
-  }, [onLogout]);
 
-  useEffect(() => {
-    let mounted = true;
-    const controller = new AbortController();
-    (async () => {
-      const hasManagerId = Boolean(String(managerId || "").trim());
-      const hasManagerBand = Boolean(String(managerBand || "").trim());
-      const hasManagerStream = Boolean(String(managerStream || "").trim());
-      if (hasManagerId && hasManagerBand && hasManagerStream) return;
       try {
         const me = await fetchMe({ signal: controller.signal });
         if (!mounted) return;
-        const root = me && typeof me === "object" ? me : {};
-        const obj =
-          root?.data && typeof root.data === "object" && !Array.isArray(root.data)
-            ? root.data
-            : root;
-
-        const id = String(obj?.employeeId ?? obj?.empId ?? obj?.id ?? "").trim();
-        const band = String(obj?.band ?? obj?.level ?? "").trim();
-        const stream = String(obj?.stream ?? obj?.context ?? "").trim();
-        if (id) setManagerId(id);
-        if (band) setManagerBand(band);
-        if (stream) setManagerStream(stream);
+        applyManagerProfile(me);
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!mounted) return;
         if (err?.status === 401) onLogout?.();
+      } finally {
+        if (mounted) setManagerProfileReady(true);
       }
     })();
+
     return () => {
       mounted = false;
       controller.abort();
     };
-  }, [managerBand, managerId, managerStream, onLogout]);
+  }, [auth, onLogout]);
 
   useEffect(() => {
     let mounted = true;
@@ -1749,16 +1746,18 @@ export default function ManagerPortal({ onLogout, auth }) {
   );
 
   useEffect(() => {
+    if (!managerProfileReady) return;
     if (!String(month || "").trim()) return;
     reloadTeam({ cursor: null, pageAction: "reset" }).catch(() => {});
-  }, [managerId, month, reloadTeam]);
+  }, [managerProfileReady, managerId, month, reloadTeam]);
 
   useEffect(() => {
+    if (!managerProfileReady) return;
     if (!String(month || "").trim()) return;
     const controller = new AbortController();
     reloadTeamInsights({ signal: controller.signal }).catch(() => {});
     return () => controller.abort();
-  }, [managerId, month, reloadTeamInsights]);
+  }, [managerProfileReady, managerId, month, reloadTeamInsights]);
 
   useEffect(() => {
     if (!String(month || "").trim()) return;
@@ -2878,7 +2877,7 @@ export default function ManagerPortal({ onLogout, auth }) {
         >
         <PortalWorkflowFrame>
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          {teamLoading && teamSubs.length === 0 ? (
+          {(teamLoading || !managerProfileReady) && teamSubs.length === 0 ? (
             <div className="xl:col-span-3 rt-panel-subtle rounded-lg p-6 text-sm text-[rgb(var(--muted))] animate-pulse">
               Loading team submissions…
             </div>

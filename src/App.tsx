@@ -17,18 +17,19 @@ import {
   fetchMe,
   getAuth,
   getAuthHeader,
-  getSessionExpiryReason,
   hasManualLogoutMark,
   hasRecoverableSession,
   logout as logoutApi,
   markManualLogout,
   setAuth,
   stripOAuthParamsFromUrl,
-  touchSessionActivity,
 } from "./api/auth";
 import { isWebknotWorkEmail } from "./utils/webknotEmail";
 import { isHrPortalUser } from "./utils/hrRatingsFilter";
+import { mapPulsePortalRoleToAppRoute, resolvePortalRoleLabel } from "./utils/portalRole";
+import { bootstrapWebtrakHandoffSession, isWebtrakHandoff } from "./api/webtrakSso";
 import PortalLoadingScreen from "./components/shared/PortalLoadingScreen";
+import SessionTimeoutManager from "./components/shared/SessionTimeoutManager";
 import NotFoundPage from "./components/shared/NotFoundPage";
 
 const EMPLOYEE_LEGACY_TABS = new Set([
@@ -40,8 +41,10 @@ const EMPLOYEE_LEGACY_TABS = new Set([
   "certifications",
   "recognitions",
   "review",
+  "performance",
+  "settings",
 ]);
-const MANAGER_LEGACY_TABS = new Set(["team", "self-review", "account"]);
+const MANAGER_LEGACY_TABS = new Set(["team", "self-review", "account", "settings"]);
 
 function normalizePortalRole(value) {
   const raw = String(value ?? "").trim().toLowerCase();
@@ -111,31 +114,18 @@ function canAccessManagerPortal(auth, activePortalRole, isHrUser, hasReportees) 
 
 function resolvePortalRole(auth) {
   const obj = auth && typeof auth === "object" ? auth : {};
-  const claims = obj?.claims && typeof obj.claims === "object" ? obj.claims : {};
-
-  const explicit = normalizePortalRole(
-    obj?.activeRole ||
-    obj?.currentRole ||
-    obj?.selectedRole ||
-    obj?.role ||
-    obj?.empRole ||
-    obj?.userRole ||
-    obj?.roleName ||
-    obj?.roleType ||
-    claims?.activeRole ||
-    claims?.role
+  const portalLabel = resolvePortalRoleLabel(
+    obj.portalRole,
+    obj.empRole,
+    obj.role,
+    obj.portal,
+    obj.activeRole,
+    obj.currentRole,
   );
-  if (explicit) return explicit;
-
-  return resolveRoleFromCandidates([
-    obj?.roles,
-    obj?.authorities,
-    obj?.grantedAuthorities,
-    claims?.roles,
-    claims?.authorities,
-    claims?.grantedAuthorities,
-    obj?.portal,
-  ]);
+  if (portalLabel) {
+    return mapPulsePortalRoleToAppRoute(portalLabel);
+  }
+  return "Employee";
 }
 
 /** Shared loading fallback for Suspense / cold auth bootstrap */
@@ -274,6 +264,7 @@ export default function App() {
         const hadManualLogoutMark = hasManualLogoutMark();
         const existing = getAuth() || {};
         const callbackToken = consumeOAuthTokenFromUrl();
+        const handoffFromWebtrak = isWebtrakHandoff();
 
         if (callbackToken) {
           const claims = decodeJwtPayload(callbackToken);
@@ -296,7 +287,19 @@ export default function App() {
 
         let me = null;
         try {
-          me = await fetchMe({ signal: controller.signal });
+          if (handoffFromWebtrak || callbackToken) {
+            me = await bootstrapWebtrakHandoffSession({
+              signal: controller.signal,
+              hasToken: Boolean(callbackToken),
+            });
+            if (!alive || generation !== bootstrapGeneration.current) return;
+            if (!me && handoffFromWebtrak && !hasRecoverableSession()) {
+              return;
+            }
+          }
+          if (!me) {
+            me = await fetchMe({ signal: controller.signal });
+          }
         } catch (meErr) {
           if (!alive || generation !== bootstrapGeneration.current) return;
           console.warn("[auth] fetchMe failed:", meErr);
@@ -370,43 +373,6 @@ export default function App() {
     }
     window.addEventListener("rt-auth-changed", onAuthChanged);
     return () => window.removeEventListener("rt-auth-changed", onAuthChanged);
-  }, []);
-
-  // Absolute 8h session + 30m inactivity timeout.
-  useEffect(() => {
-    let lastTouch = 0;
-    const expireIfNeeded = () => {
-      const reason = getSessionExpiryReason();
-      if (reason === "max_duration" || reason === "inactivity") {
-        markManualLogout();
-        void logoutApi().catch(() => {});
-        clearAuth();
-        setAuthState(null);
-        setAuthChecking(false);
-      }
-    };
-    const onActivity = () => {
-      const now = Date.now();
-      // Throttle activity writes (mousemove/scroll can be very chatty).
-      if (now - lastTouch < 15_000) return;
-      lastTouch = now;
-      touchSessionActivity();
-    };
-    const windowEvents = ["pointerdown", "keydown", "mousemove", "scroll", "touchstart"] as const;
-    for (const ev of windowEvents) {
-      window.addEventListener(ev, onActivity, { passive: true });
-    }
-    document.addEventListener("visibilitychange", onActivity);
-    const interval = window.setInterval(expireIfNeeded, 30_000);
-    expireIfNeeded();
-    touchSessionActivity({ ensureIssuedAt: true });
-    return () => {
-      for (const ev of windowEvents) {
-        window.removeEventListener(ev, onActivity);
-      }
-      document.removeEventListener("visibilitychange", onActivity);
-      window.clearInterval(interval);
-    };
   }, []);
 
   const logout = useCallback(() => {
@@ -486,8 +452,9 @@ export default function App() {
   };
 
   return (
-    <Suspense fallback={<PortalLoader />}>
-      {renderPortal()}
-    </Suspense>
+    <>
+      <SessionTimeoutManager signedIn={Boolean(auth)} onExpire={logout} />
+      <Suspense fallback={<PortalLoader />}>{renderPortal()}</Suspense>
+    </>
   );
 }

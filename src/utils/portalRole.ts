@@ -42,6 +42,43 @@ export function resolvePortalRoleLabel(...candidates: unknown[]): string {
   return PORTAL_ROLE_LABELS.EMPLOYEE;
 }
 
+/**
+ * Pulse portal identity for routing — uses portalRole / empRole / /user/role only.
+ * Ignores Webtrak security grants such as ROLE_ADMIN on the JWT `roles` array.
+ */
+export function resolvePulsePortalRoleFromSources(profile, { roleHint = "" } = {}) {
+  const obj = profile && typeof profile === "object" ? profile : {};
+  return resolvePortalRoleLabel(
+    obj.portalRole,
+    obj.empRole,
+    obj.portal,
+    obj.activeRole,
+    obj.currentRole,
+    obj.selectedRole,
+    looksLikePulsePortalLabel(obj.role) ? obj.role : "",
+    roleHint,
+  );
+}
+
+function looksLikePulsePortalLabel(value) {
+  const label = formatPortalRoleLabel(value);
+  if (!label) return false;
+  const raw = String(value ?? "").trim().toUpperCase();
+  if (raw.startsWith("ROLE_")) return false;
+  return true;
+}
+
+/** Map portal labels to App route buckets (Admin | Manager | Employee | HR). */
+export function mapPulsePortalRoleToAppRoute(portalLabel) {
+  const label = resolvePortalRoleLabel(portalLabel);
+  if (label === PORTAL_ROLE_LABELS.SUPER_ADMIN || label === PORTAL_ROLE_LABELS.FINANCE) {
+    return "Admin";
+  }
+  if (label === PORTAL_ROLE_LABELS.HR) return "HR";
+  if (label === PORTAL_ROLE_LABELS.MANAGER) return "Manager";
+  return "Employee";
+}
+
 export function getPortalRoleSelectOptions({ includeSuperAdmin = false } = {}) {
   return includeSuperAdmin
     ? [...PORTAL_ROLE_OPTIONS, PORTAL_ROLE_LABELS.SUPER_ADMIN]

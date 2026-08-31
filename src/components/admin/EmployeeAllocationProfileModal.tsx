@@ -5,12 +5,9 @@ import {
   GraduationCap,
   Loader2,
   Mail,
-  Pencil,
   Phone,
   UserRound,
 } from "lucide-react";
-import ConfirmDialog from "../shared/ConfirmDialog";
-import { DialogFooter } from "../shared/ModalOverlay";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import {
   fetchEmployeeAllocations,
@@ -18,7 +15,6 @@ import {
 } from "../../api/allocations";
 import { setPortalRole } from "../../api/employees";
 import {
-  buildHrProfileUpdatePayload,
   displayOrDash,
   fetchEmployeeTrainingScores,
   fetchWebtrakEmployeeBalances,
@@ -27,18 +23,12 @@ import {
   formatProfileDate,
   formatUserTypeHistory,
   profileFromDirectoryEmployee,
-  profileToEditForm,
-  updateWebtrakEmployeeProfile,
 } from "../../api/webtrakEmployeeProfile";
 import {
   coercePortalRoleSelectValue,
   getPortalRoleSelectOptions,
   resolvePortalRoleLabel,
 } from "../../utils/portalRole";
-
-const USER_STATUSES = ["ACTIVE", "INACTIVE", "PENDING", "ONBOARDING", "INVITED", "SERVING_NOTICE"];
-const WORK_MODES = ["WFO", "WFH", "HYBRID"];
-const WORK_LOCATIONS = ["OFFSHORE", "ONSITE", "HYBRID", "REMOTE"];
 
 function FieldRow({ label, value }) {
   return (
@@ -111,10 +101,8 @@ export default function EmployeeAllocationProfileModal({
   empId: empIdProp = "",
   employee = null,
   onBack,
-  canEdit = true,
   canEditPortalRoles = false,
   portalRoleOptions: portalRoleOptionsProp,
-  onSaved,
 }) {
   const empId = String(empIdProp || employee?.empId || employee?.id || "").trim();
   const fallbackEmail = String(employee?.email ?? "").trim().toLowerCase();
@@ -131,12 +119,8 @@ export default function EmployeeAllocationProfileModal({
   const [allocLoading, setAllocLoading] = useState(false);
   const [totalAllocated, setTotalAllocated] = useState(null);
 
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(null);
-  const [pendingSave, setPendingSave] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState("");
   const [portalRole, setPortalRoleLocal] = useState("Employee");
+  const [portalRoleError, setPortalRoleError] = useState("");
   const [portalSaving, setPortalSaving] = useState(false);
 
   const portalRoleOptions = useMemo(
@@ -156,10 +140,7 @@ export default function EmployeeAllocationProfileModal({
       setTrainings([]);
       setPreferences(null);
       setAllocations([]);
-      setEditing(false);
-      setDraft(null);
       setError("Missing employee id.");
-      setSaveError("");
       setLoading(false);
       return undefined;
     }
@@ -168,10 +149,6 @@ export default function EmployeeAllocationProfileModal({
     setLoading(true);
     setError("");
     setBalancesError("");
-    setEditing(false);
-    setDraft(null);
-    setSaveError("");
-
     const seed = employee ? profileFromDirectoryEmployee(employee) : null;
     if (seed?.empId || seed?.email) {
       setProfile(seed);
@@ -286,50 +263,17 @@ export default function EmployeeAllocationProfileModal({
     return () => controller.abort();
   }, [empId, fallbackEmail, employee]);
 
-  function startEdit() {
-    if (!profile || !canEdit) return;
-    setDraft(profileToEditForm(profile));
-    setEditing(true);
-    setSaveError("");
-  }
-
-  function cancelEdit() {
-    setEditing(false);
-    setDraft(null);
-    setSaveError("");
-    setPendingSave(false);
-  }
-
-  async function confirmSave() {
-    if (!draft || !empId) return;
-    setSaving(true);
-    setSaveError("");
-    try {
-      const payload = buildHrProfileUpdatePayload(draft);
-      const updated = await updateWebtrakEmployeeProfile(empId, payload);
-      setProfile(updated);
-      setEditing(false);
-      setDraft(null);
-      setPendingSave(false);
-      onSaved?.(updated);
-    } catch (err) {
-      setSaveError(err?.message || "Could not save profile changes.");
-      setPendingSave(false);
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function handlePortalRoleChange(nextRole) {
     const email = profile?.email || fallbackEmail;
     if (!canEditPortalRoles || !email) return;
     const resolved = coercePortalRoleSelectValue(nextRole, portalRoleOptions);
     setPortalSaving(true);
+    setPortalRoleError("");
     try {
       await setPortalRole({ email, role: resolved });
       setPortalRoleLocal(resolved);
     } catch (err) {
-      setSaveError(err?.message || "Could not update portal role.");
+      setPortalRoleError(err?.message || "Could not update portal role.");
     } finally {
       setPortalSaving(false);
     }
@@ -371,7 +315,7 @@ export default function EmployeeAllocationProfileModal({
           title={displayName}
           subtitle={`Employee profile · ${displayEmpId}${displayEmail ? ` · ${displayEmail}` : ""}`}
           sectionLabel="ADMIN"
-          onBack={saving ? undefined : onBack}
+          onBack={onBack}
           backLabel="Back to directory"
           breadcrumbs={[
             { label: "Admin", onClick: onBack },
@@ -400,19 +344,13 @@ export default function EmployeeAllocationProfileModal({
                       <h4 className="text-xl font-semibold text-[rgb(var(--text))] truncate">
                         {displayName}
                       </h4>
-                      <StatusBadge status={editing ? draft?.user_status : profile.status} />
+                      <StatusBadge status={profile.status} />
                     </div>
                     <p className="mt-1 text-sm text-[rgb(var(--muted))]">
                       {[designation, profile.department].filter(Boolean).join(" · ") || "—"}
                     </p>
                   </div>
                 </div>
-                {canEdit && !editing ? (
-                  <button type="button" className="rt-btn-secondary shrink-0 gap-1.5" onClick={startEdit}>
-                    <Pencil size={14} />
-                    Edit profile
-                  </button>
-                ) : null}
               </div>
 
               <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -456,107 +394,7 @@ export default function EmployeeAllocationProfileModal({
               </div>
             </div>
 
-            {editing && draft ? (
-              <div className="space-y-4 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--surface))] p-4">
-                <h4 className="text-sm font-semibold">Edit employee profile</h4>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {[
-                    ["name", "Name"],
-                    ["email", "Work email"],
-                    ["phone_number", "Phone"],
-                    ["department", "Department"],
-                    ["role", "Designation / role"],
-                  ].map(([key, label]) => (
-                    <label key={key} className="block text-xs font-semibold text-[rgb(var(--muted))]">
-                      {label}
-                      <input
-                        className="rt-input mt-1 w-full text-sm font-normal"
-                        value={draft[key] ?? ""}
-                        onChange={(e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }))}
-                      />
-                    </label>
-                  ))}
-                  <label className="block text-xs font-semibold text-[rgb(var(--muted))]">
-                    Status
-                    <select
-                      className="rt-input mt-1 w-full text-sm font-normal"
-                      value={draft.user_status || "ACTIVE"}
-                      onChange={(e) =>
-                        setDraft((prev) => ({ ...prev, user_status: e.target.value }))
-                      }
-                    >
-                      {USER_STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block text-xs font-semibold text-[rgb(var(--muted))]">
-                    Work mode
-                    <select
-                      className="rt-input mt-1 w-full text-sm font-normal"
-                      value={draft.work_mode || ""}
-                      onChange={(e) =>
-                        setDraft((prev) => ({ ...prev, work_mode: e.target.value }))
-                      }
-                    >
-                      <option value="">Select…</option>
-                      {WORK_MODES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block text-xs font-semibold text-[rgb(var(--muted))]">
-                    Work location
-                    <select
-                      className="rt-input mt-1 w-full text-sm font-normal"
-                      value={draft.work_location_type || ""}
-                      onChange={(e) =>
-                        setDraft((prev) => ({ ...prev, work_location_type: e.target.value }))
-                      }
-                    >
-                      <option value="">Select…</option>
-                      {WORK_LOCATIONS.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block text-xs font-semibold text-[rgb(var(--muted))]">
-                    Band ID
-                    <input
-                      className="rt-input mt-1 w-full text-sm font-normal"
-                      value={draft.band_id ?? ""}
-                      onChange={(e) => setDraft((prev) => ({ ...prev, band_id: e.target.value }))}
-                      placeholder="Numeric band id"
-                    />
-                  </label>
-                </div>
-                {saveError ? (
-                  <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
-                    {saveError}
-                  </div>
-                ) : null}
-                <DialogFooter>
-                  <button type="button" className="rt-btn-ghost" onClick={cancelEdit} disabled={saving}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="rt-btn-primary"
-                    disabled={saving}
-                    onClick={() => setPendingSave(true)}
-                  >
-                    Save changes
-                  </button>
-                </DialogFooter>
-              </div>
-            ) : (
-              <>
+            <>
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                   <SectionCard title="Work information">
                     <dl>
@@ -758,6 +596,9 @@ export default function EmployeeAllocationProfileModal({
                   <p className="mb-3 text-sm text-[rgb(var(--muted))]">
                     Set this employee&apos;s portal access role.
                   </p>
+                  {portalRoleError ? (
+                    <p className="mb-3 text-sm text-red-600 dark:text-red-300">{portalRoleError}</p>
+                  ) : null}
                   {canEditPortalRoles ? (
                     <label className="block max-w-xs text-xs font-semibold text-[rgb(var(--muted))]">
                       Role
@@ -778,8 +619,7 @@ export default function EmployeeAllocationProfileModal({
                     <p className="text-sm font-medium text-[rgb(var(--text))]">{portalRole}</p>
                   )}
                 </SectionCard>
-              </>
-            )}
+            </>
           </div>
         ) : (
           <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
@@ -788,19 +628,6 @@ export default function EmployeeAllocationProfileModal({
         )}
         </div>
       </AdminPageShell>
-
-      <ConfirmDialog
-        open={pendingSave}
-        title="Save profile changes?"
-        message={`These changes will reflect on the WebTrak employee profile:\n\nPUT /api/v1/employee-profile/${displayEmpId}\n\nContinue saving?`}
-        confirmText="Save to WebTrak"
-        cancelText="Keep editing"
-        confirmVariant="primary"
-        busy={saving}
-        zIndex={130}
-        onCancel={() => setPendingSave(false)}
-        onConfirm={confirmSave}
-      />
     </>
   );
 }

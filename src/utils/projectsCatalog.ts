@@ -1,5 +1,7 @@
 // @ts-nocheck
 
+import { formatDisplayDate, toIsoDateString } from "./displayDate";
+
 const STORAGE_KEY = "rt_projects_catalog_v1";
 
 export type ProjectCatalogRow = {
@@ -24,33 +26,11 @@ function slugId(name) {
 
 /** Parse dates like 12-Feb-2026, 1-Dec-2024, or ISO. */
 export function parseProjectDate(raw) {
-  const s = String(raw ?? "").trim();
-  if (!s) return null;
-  const d = new Date(s);
-  if (!Number.isNaN(d.getTime()) && d.getFullYear() > 1980) {
-    return d.toISOString().slice(0, 10);
-  }
-  const m = /^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/.exec(s);
-  if (m) {
-    const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
-    const mon = months[m[2].toLowerCase()];
-    if (mon != null) {
-      const dt = new Date(Number(m[3]), mon, Number(m[1]));
-      if (!Number.isNaN(dt.getTime())) return dt.toISOString().slice(0, 10);
-    }
-  }
-  return null;
+  return toIsoDateString(raw);
 }
 
 export function formatProjectDate(iso) {
-  if (!iso) return "—";
-  try {
-    return new Intl.DateTimeFormat(undefined, { day: "2-digit", month: "short", year: "numeric" }).format(
-      new Date(iso),
-    );
-  } catch {
-    return String(iso);
-  }
+  return formatDisplayDate(iso);
 }
 
 /** Admin manual flag only (toggle in directory). */

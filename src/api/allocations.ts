@@ -1,14 +1,11 @@
 // @ts-nocheck
 import { getAuth, getAuthHeader, canAccessHrAdminApi } from "./auth";
-import { buildApiUrl, buildSameOriginApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
+import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
 import {
   buildEmployeeWebtrakUrl,
-  buildWebtrakUrl,
   employeeWebtrakFetchCredentials,
   getEmployeeWebtrakAuthHeaders,
-  getWebtrakAuthHeaders,
   shouldUseRemoteEmployeeWebtrak,
-  webtrakFetchCredentials,
 } from "./webtrak";
 
 function extractAllocationsArray(data) {
@@ -99,12 +96,12 @@ export async function fetchEmployeeAllocations(
   if (scope) params.set("scope", String(scope));
 
   const res = await fetch(
-    buildWebtrakUrl(`/api/v1/allocation/employee?${params.toString()}`),
+    buildEmployeeWebtrakUrl(`/api/v1/allocation/employee?${params.toString()}`),
     {
       method: "GET",
       signal,
-      credentials: webtrakFetchCredentials(),
-      headers: getWebtrakAuthHeaders(),
+      credentials: employeeWebtrakFetchCredentials(),
+      headers: getEmployeeWebtrakAuthHeaders(),
     },
   );
   if (!res.ok) {

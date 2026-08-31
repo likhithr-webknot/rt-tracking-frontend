@@ -1,20 +1,5 @@
 // @ts-nocheck
 
-function cleanText(value, depth = 0) {
-  if (value == null || depth > 4) return "";
-  if (typeof value === "string") return value.trim();
-  if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
-  if (Array.isArray(value)) {
-    return value
-      .map((v) => cleanText(v, depth + 1))
-      .filter(Boolean)
-      .join(", ")
-      .trim();
-  }
-  if (typeof value !== "object") return "";
-  return "";
-}
-
 const CRITERIA_FIELD_KEYS = [
   "evaluationCriteria",
   "evaluation_criteria",
@@ -28,10 +13,31 @@ const CRITERIA_FIELD_KEYS = [
   "pillarType",
 ];
 
+function criteriaFieldText(value, depth = 0) {
+  if (value == null || depth > 4) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => criteriaFieldText(v, depth + 1))
+      .filter(Boolean)
+      .join(", ")
+      .trim();
+  }
+  if (typeof value === "object") {
+    const obj = value;
+    for (const key of ["name", "label", "title", "code", "value", "pillar", "criteria"]) {
+      const s = criteriaFieldText(obj[key], depth + 1);
+      if (s && s !== "—" && s !== "-") return s;
+    }
+  }
+  return "";
+}
+
 function readCriteriaFromObject(obj) {
   if (!obj || typeof obj !== "object") return "";
   for (const key of CRITERIA_FIELD_KEYS) {
-    const s = cleanText(obj[key], 0);
+    const s = criteriaFieldText(obj[key], 0);
     if (s && s !== "—" && s !== "-") return s;
   }
   return "";

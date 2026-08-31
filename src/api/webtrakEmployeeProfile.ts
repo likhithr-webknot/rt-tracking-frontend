@@ -1,6 +1,19 @@
 // @ts-nocheck
 import { parseResponse, toHttpError } from "./http";
-import { buildWebtrakUrl, getWebtrakAuthHeaders, webtrakFetchCredentials } from "./webtrak";
+import { formatEmployeeBandCode } from "./band-stream-directory";
+import { formatDisplayDate } from "../utils/displayDate";
+import { firstDisplayString } from "../utils/coerceDisplayString";
+import {
+  buildEmployeeWebtrakUrl,
+  employeeWebtrakFetchCredentials,
+  getEmployeeWebtrakAuthHeaders,
+} from "./webtrak";
+
+function normalizeBandLabel(...values) {
+  const text = firstDisplayString(...values);
+  if (!text) return "";
+  return formatEmployeeBandCode(text) || text;
+}
 
 function unwrapData(raw) {
   if (!raw || typeof raw !== "object") return {};
@@ -40,11 +53,11 @@ function pickReportingManager(data) {
 }
 
 async function webtrakGet(path, { signal } = {}) {
-  const res = await fetch(buildWebtrakUrl(path), {
+  const res = await fetch(buildEmployeeWebtrakUrl(path), {
     method: "GET",
     signal,
-    credentials: webtrakFetchCredentials(),
-    headers: getWebtrakAuthHeaders(),
+    credentials: employeeWebtrakFetchCredentials(),
+    headers: getEmployeeWebtrakAuthHeaders(),
   });
   if (!res.ok) {
     throw await toHttpError(res, { method: "GET", path });
@@ -53,11 +66,11 @@ async function webtrakGet(path, { signal } = {}) {
 }
 
 async function webtrakPut(path, body, { signal } = {}) {
-  const res = await fetch(buildWebtrakUrl(path), {
+  const res = await fetch(buildEmployeeWebtrakUrl(path), {
     method: "PUT",
     signal,
-    credentials: webtrakFetchCredentials(),
-    headers: getWebtrakAuthHeaders({ "Content-Type": "application/json" }),
+    credentials: employeeWebtrakFetchCredentials(),
+    headers: getEmployeeWebtrakAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body && typeof body === "object" ? body : {}),
   });
   if (!res.ok) {
@@ -93,16 +106,8 @@ export function displayOrDash(value) {
   return text || "—";
 }
 
-export function formatProfileDate(raw, dateFormat = "DD/MM/YYYY") {
-  const text = String(raw ?? "").trim();
-  if (!text || text === "—") return "—";
-  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!iso) return text;
-  const [, y, m, d] = iso;
-  const fmt = String(dateFormat || "DD/MM/YYYY").toUpperCase();
-  if (fmt.includes("MM/DD")) return `${m}/${d}/${y}`;
-  if (fmt.includes("YYYY-MM-DD")) return `${y}-${m}-${d}`;
-  return `${d}/${m}/${y}`;
+export function formatProfileDate(raw, _dateFormat = "DD/MM/YYYY") {
+  return formatDisplayDate(raw);
 }
 
 export function profileFromDirectoryEmployee(employee) {
@@ -118,7 +123,7 @@ export function profileFromDirectoryEmployee(employee) {
     status: String(emp.status ?? emp.userStatus ?? emp.user_status ?? "").trim(),
     designation: String(emp.designation ?? emp.role ?? "").trim(),
     department: String(emp.stream ?? emp.department ?? "").trim(),
-    band: String(emp.band ?? emp.bandName ?? emp.band_name ?? "").trim(),
+    band: normalizeBandLabel(emp.band_name, emp.bandName, emp.band),
     bandId: emp.bandId ?? emp.band_id ?? null,
     userType: String(emp.userType ?? emp.user_type ?? "").trim(),
     category: String(emp.category ?? "").trim(),
@@ -166,7 +171,10 @@ export function normalizeWebtrakEmployeeProfile(raw) {
     status: String(pick(data, ["user_status", "status", "userStatus"]) ?? "").trim(),
     designation: String(pick(data, ["role", "designation", "designation_name"]) ?? "").trim(),
     department: String(pick(data, ["department", "stream"]) ?? "").trim(),
-    band: String(pick(data, ["band_name", "bandName", "band"]) ?? "").trim(),
+    band: normalizeBandLabel(
+      pick(data, ["band_name", "bandName", "band_code", "bandCode"]),
+      data.band,
+    ),
     bandId: pick(data, ["band_id", "bandId"]) ?? null,
     userType: String(pick(data, ["user_type", "userType"]) ?? "").trim(),
     category: String(pick(data, ["category", "delivery_status", "deliveryStatus"]) ?? "").trim(),

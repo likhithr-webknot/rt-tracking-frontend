@@ -4,6 +4,7 @@
  */
 
 import { saveProjectsCatalog } from "./projectsCatalog";
+import { toIsoDateString } from "./displayDate";
 
 const CACHE_KEY = "rt_tracking_projects_cache_v1";
 
@@ -50,8 +51,8 @@ export function saveProjectsCache(payload: ProjectsCachePayload): void {
       return {
         id: id || name,
         name,
-        startDate: startDate ? String(startDate).slice(0, 10) : null,
-        endDate: endDate ? String(endDate).slice(0, 10) : null,
+        startDate: toIsoDateString(startDate),
+        endDate: toIsoDateString(endDate),
         pm,
         am,
         active,

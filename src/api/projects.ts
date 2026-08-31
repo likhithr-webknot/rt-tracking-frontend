@@ -1,6 +1,7 @@
 // @ts-nocheck
 import type { ApiOptions } from "../types/api-options";
 import { sanitizeEmployeeIdForApi } from "../utils/employeeId";
+import { toIsoDateString } from "../utils/displayDate";
 import { saveProjectsCache } from "../utils/projectsCache";
 import { getAuthHeader } from "./auth";
 import { buildApiUrl, buildSameOriginApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
@@ -64,8 +65,8 @@ export function normalizeProject(raw) {
     managerEmployeeId: String(row.managerEmployeeId ?? row.managerEmployeeID ?? row.managerEmployeeId ?? "").trim(),
     managerName: pm || String(row.managerName ?? row.manager?.name ?? row.manager?.employeeName ?? am ?? "").trim(),
     managerEmail: String(row.managerEmail ?? row.manager?.email ?? "").trim(),
-    startDate: startDateRaw ? String(startDateRaw).slice(0, 10) : null,
-    endDate: endDateRaw ? String(endDateRaw).slice(0, 10) : null,
+    startDate: toIsoDateString(startDateRaw),
+    endDate: toIsoDateString(endDateRaw),
     active:
       row.isActive !== false &&
       row.is_active !== false &&

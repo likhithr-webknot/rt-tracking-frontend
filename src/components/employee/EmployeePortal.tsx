@@ -2237,6 +2237,7 @@ export default function EmployeePortal({ onLogout, auth }) {
   }, []);
 
   const [portalBootstrapError, setPortalBootstrapError] = useState("");
+  const [portalBootstrapLoading, setPortalBootstrapLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [certificationCatalog, setCertificationCatalog] = useState([]);
@@ -2451,6 +2452,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     let mounted = true;
     const controller = new AbortController();
     (async () => {
+      setPortalBootstrapLoading(true);
       try {
         setPortalBootstrapError("");
         const portal = await fetchPortalEmployee({ signal: controller.signal });
@@ -2497,35 +2499,6 @@ export default function EmployeePortal({ onLogout, auth }) {
           const next = normalizeCertifications(certsRaw).filter((c) => Boolean(c?.listed));
           setCertificationCatalog((prev) => (Array.isArray(prev) && prev.length ? prev : next));
         }
-
-        const submissionRaw =
-          root?.monthlySubmission ?? root?.submission ?? root?.currentSubmission ?? null;
-        const normalizedSubmission = normalizeMonthlySubmission(submissionRaw);
-        if (normalizedSubmission && String(normalizedSubmission.month || "") === String(submissionMonth || "")) {
-          const nextCerts = normalizeCertificationsForState(normalizedSubmission.certifications);
-          const nextRatings = normalizeKpiRatingsForState(normalizedSubmission.kpiRatings);
-          const nextValues = normalizeWebknotValueRatingsForState(
-            normalizedSubmission.webknotValueRatings ?? normalizedSubmission.webknotValues
-          );
-          const nextValueComments = normalizeValueCommentsForState(
-            normalizedSubmission.webknotValueComments ??
-            normalizedSubmission.raw?.payload?.webknotValueComments ??
-            normalizedSubmission.raw?.payload?.webknotValueResponses
-          );
-
-          setSelfReviewText((prev) => (String(prev || "").trim() ? prev : normalizedSubmission.selfReviewText || ""));
-          setSelectedCertifications((prev) => (Array.isArray(prev) && prev.length ? prev : nextCerts));
-          setKpiRatings((prev) => (prev && Object.keys(prev).length ? prev : nextRatings));
-          setSelectedValues((prev) => {
-            const existing = normalizeWebknotValueRatingsForState(prev);
-            return Object.keys(existing).length ? existing : nextValues;
-          });
-          setValueComments((prev) => {
-            const existing = normalizeValueCommentsForState(prev);
-            return Object.keys(existing).length ? existing : nextValueComments;
-          });
-          setRecognitionsCount((prev) => (prev ? prev : (normalizedSubmission.recognitionsCount || 0)));
-        }
       } catch (err) {
         if (err?.name === "AbortError") return;
         if (!mounted) return;
@@ -2534,18 +2507,19 @@ export default function EmployeePortal({ onLogout, auth }) {
           return;
         }
         if (err?.status === 403) {
-          // Some tenants block this alias for employees; continue with basic profile data instead of showing an error toast.
           setPortalBootstrapError("");
           return;
         }
         setPortalBootstrapError(err?.message || "Failed to load portal data.");
+      } finally {
+        if (mounted) setPortalBootstrapLoading(false);
       }
     })();
     return () => {
       mounted = false;
       controller.abort();
     };
-  }, [authEmail, onLogout, role, submissionMonth]);
+  }, [authEmail, onLogout, role]);
 
   useEffect(() => {
     let mounted = true;
@@ -2587,6 +2561,11 @@ export default function EmployeePortal({ onLogout, auth }) {
       setKpisFullyLoaded(false);
       const { band: empBand, stream: empStream } = employeeBandAndStream(employee);
       if (!empBand || !empStream) {
+        if (loading || portalBootstrapLoading) {
+          setKpiPageLoading(true);
+          setKpisError("");
+          return;
+        }
         setKpis([]);
         setKpiPage({ cursor: null, nextCursor: null, stack: [], items: [] });
         kpiPrefetchCursorRef.current = null;
@@ -2646,7 +2625,7 @@ export default function EmployeePortal({ onLogout, auth }) {
       mounted = false;
       controller.abort();
     };
-  }, [employee?.band, employee?.id, employee?.stream, onLogout]);
+  }, [employee?.band, employee?.id, employee?.stream, loading, onLogout, portalBootstrapLoading]);
 
   useEffect(() => {
     if (kpisFullyLoaded) return;
@@ -2925,6 +2904,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     let alive = true;
     (async () => {
       setProjectsLoading(true);
+      setProjectsError("");
       try {
         const [allRaw, myRaw] = await Promise.all([
           fetchAvailableProjects().catch(() => fetchProjects().catch(() => ({}))),
@@ -2946,11 +2926,15 @@ export default function EmployeePortal({ onLogout, auth }) {
             .filter(Boolean),
         );
         setSelectedProjectIds(myIds);
-      } catch {
-        if (alive) {
-          setAllProjects([]);
-          setSelectedProjectIds(new Set());
+      } catch (err) {
+        if (!alive) return;
+        if (err?.status === 401) {
+          onLogout?.();
+          return;
         }
+        setProjectsError(err?.message || "Failed to load projects.");
+        setAllProjects([]);
+        setSelectedProjectIds(new Set());
       } finally {
         if (alive) setProjectsLoading(false);
       }
@@ -2958,7 +2942,7 @@ export default function EmployeePortal({ onLogout, auth }) {
     return () => {
       alive = false;
     };
-  }, [submissionMonth]);
+  }, [onLogout, submissionMonth]);
 
   const toggleProject = useCallback((projectId) => {
     if (locked) return;

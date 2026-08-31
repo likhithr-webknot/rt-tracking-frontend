@@ -554,11 +554,7 @@ export default function AdminControlCenter({ onLogout, auth }) {
                 ) || null
               }
               onBack={() => navigate("/admin/directory")}
-              canEdit={isSuperAdmin || isHrUser}
               canEditPortalRoles={isSuperAdmin || isHrUser}
-              onSaved={() => {
-                reloadEmployees().catch(() => {});
-              }}
             />
           ) : null}
 

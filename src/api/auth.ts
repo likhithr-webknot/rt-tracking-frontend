@@ -1,4 +1,5 @@
 import { coerceDisplayString } from "../utils/coerceDisplayString";
+import { resolvePortalRoleLabel, resolvePulsePortalRoleFromSources } from "../utils/portalRole";
 import { z } from "zod";
 import type { ApiOptions } from "../types/api-options";
 import {
@@ -70,6 +71,8 @@ const SessionStorageSchema = z.object({
 export const SESSION_MAX_MS = 8 * 60 * 60 * 1000;
 /** Logout after this much idle time (30 minutes). */
 export const SESSION_INACTIVITY_MS = 30 * 60 * 1000;
+/** Show a warning dialog this long before the session ends. */
+export const SESSION_WARNING_MS = 5 * 60 * 1000;
 const JwtPayloadSchema = z.object({}).passthrough();
 
 function shouldPersistAccessToken() {
@@ -378,6 +381,39 @@ export function getAuth() {
   return memoryAuth;
 }
 
+function sessionTimingFields(auth, now = Date.now()) {
+  const issuedAt =
+    typeof auth?.issuedAt === "number" && auth.issuedAt > 0 ? auth.issuedAt : now;
+  const lastActivityAt =
+    typeof auth?.lastActivityAt === "number" && auth.lastActivityAt > 0
+      ? auth.lastActivityAt
+      : issuedAt;
+  return { issuedAt, lastActivityAt };
+}
+
+function accessTokenRemainingMs(auth, now = Date.now()) {
+  const token = firstNonEmptyString(auth?.accessToken);
+  if (!token) return Number.POSITIVE_INFINITY;
+  const claims = decodeJwtPayload(token);
+  const exp = claims?.exp;
+  if (typeof exp !== "number") return Number.POSITIVE_INFINITY;
+  return Math.max(0, exp * 1000 - now);
+}
+
+/** Milliseconds until the session ends (0 when already expired). */
+export function getSessionRemainingMs(now = Date.now()) {
+  const auth = getAuth();
+  if (!auth) return 0;
+  const signedIn = Boolean(auth.email || auth.accessToken);
+  if (!signedIn) return 0;
+
+  const { issuedAt, lastActivityAt } = sessionTimingFields(auth, now);
+  const inactivityRemaining = SESSION_INACTIVITY_MS - (now - lastActivityAt);
+  const maxRemaining = SESSION_MAX_MS - (now - issuedAt);
+  const tokenRemaining = accessTokenRemainingMs(auth, now);
+  return Math.max(0, Math.min(inactivityRemaining, maxRemaining, tokenRemaining));
+}
+
 /** Why the session should end now, or null if still valid. */
 export function getSessionExpiryReason(now = Date.now()) {
   const auth = getAuth();
@@ -385,20 +421,21 @@ export function getSessionExpiryReason(now = Date.now()) {
   const signedIn = Boolean(auth.email || auth.accessToken);
   if (!signedIn) return "missing";
 
-  const issuedAt = typeof auth.issuedAt === "number" ? auth.issuedAt : null;
-  const lastActivityAt =
-    typeof auth.lastActivityAt === "number"
-      ? auth.lastActivityAt
-      : issuedAt;
+  const token = firstNonEmptyString(auth.accessToken);
+  if (token && !isAccessTokenUsable(token, now)) {
+    return "token_expired";
+  }
 
-  if (issuedAt != null && now - issuedAt >= SESSION_MAX_MS) {
+  const { issuedAt, lastActivityAt } = sessionTimingFields(auth, now);
+
+  if (now - issuedAt >= SESSION_MAX_MS) {
     return "max_duration";
   }
-  if (lastActivityAt != null && now - lastActivityAt >= SESSION_INACTIVITY_MS) {
+  if (now - lastActivityAt >= SESSION_INACTIVITY_MS) {
     return "inactivity";
   }
   // Legacy sessions without timers: start the clock now (do not log out immediately).
-  if (issuedAt == null || lastActivityAt == null) {
+  if (auth.issuedAt == null || auth.lastActivityAt == null) {
     touchSessionActivity({ ensureIssuedAt: true });
   }
   return null;
@@ -406,7 +443,7 @@ export function getSessionExpiryReason(now = Date.now()) {
 
 export function isSessionExpired(now = Date.now()) {
   const reason = getSessionExpiryReason(now);
-  return reason === "max_duration" || reason === "inactivity";
+  return reason === "max_duration" || reason === "inactivity" || reason === "token_expired";
 }
 
 /**
@@ -483,13 +520,15 @@ export function setAuth(auth) {
   const hasIncomingToken = Boolean(incomingTokenRaw);
 
   const previewClaims = incomingTokenRaw ? decodeJwtPayload(incomingTokenRaw) : null;
-  const extractedRole = firstNonEmptyString(
-    explicitRoleFromObject(obj),
-    explicitRoleFromObject(previewClaims || {}),
-    extractRole(obj),
-    extractRole(previewClaims || {})
+  const roleHintFromPayload = firstNonEmptyString(
+    obj.portalRole,
+    obj.empRole,
+    obj.roleHint,
   );
-  const incomingRole = extractedRole;
+  const extractedRole = resolvePulsePortalRoleFromSources(obj, {
+    roleHint: roleHintFromPayload,
+  });
+  const incomingRole = extractedRole === "Super Admin" ? "Admin" : extractedRole;
   const incomingEmail = extractEmailFromSources(obj, previewClaims);
   const incomingEmployeeId = firstNonEmptyString(obj.employeeId, obj.empId, obj.id);
   const incomingUserId = firstNonEmptyString(obj.userId, obj.id);
@@ -525,12 +564,12 @@ export function setAuth(auth) {
   );
 
   let role = firstNonEmptyString(
+    resolvePulsePortalRoleFromSources(obj, { roleHint: roleHintFromPayload }),
     explicitRoleFromObject(obj),
-    explicitRoleFromObject(claims || {}),
-    extractedRole,
-    bestRole(prev?.role, prev?.portal, prev?.claims?.role, prev?.claims?.roles, prev?.claims?.authorities),
-    prev?.role
+    prev?.portalRole,
+    prev?.role,
   );
+  if (role === "Super Admin") role = "Admin";
   role = applyAdminEmailAllowlist(email, role);
   const portal = firstNullableString(obj.portal, prev?.portal);
   const userId = firstNullableString(obj.userId, obj.id, prev?.userId);
@@ -608,7 +647,12 @@ export function setAuth(auth) {
     id: userId,
     role,
     empRole: empRole || role,
-    portalRole: firstNonEmptyString(obj.portalRole, empRole, prev?.portalRole),
+    portalRole: firstNonEmptyString(
+      obj.portalRole,
+      empRole,
+      incomingRole === "Admin" ? "Super Admin" : incomingRole,
+      prev?.portalRole,
+    ),
     portal,
     email,
     employeeId,
@@ -670,6 +714,10 @@ export function stripOAuthParamsFromUrl() {
       changed = true;
     }
   }
+  if (url.searchParams.get("from") === "webtrak") {
+    url.searchParams.delete("from");
+    changed = true;
+  }
   if (!changed) return;
   const search = url.searchParams.toString();
   const next = url.pathname + (search ? `?${search}` : "") + url.hash;
@@ -695,7 +743,9 @@ export function hasRecoverableSession() {
   if (getAuthHeader()) return true;
   const session = getAuth();
   const email = String(session?.email ?? "").trim();
-  return Boolean(email && session?.accessToken);
+  const token = String(session?.accessToken ?? "").trim();
+  if (!email || !token) return false;
+  return isAccessTokenUsable(token);
 }
 
 export function markManualLogout() {
@@ -763,30 +813,89 @@ function normalizeMePayload(raw) {
   if (inner?.user && typeof inner.user === "object" && !Array.isArray(inner.user)) {
     inner = { ...inner.user, ...inner };
   }
+  if (inner?.profile && typeof inner.profile === "object" && !Array.isArray(inner.profile)) {
+    inner = { ...inner.profile, ...inner };
+  }
   return inner;
+}
+
+function applySessionMetadataFromProfile(profile) {
+  const obj = profile && typeof profile === "object" ? profile : {};
+  const startedRaw = obj.session_started_at ?? obj.sessionStartedAt ?? obj.issuedAt ?? null;
+  const inactivityMinutes = obj.session_inactivity_minutes ?? obj.sessionInactivityMinutes ?? null;
+  const patch = {};
+
+  if (startedRaw) {
+    const issuedAt = Date.parse(String(startedRaw));
+    if (Number.isFinite(issuedAt)) patch.issuedAt = issuedAt;
+  }
+  if (inactivityMinutes != null && Number.isFinite(Number(inactivityMinutes))) {
+    patch.sessionInactivityMinutes = Number(inactivityMinutes);
+  }
+  if (obj.session_max_hours != null && Number.isFinite(Number(obj.session_max_hours))) {
+    patch.sessionMaxHours = Number(obj.session_max_hours);
+  }
+
+  return Object.keys(patch).length ? patch : null;
+}
+
+function buildMeAuthPayload(normalized, { roleHint = "", claimsFromHeader = null } = {}) {
+  const portalRole = resolvePulsePortalRoleFromSources(normalized, { roleHint });
+  const appRouteRole = portalRole === "Super Admin" ? "Admin" : portalRole;
+  const mergedEmail = extractEmailFromSources(normalized, claimsFromHeader || normalized?.claims || {});
+  const picture = firstNonEmptyString(
+    normalized?.picture,
+    normalized?.profilePic,
+    normalized?.profilePhoto,
+    normalized?.avatarUrl,
+    claimsFromHeader?.picture,
+  );
+  const sessionPatch = applySessionMetadataFromProfile(normalized) || {};
+  const backendRoles = Array.isArray(normalized?.roles)
+    ? normalized.roles
+    : Array.isArray(claimsFromHeader?.roles)
+      ? claimsFromHeader.roles
+      : undefined;
+
+  const base = {
+    ...normalized,
+    ...(mergedEmail ? { email: mergedEmail } : {}),
+    ...(picture ? { picture, profilePic: picture } : {}),
+    ...(backendRoles ? { roles: backendRoles } : {}),
+    portalRole,
+    empRole: firstNonEmptyString(normalized?.empRole, normalized?.portalRole, portalRole),
+    role: appRouteRole,
+    ...sessionPatch,
+  };
+
+  return base;
 }
 
 function extractRoleHintFromPayload(raw) {
   if (raw == null) return "";
-  if (typeof raw === "string") return String(raw).trim();
-  if (Array.isArray(raw)) return firstRoleLikeString(raw);
+  if (typeof raw === "string") return resolvePortalRoleLabel(raw) || String(raw).trim();
+  if (Array.isArray(raw)) {
+    for (const entry of raw) {
+      const hint = extractRoleHintFromPayload(entry);
+      if (hint) return hint;
+    }
+    return "";
+  }
   if (typeof raw !== "object") return "";
 
   const root = raw;
   const nestedData =
     root?.data && typeof root.data === "object" && !Array.isArray(root.data) ? root.data : null;
-  const nestedUser =
-    root?.user && typeof root.user === "object" && !Array.isArray(root.user) ? root.user : null;
 
-  return firstNonEmptyString(
-    extractRole(root),
-    nestedData ? extractRole(nestedData) : "",
-    nestedUser ? extractRole(nestedUser) : "",
+  return resolvePortalRoleLabel(
+    resolvePulsePortalRoleFromSources(root),
+    nestedData ? resolvePulsePortalRoleFromSources(nestedData) : "",
     root?.role,
     root?.empRole,
-    root?.userRole,
+    root?.portalRole,
     nestedData?.role,
-    nestedUser?.role
+    nestedData?.empRole,
+    nestedData?.portalRole,
   );
 }
 
@@ -1149,7 +1258,6 @@ export async function fetchMe({ signal } = {} as ApiOptions) {
     }
     const raw = await res.json().catch(() => ({}));
     const normalized = normalizeMePayload(raw);
-    const roleFromProfile = extractRole(normalized);
     const claimsFromHeader = (() => {
       const header = getAuthHeader();
       if (!header) return null;
@@ -1160,36 +1268,7 @@ export async function fetchMe({ signal } = {} as ApiOptions) {
     })();
     const roleHintEmail = extractEmailFromSources(normalized, claimsFromHeader || normalized?.claims || {});
     const roleHint = await fetchRoleHint({ signal, headers, email: roleHintEmail }).catch(() => "");
-    let roleFromJwt = "";
-    if (claimsFromHeader && typeof claimsFromHeader === "object") {
-      roleFromJwt = extractRole(claimsFromHeader);
-    }
-    // Merge profile, JWT, and /user/role so a wrong hint cannot downgrade ADMIN from the token.
-    let mergedRole = firstNonEmptyString(
-      bestRole(roleFromJwt, roleFromProfile, roleHint, normalized?.role),
-      roleHint,
-      roleFromProfile,
-      normalized?.role
-    );
-    const mergedEmail = extractEmailFromSources(normalized, claimsFromHeader || normalized?.claims || {});
-    mergedRole = applyAdminEmailAllowlist(mergedEmail, mergedRole);
-    const picture = firstNonEmptyString(
-      normalized?.picture,
-      normalized?.profilePic,
-      normalized?.profilePhoto,
-      normalized?.avatarUrl,
-      claimsFromHeader?.picture,
-    );
-    const base = {
-      ...normalized,
-      ...(mergedEmail ? { email: mergedEmail } : {}),
-      ...(picture ? { picture, profilePic: picture } : {}),
-    };
-    if (!mergedRole) return mergedEmail || picture ? base : normalized;
-    return {
-      ...base,
-      role: mergedRole,
-    };
+    return buildMeAuthPayload(normalized, { roleHint, claimsFromHeader });
   }
 
   if (lastNon404Error) throw lastNon404Error;

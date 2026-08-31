@@ -293,7 +293,7 @@ export function normalizeWebknotValues(items) {
     if (!stableId) continue;
     if (seen.has(stableId)) continue;
     seen.add(stableId);
-    out.push({ id: stableId, title: title || stableId, pillar: pillar || title || "—" });
+    out.push({ id: stableId, title: title || stableId, pillar: pillar || "—" });
   }
   return out;
 }
