@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, Navigate, useNavigate } from "react-router-dom";
-import { consumeSpaPathRedirect } from "./utils/spaPathRedirect";
 
 /* ── Lazy-loaded portals (code-split per role) ─────────────── */
 const AdminControlCenter = lazy(() => import("./components/admin/AdminControlCenter"));
@@ -187,13 +186,7 @@ function AppNotFound() {
 
 export default function App() {
   const location = useLocation();
-  const navigate = useNavigate();
   const path = location.pathname;
-
-  useEffect(() => {
-    const spaPath = consumeSpaPathRedirect();
-    if (spaPath) navigate(spaPath, { replace: true });
-  }, [navigate]);
 
   const [auth, setAuthState] = useState(() => getAuth());
   const [authChecking, setAuthChecking] = useState(true);

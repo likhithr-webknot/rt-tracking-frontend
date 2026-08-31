@@ -9,8 +9,8 @@
 
     <title>Webknot Pulse</title>
     <meta name="description" content="Webknot Performance Tracking — employee KPI evaluation, manager reviews, and admin analytics." />
-    <meta name="theme-color" content="#f5f7fa" />
-    <meta name="theme-color" content="#0a0c14" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f4f6fb" />
+    <meta name="theme-color" content="#07070a" media="(prefers-color-scheme: dark)" />
     <meta name="color-scheme" content="light dark" />
     <meta property="og:title" content="Webknot Pulse" />
     <meta property="og:description" content="Employee KPI evaluation, manager reviews, and admin analytics." />
@@ -19,11 +19,29 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;1,14..32,400&family=Plus+Jakarta+Sans:ital,wght@0,500;0,600;0,700;1,500&display=swap"
       rel="stylesheet"
     />
   </head>
   <body>
+    <script>
+      (function () {
+        try {
+          var url = new URL(window.location.href);
+          var raw = url.searchParams.get("spa_path") || url.searchParams.get("redirect");
+          if (!raw) return;
+          var path = raw;
+          try { path = decodeURIComponent(raw); } catch (e) {}
+          if (path.charAt(0) !== "/") path = "/" + path;
+          url.searchParams.delete("spa_path");
+          url.searchParams.delete("redirect");
+          var search = url.searchParams.toString();
+          var next = url.pathname + (search ? "?" + search : "") + url.hash;
+          window.history.replaceState({}, "", next || "/");
+          window.__RT_SPA_PATH__ = path;
+        } catch (e) { void 0; }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

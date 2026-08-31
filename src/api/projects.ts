@@ -3,7 +3,7 @@ import type { ApiOptions } from "../types/api-options";
 import { sanitizeEmployeeIdForApi } from "../utils/employeeId";
 import { saveProjectsCache } from "../utils/projectsCache";
 import { getAuthHeader } from "./auth";
-import { buildApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
+import { buildApiUrl, buildSameOriginApiUrl, ensureCsrfCookie, parseResponse, requestWithFallbacks, toHttpError, withCsrfHeaders } from "./http";
 
 /* ── helpers ── */
 
@@ -103,7 +103,7 @@ export function normalizeProjects(data) {
 export async function fetchProjects({ signal, includeInactive = false } = {} as ApiOptions & { includeInactive?: boolean }) {
   void includeInactive;
   const auth = getAuthHeader();
-  const res = await fetch(buildApiUrl("/api/v1/projects/all"), {
+  const res = await fetch(buildSameOriginApiUrl("/api/v1/projects/all"), {
     signal,
     credentials: "include",
     headers: {
@@ -325,25 +325,9 @@ export async function submitProjectRating(projectId, { employeeId, rating, comme
 
 /* ── employee-portal profile aliases ── */
 
-/** GET /employee-portal/profile/projects/available — list projects available for selection */
+/** GET /api/v1/projects/all — canonical Webtrak project catalog. */
 export async function fetchAvailableProjects({ signal } = {} as ApiOptions) {
-  const auth = getAuthHeader();
-  return requestWithFallbacks(
-    [
-      "/api/v1/projects?page=0&size=500",
-      "/api/v1/projects",
-      "/api/v1/projects/all?page=0&size=500",
-      "/api/v1/projects/all",
-      "/api/v1/project-assigned-to-user",
-    ],
-    {
-      signal,
-      headers: auth ? { Authorization: auth } : undefined,
-      credentials: "include",
-      fallbackStatuses: [403, 404, 405],
-      notFoundMessage: "Available projects endpoint not found.",
-    }
-  );
+  return fetchProjects({ signal });
 }
 
 /** GET /employee-portal/profile/projects/selected — list employee's selected projects */
