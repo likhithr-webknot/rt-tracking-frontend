@@ -768,6 +768,7 @@ async function fetchRoleHint({ signal, headers, email } = {} as ApiOptions) {
   return "";
 }
 
+const GOOGLE_OAUTH_CALLBACK_PATH = "/google/callback";
 const GOOGLE_SIGNIN_PATH = "/api/v1/google-signin";
 const GOOGLE_CONFIG_PATHS = [
   "/api/v1/auth/google/config",
@@ -833,12 +834,12 @@ export function shouldUseFrontendGoogleOAuth() {
 
 export function getFrontendOAuthRedirectUri() {
   if (typeof window !== "undefined" && window.location?.origin) {
-    return `${window.location.origin}/auth/callback`;
+    return `${window.location.origin}${GOOGLE_OAUTH_CALLBACK_PATH}`;
   }
 
   const configured = String(import.meta.env.VITE_FRONTEND_URL ?? "").trim().replace(/\/+$/, "");
   if (configured) {
-    return `${configured}/auth/callback`;
+    return `${configured}${GOOGLE_OAUTH_CALLBACK_PATH}`;
   }
 
   return "";

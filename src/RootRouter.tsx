@@ -8,6 +8,7 @@ export default function RootRouter() {
     <AppErrorBoundary>
       <BrowserRouter>
         <Routes>
+          <Route path="/google/callback" element={<GoogleCallbackPage />} />
           <Route path="/auth/callback" element={<GoogleCallbackPage />} />
           <Route path="/auth/forgot-password" element={<Navigate to="/" replace />} />
           <Route path="/auth/reset-password" element={<Navigate to="/" replace />} />
