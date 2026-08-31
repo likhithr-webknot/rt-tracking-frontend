@@ -1,6 +1,7 @@
 import type { ApiOptions } from "../types/api-options";
 import { getAppSettings } from "../utils/appSettings";
 import { safeJsonParse } from "../utils/json";
+import { toUserFacingMessage, USER_FACING_ERROR_FALLBACK } from "../utils/userFacingError";
 import { z } from "zod";
 export { safeJsonParse } from "../utils/json";
 
@@ -18,12 +19,44 @@ function toOptionalString(value: unknown) {
   return text || "";
 }
 
+function looksLikeHtmlErrorBody(text: string) {
+  const sample = String(text ?? "").trim().slice(0, 512).toLowerCase();
+  if (!sample) return false;
+  return (
+    sample.startsWith("<!doctype") ||
+    sample.startsWith("<html") ||
+    sample.includes("<title>") ||
+    sample.includes("</html>") ||
+    sample.includes("nginx/") ||
+    sample.includes("bad gateway") ||
+    sample.includes("service unavailable")
+  );
+}
+
+function userMessageForHttpStatus(status: number, rawMessage: unknown) {
+  if (status === 502 || status === 503 || status === 504) {
+    return "The service is temporarily unavailable. Please try again in a moment.";
+  }
+  if (status === 401) {
+    return "Your session expired. Please sign in again.";
+  }
+  if (status === 403) {
+    return "You don't have permission to view this data.";
+  }
+  return toUserFacingMessage(rawMessage, USER_FACING_ERROR_FALLBACK);
+}
+
 export async function readError(res: Response) {
   const text = await res.text().catch(() => "");
+  const status = res.status;
+
+  if (looksLikeHtmlErrorBody(text)) {
+    return userMessageForHttpStatus(status, text);
+  }
+
   const parsed = safeJsonParse(text, ErrorEnvelopeSchema, null) as ErrorEnvelope | null;
   const message = toOptionalString(parsed?.message);
   const details = toOptionalString(parsed?.details);
-  const status = res.status;
 
   // Vite dev proxy returns { message, details } with details like "GET /api/v1/... -> <api-host>: ..."
   if (
@@ -47,10 +80,10 @@ export async function readError(res: Response) {
   if (message && details) return `${message}: ${details}`;
   const fallback = toOptionalString(parsed?.error);
   const best = details || message || fallback || text;
-  if (!best || messageIsGeneric) {
-    return `Request failed: ${status} ${res.statusText}`;
+  if (!best || messageIsGeneric || looksLikeHtmlErrorBody(best)) {
+    return userMessageForHttpStatus(status, best);
   }
-  return best;
+  return toUserFacingMessage(best, userMessageForHttpStatus(status, best));
 }
 
 /**
@@ -68,17 +101,16 @@ export function friendlyProxyUnreachableMessage(message: unknown) {
 }
 
 export async function toHttpError(res: Response, context: Record<string, unknown> = {}) {
-  const message = await readError(res);
+  const rawMessage = await readError(res);
   const requestLabel = formatRequestLabel(context);
   const path = String(context.path || context.url || "").trim();
-  const skipLabel =
-    Boolean(requestLabel) &&
-    Boolean(path) &&
-    String(message).includes(path) &&
-    /^(GET|POST|PUT|PATCH|DELETE)\s+\//i.test(String(message).trim());
-  const text = skipLabel ? message : requestLabel ? `${requestLabel}: ${message}` : message;
-  const err = new Error(text);
+  const technical =
+    requestLabel && !String(rawMessage).includes(path)
+      ? `${requestLabel}: ${rawMessage}`
+      : String(rawMessage);
+  const err = new Error(userMessageForHttpStatus(res.status, rawMessage));
   err.status = res.status;
+  err.detail = technical;
   if (context?.path) err.path = String(context.path);
   if (context?.method) err.method = String(context.method);
   return err;
@@ -119,9 +151,11 @@ export function toTrackedRequestError(message: unknown, attempts: unknown[] = []
     cleanAttempts.length && !shouldOmitTriedSuffix(message, cleanAttempts)
       ? ` Tried: ${cleanAttempts.map(formatAttempt).join("; ")}`
       : "";
-  const err = new Error(`${message}${suffix}`);
+  const safeMessage = toUserFacingMessage(message, USER_FACING_ERROR_FALLBACK);
+  const err = new Error(suffix ? `${safeMessage}` : safeMessage);
   err.attempts = cleanAttempts;
   if (cause) err.cause = cause;
+  if (suffix) err.detail = `${String(message ?? "")}${suffix}`;
   const last = cleanAttempts[cleanAttempts.length - 1] as Record<string, unknown> | undefined;
   if (last && typeof last.status === "number") err.status = last.status;
   return err;

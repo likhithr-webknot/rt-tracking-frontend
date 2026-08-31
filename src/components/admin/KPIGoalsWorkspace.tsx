@@ -21,7 +21,6 @@ import {
   evaluationCriteriaGroupKey,
 } from "../../utils/evaluationCriteria";
 import { computeKpiWeightIntegrity } from "../../utils/kpiWeightIntegrity";
-import { toUserFacingMessage } from "../../utils/userFacingError";
 
 const GROUP_PALETTE = [
   { ring: "ring-blue-500/25", dot: "bg-blue-500", band: "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20", dept: "bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/20" },
@@ -75,7 +74,6 @@ export default function KPIGoalsWorkspace({
   allKpis = null,
   allKpisLoaded = false,
   allKpisLoading = false,
-  allKpisError = "",
   searchQuery,
   setSearchQuery,
   onAddKpi,
@@ -224,13 +222,6 @@ export default function KPIGoalsWorkspace({
           </button>
         </div>
       </AdminPageHeader>
-
-      {allKpisError ? (
-        <div className="rounded-xl border border-red-500/35 bg-red-500/5 px-4 py-3 text-sm text-red-800 dark:text-red-100">
-          <AlertTriangle size={16} className="inline mr-2" />
-          {toUserFacingMessage(allKpisError, "Couldn’t load goals. Please try again.")}
-        </div>
-      ) : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard icon={Hash} label="Total goals" value={stats.total} />

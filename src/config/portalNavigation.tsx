@@ -3,7 +3,6 @@ import {
   Award,
   Briefcase,
   ClipboardCheck,
-  Cloud,
   FileBarChart2,
   FolderKanban,
   History,
@@ -110,18 +109,6 @@ export const ADMIN_NAV_GROUPS = [
         icon: <FileBarChart2 size={20} />,
         label: "Reports",
         description: "Download and explore data",
-      },
-      {
-        id: "notes",
-        icon: <StickyNote size={20} />,
-        label: "Notes",
-        description: "Your private notebooks",
-      },
-      {
-        id: "drive",
-        icon: <Cloud size={20} />,
-        label: "File sharing",
-        description: "Upload and share files",
       },
       {
         id: "apps",
@@ -340,16 +327,6 @@ export const ADMIN_TAB_COPY = {
     title: "Certifications",
     subtitle: "Credentials employees can select during their review.",
     sectionLabel: "Company setup",
-  },
-  notes: {
-    title: "Private notes",
-    subtitle: "Personal notebooks — not visible to other admins or employees.",
-    sectionLabel: "More tools",
-  },
-  drive: {
-    title: "File sharing",
-    subtitle: "Upload and share files from your admin account.",
-    sectionLabel: "More tools",
   },
   apps: {
     title: "Apps",

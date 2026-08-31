@@ -32,6 +32,8 @@ import { captureRejectSnapshot } from "../../utils/resubmissionPlaybook";
 import { isResubmissionRequested } from "../../utils/reviewCycles";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 import SubmissionStatusBadge, { SubmissionLifecycleStrip } from "../shared/SubmissionStatusBadge";
+import Toast from "../shared/Toast";
+import { toUserFacingMessage, userFacingMessageForStatus } from "../../utils/userFacingError";
 import {
   resolveSubmissionWorkflow,
   submissionMatchesStatusFilter,
@@ -423,7 +425,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [toast, setToast] = useState(null);
   const inflightKeyRef = useRef(null);
   const [reviewModal, setReviewModal] = useState({ open: false, item: null });
   const [rejectModal, setRejectModal] = useState({ open: false, item: null, comment: "", target: "employee" });
@@ -696,7 +698,9 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
-        setScoreBreakdownError(err?.message || "Failed to load score breakdown.");
+        setScoreBreakdownError(
+          toUserFacingMessage(err?.message, "Couldn't load score breakdown. Please try again."),
+        );
         setScoreBreakdown(computeLocalScoreBreakdown(reviewModal.item.submission, reviewModal.item.raw));
       })
       .finally(() => {
@@ -742,7 +746,6 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
   }, [rejectModal?.item]);
 
   const reload = useCallback(async () => {
-    setError("");
     const key = `${query.month || "all"}|${query.status || "all"}`;
     if (inflightKeyRef.current === key) return; // avoid duplicate fetches (StrictMode / rapid rerenders)
     inflightKeyRef.current = key;
@@ -761,11 +764,16 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
         onLogout?.();
         return;
       }
-      const message = String(err?.message || "Failed to load submissions.").trim();
-      const withStatus = err?.status && !message.toLowerCase().includes("request failed:")
-        ? `${message} (HTTP ${err.status})`
-        : message;
-      setError(withStatus);
+      console.error("Failed to load submissions", err?.detail || err);
+      setToast({
+        title: "Couldn't load submissions",
+        message: toUserFacingMessage(
+          err?.message,
+          userFacingMessageForStatus(err?.status, "Please try again in a moment."),
+        ),
+        tone: "error",
+        ts: Date.now(),
+      });
       setItems([]);
     } finally {
       inflightKeyRef.current = null;
@@ -909,12 +917,6 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
           </label>
         </div>
       </AdminPageHeader>
-
-      {error ? (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-200">
-          Failed to load submissions: <span className="font-mono">{error}</span>
-        </div>
-      ) : null}
 
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {[
@@ -1803,6 +1805,7 @@ export default function AdminSubmissions({ onLogout, employees: employeesProp, a
         </ModalOverlay>
       ) : null}
 
+      <Toast toast={toast} onDismiss={() => setToast(null)} durationMs={6000} />
     </AdminPageShell>
   );
 }

@@ -8,7 +8,6 @@ import { isHrPortalUser } from "../../utils/hrRatingsFilter";
 import { filterAdminNavGroups, isSuperAdminPortalUser } from "../../utils/portalAccess";
 import { toUserFacingMessage } from "../../utils/userFacingError";
 import RatingsHistoryWorkspace from "./RatingsHistoryWorkspace";
-import WebknotDrive from "./WebknotDrive";
 import AppShell from "../shared/AppShell";
 import PortalSidebar from "../shared/PortalSidebar";
 import AdminDashboard from "./AdminDashboard";
@@ -20,7 +19,6 @@ import EmployeeAllocationProfileModal from "./EmployeeAllocationProfileModal";
 import SettingsPanel from "./SettingsPanel";
 import CompanyValuesWorkspace from "./CompanyValuesWorkspace";
 import ProjectsDirectory from "./ProjectsDirectory";
-import PortalNotesWorkspace from "../shared/PortalNotesWorkspace";
 import ReportsDashboard from "./ReportsDashboard";
 import AppsWorkspace from "./AppsWorkspace";
 import Toast from "../shared/Toast";
@@ -145,8 +143,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
     "kpi",
     "certifications",
     "values",
-    "notes",
-    "drive",
     "apps",
     "settings",
     "account",
@@ -595,15 +591,6 @@ export default function AdminControlCenter({ onLogout, auth }) {
           )}
           {activeTab === "reports" && <ReportsDashboard />}
           {activeTab === "certifications" && <AdminCertificationsBridge />}
-          {activeTab === "notes" && (
-            <PortalNotesWorkspace
-              portal="admin"
-              auth={auth}
-              title={ADMIN_TAB_COPY.notes.title}
-              subtitle={ADMIN_TAB_COPY.notes.subtitle}
-            />
-          )}
-          {activeTab === "drive" && <WebknotDrive auth={auth} portalLabel="your admin account" />}
           {activeTab === "apps" && isSuperAdmin ? <AppsWorkspace /> : null}
           {activeTab === "settings" ? (
             <SettingsPanel

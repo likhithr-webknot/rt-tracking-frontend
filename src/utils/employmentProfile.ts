@@ -1,5 +1,7 @@
 // @ts-nocheck
 
+import { formatEmployeeBandCode } from "../api/band-stream-directory";
+import { firstDisplayString } from "./coerceDisplayString";
 export function parseEmploymentDate(raw) {
   if (!raw) return null;
   const d = new Date(raw);
@@ -43,12 +45,55 @@ export function extractEmploymentDetails(sources = {}) {
     auth.joinDate ??
     null;
 
-  const band = employee.band ?? profile.band ?? auth.band ?? "";
-  const stream = employee.stream ?? profile.stream ?? profile.department ?? auth.stream ?? "";
-  const designation = employee.designation ?? profile.designation ?? auth.designation ?? "";
-  const managerId = employee.managerId ?? profile.managerId ?? auth.managerId ?? "";
-  const empId = employee.id ?? employee.empId ?? profile.employeeId ?? auth.employeeId ?? "";
-  const email = employee.email ?? profile.email ?? auth.email ?? "";
+  const bandRaw = firstDisplayString(
+    employee.band,
+    employee.bandName,
+    employee.level,
+    profile.band,
+    profile.bandName,
+    profile.level,
+    auth.band,
+    auth.claims?.band,
+    auth.claims?.level,
+  );
+  const band = formatEmployeeBandCode(bandRaw) || bandRaw;
+  const stream = firstDisplayString(
+    employee.stream,
+    employee.department,
+    profile.stream,
+    profile.department,
+    auth.stream,
+    auth.department,
+    auth.claims?.stream,
+    auth.claims?.department,
+  );
+  const designation = firstDisplayString(
+    employee.designation,
+    employee.title,
+    employee.jobTitle,
+    profile.designation,
+    profile.title,
+    profile.jobTitle,
+    auth.designation,
+    auth.claims?.designation,
+    auth.claims?.title,
+  );
+  const managerId = firstDisplayString(
+    employee.managerId,
+    profile.managerId,
+    auth.managerId,
+    auth.claims?.managerId,
+  );
+  const empId = firstDisplayString(
+    employee.id,
+    employee.empId,
+    employee.employeeId,
+    profile.employeeId,
+    auth.employeeId,
+    auth.empId,
+    auth.claims?.employeeId,
+  );
+  const email = firstDisplayString(employee.email, profile.email, auth.email, auth.claims?.email);
   const addr =
     profile.address && typeof profile.address === "object" ? profile.address : {};
   const phone =

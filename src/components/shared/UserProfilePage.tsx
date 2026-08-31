@@ -29,6 +29,7 @@ import {
 } from "../../utils/avatarPrefs";
 import Toast from "./Toast";
 import { resolveEmploymentSubtitle } from "../../utils/employmentSubtitle";
+import { coerceDisplayString } from "../../utils/coerceDisplayString";
 
 function unwrapProfile(raw) {
   if (!raw || typeof raw !== "object") return {};
@@ -45,7 +46,7 @@ function firstNonEmpty(...values) {
 }
 
 function displayValue(value) {
-  const s = String(value ?? "").trim();
+  const s = coerceDisplayString(value);
   return s || "—";
 }
 

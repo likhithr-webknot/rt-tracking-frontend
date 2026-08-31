@@ -3,11 +3,15 @@ import React, { useState } from "react";
 import { FileBarChart2, Download, Loader2, FileText } from "lucide-react";
 import { downloadMonthlySubmissionAudit, downloadReport, fetchReports } from "../../api/reports";
 import { fetchEmployees, normalizeEmployees } from "../../api/employees";
-import { fetchAdminAllSubmissions } from "../../api/monthly-submissions";
+import { fetchAdminAllSubmissions, normalizeMonthlySubmission } from "../../api/monthly-submissions";
 import { fetchValues, normalizeWebknotValuesList } from "../../api/webknotValueApi";
 import WebknotValueHeatmap from "./WebknotValueHeatmap";
 import { fetchAllocations, normalizeAllocations } from "../../api/allocations";
 import { fetchKpiDefinitions, normalizeKpiDefinitions } from "../../api/kpi-definitions";
+import { fetchProjects, normalizeProjects } from "../../api/projects";
+import { fetchCertifications, normalizeCertifications } from "../../api/certifications";
+import { buildRatingsHistoryExportRows, ratingsHistoryCsvHeaders } from "../../utils/ratingsHistoryCsv";
+import { toUserFacingMessage } from "../../utils/userFacingError";
 import Toast from "../shared/Toast";
 import AdminPageHeader, { AdminPageShell } from "./AdminPageHeader";
 
@@ -28,17 +32,33 @@ function csvEscape(s) {
   return t;
 }
 
+function csvFromRows(header, rows) {
+  const lines = [
+    header.map(csvEscape).join(","),
+    ...rows.map((row) => row.map(csvEscape).join(",")),
+  ];
+  return new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+}
+
 const DEFAULT_REPORTS = [
   { id: "monthly_audit", name: "Monthly Submission Audit", description: "Full workflow audit: scores, statuses, manager and admin actions.", type: "CSV" },
+  { id: "ratings_history", name: "Ratings History", description: "Every scored monthly review — employee, cycle, month, and final score.", type: "CSV" },
+  { id: "review_status_summary", name: "Review Status Summary", description: "Submission counts grouped by review status for the current data set.", type: "CSV" },
+  { id: "pending_reviews", name: "Pending Reviews", description: "Submissions still awaiting manager or admin action.", type: "CSV" },
   { id: "monthly_summary", name: "Monthly Performance Summary", description: "Consolidated KPI and value ratings for the active cycle.", type: "CSV" },
   { id: "employee_audit", name: "Employee Talent Audit", description: "Directory snapshot: roles, bands, departments.", type: "CSV" },
   { id: "allocation_report", name: "Resource Utilization", description: "Project assignments from the allocation API.", type: "CSV" },
+  { id: "projects_catalog", name: "Projects Catalog", description: "Full project list with codes, managers, and account managers.", type: "CSV" },
+  { id: "kpi_registry", name: "Goals & KPI Registry", description: "All KPI definitions with stream, band, weight, and criteria.", type: "CSV" },
+  { id: "company_values", name: "Company Values Registry", description: "Culture values used in monthly reviews.", type: "CSV" },
+  { id: "certifications_registry", name: "Certifications Registry", description: "Credentials employees can select during reviews.", type: "CSV" },
   { id: "submission_track", name: "Submission Compliance", description: "Employee submission flags from the directory.", type: "CSV" },
+  { id: "manager_self_reviews", name: "Manager Self-Reviews", description: "Manager monthly self-review submissions for super admin review.", type: "CSV" },
 ];
 
 export default function ReportsDashboard() {
   const [reports, setReports] = useState(DEFAULT_REPORTS);
-  const [loading, setLoading] = useState(false);
+  const [loadingId, setLoadingId] = useState("");
   const [toast, setToast] = useState(null);
   const [heatmapRows, setHeatmapRows] = useState([]);
   const [valuesIndex, setValuesIndex] = useState({});
@@ -169,11 +189,118 @@ export default function ReportsDashboard() {
       return new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
     }
 
+    if (report.id === "projects_catalog") {
+      const raw = await fetchProjects();
+      const projects = normalizeProjects(raw);
+      return csvFromRows(
+        ["Id", "Code", "Name", "PM", "AM", "StartDate", "EndDate", "Active"],
+        projects.map((p) => [
+          p.id,
+          p.code,
+          p.name,
+          p.pm || p.managerName,
+          p.am,
+          p.startDate || "",
+          p.endDate || "",
+          p.active ? "Yes" : "No",
+        ]),
+      );
+    }
+
+    if (report.id === "kpi_registry") {
+      const raw = await fetchKpiDefinitions({ limit: null });
+      const kpis = normalizeKpiDefinitions(Array.isArray(raw?.items) ? raw.items : []);
+      return csvFromRows(
+        ["Id", "Title", "Stream", "Band", "Weight", "EvaluationCriteria"],
+        kpis.map((k) => [k.id, k.title, k.stream, k.band, k.weight, k.evaluationCriteria || ""]),
+      );
+    }
+
+    if (report.id === "company_values") {
+      const valuesRaw = await fetchValues();
+      const values = normalizeWebknotValuesList(valuesRaw);
+      return csvFromRows(
+        ["Id", "Title", "Description", "Active"],
+        values.map((v) => [v.id, v.title || v.name, v.description || "", v.active !== false ? "Yes" : "No"]),
+      );
+    }
+
+    if (report.id === "certifications_registry") {
+      const raw = await fetchCertifications({ limit: null });
+      const items = normalizeCertifications(raw);
+      const list = Array.isArray(items) ? items : items?.items || [];
+      return csvFromRows(
+        ["Id", "Name", "Provider", "Active", "Listed"],
+        list.map((c) => [c.id, c.name, c.provider || c.issuer || "", c.active !== false ? "Yes" : "No", c.listed !== false ? "Yes" : "No"]),
+      );
+    }
+
+    if (report.id === "ratings_history") {
+      const [empRes, subs] = await Promise.all([
+        fetchEmployees({ limit: 2000 }),
+        fetchAdminAllSubmissions({}),
+      ]);
+      const employees = normalizeEmployees(empRes);
+      const header = ratingsHistoryCsvHeaders();
+      const rows = buildRatingsHistoryExportRows(employees, subs);
+      return csvFromRows(header, rows);
+    }
+
+    if (report.id === "review_status_summary" || report.id === "pending_reviews" || report.id === "manager_self_reviews") {
+      const subs = await fetchAdminAllSubmissions({});
+      const empRes = await fetchEmployees({ limit: 2000 });
+      const employees = normalizeEmployees(empRes);
+      const empById = new Map(employees.map((e) => [String(e.id), e]));
+
+      if (report.id === "review_status_summary") {
+        const counts = new Map();
+        for (const item of Array.isArray(subs) ? subs : []) {
+          const sub = normalizeMonthlySubmission(item?.submission || item) || item;
+          const status = String(sub?.reviewStatus ?? sub?.status ?? "UNKNOWN").trim().toUpperCase() || "UNKNOWN";
+          counts.set(status, (counts.get(status) || 0) + 1);
+        }
+        return csvFromRows(
+          ["Status", "Count"],
+          [...counts.entries()].sort((a, b) => b[1] - a[1]),
+        );
+      }
+
+      const pendingStatuses = new Set(["PENDING", "SUBMITTED", "IN_REVIEW", "MANAGER_REVIEW", "AWAITING_ADMIN", "RESUBMITTED"]);
+      const rows = [];
+      for (const item of Array.isArray(subs) ? subs : []) {
+        const sub = normalizeMonthlySubmission(item?.submission || item) || item;
+        const status = String(sub?.reviewStatus ?? sub?.status ?? "").trim().toUpperCase();
+        const type = String(sub?.submissionType ?? item?.submissionType ?? "").trim().toUpperCase();
+        const emp = empById.get(String(sub?.employeeId ?? "")) || {};
+        const isManagerSelf = type.includes("MANAGER_SELF");
+        const isPending = pendingStatuses.has(status) || (!status.includes("APPROVED") && !status.includes("REJECTED"));
+
+        if (report.id === "manager_self_reviews" && !isManagerSelf) continue;
+        if (report.id === "pending_reviews" && !isPending) continue;
+
+        rows.push([
+          sub?.employeeId ?? "",
+          emp.name || sub?.employeeName || "",
+          emp.email || sub?.email || "",
+          sub?.month ?? sub?.cycleMonth ?? "",
+          sub?.cycleKey ?? "",
+          status,
+          type,
+          sub?.submittedAt ?? "",
+        ]);
+      }
+
+      return csvFromRows(
+        ["EmployeeId", "Name", "Email", "Month", "Cycle", "Status", "Type", "SubmittedAt"],
+        rows,
+      );
+    }
+
     return null;
   }
 
   async function handleDownload(report) {
-    setLoading(true);
+    setLoadingId(report.id);
     try {
       let blob = null;
       if (report.id === "monthly_audit") {
@@ -207,11 +334,11 @@ export default function ReportsDashboard() {
     } catch (err) {
       setToast({
         title: "Download failed",
-        message: err?.message || "Could not generate this export.",
+        message: toUserFacingMessage(err?.message, "Could not generate this export. Please try again."),
         tone: "error",
       });
     } finally {
-      setLoading(false);
+      setLoadingId("");
     }
   }
 
@@ -230,7 +357,7 @@ export default function ReportsDashboard() {
         <WebknotValueHeatmap rows={heatmapRows} valuesIndex={valuesIndex} />
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {reports.map((r) => (
           <section key={r.id} className="rt-panel group hover:border-[rgb(var(--primary))]/40 hover:shadow-2xl hover:shadow-[rgb(var(--primary))/0.05]">
             <div className="p-8 h-full flex flex-col">
@@ -254,10 +381,10 @@ export default function ReportsDashboard() {
                 </div>
                 <button
                   onClick={() => handleDownload(r)}
-                  disabled={loading}
+                  disabled={Boolean(loadingId)}
                   className="rt-btn-primary !py-2 !px-4 text-xs"
                 >
-                  {loading ? <Loader2 className="animate-spin" size={14} /> : <Download size={14} />}
+                  {loadingId === r.id ? <Loader2 className="animate-spin" size={14} /> : <Download size={14} />}
                   Export
                 </button>
               </div>

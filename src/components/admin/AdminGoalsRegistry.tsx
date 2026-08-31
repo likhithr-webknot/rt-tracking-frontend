@@ -13,6 +13,7 @@ import ConfirmDialog from "../shared/ConfirmDialog";
 import ModalOverlay from "../shared/ModalOverlay";
 import Toast from "../shared/Toast";
 import { exportKpisCsv } from "../../utils/entityCsvExport";
+import { toUserFacingMessage, userFacingMessageForStatus } from "../../utils/userFacingError";
 
 function normKey(v) {
   const s = String(v ?? "").trim();
@@ -54,7 +55,6 @@ export default function AdminGoalsRegistry() {
   const [allKpis, setAllKpis] = useState(null);
   const [allKpisLoaded, setAllKpisLoaded] = useState(false);
   const [allKpisLoading, setAllKpisLoading] = useState(false);
-  const [allKpisError, setAllKpisError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [pageSize, setPageSize] = useState(10);
   const [cursor, setCursor] = useState(null);
@@ -121,14 +121,22 @@ export default function AdminGoalsRegistry() {
 
   const loadPage = useCallback(async () => {
     setLoading(true);
-    setAllKpisError("");
     try {
       const raw = await fetchKpiDefinitions({ limit: pageSize, cursor });
       const items = Array.isArray(raw?.items) ? raw.items : [];
       setKpis(normalizeKpiDefinitions(items));
       setNextCursor(raw?.nextCursor != null && String(raw.nextCursor).trim() !== "" ? String(raw.nextCursor) : null);
     } catch (err) {
-      setAllKpisError(err?.message || "Failed to load KPIs.");
+      setToast({
+        title: "Couldn't load goals",
+        message: toUserFacingMessage(
+          err?.message,
+          userFacingMessageForStatus(err?.status, "Please try again in a moment."),
+        ),
+        tone: "error",
+        ts: Date.now(),
+      });
+      console.error("Failed to load KPIs", err?.detail || err);
       setKpis([]);
       setNextCursor(null);
     } finally {
@@ -148,16 +156,24 @@ export default function AdminGoalsRegistry() {
 
   const onReloadAll = useCallback(async ({ silent } = {}) => {
     if (!silent) setAllKpisLoading(true);
-    setAllKpisError("");
     try {
       const raw = await fetchKpiDefinitions({ limit: null });
       const items = Array.isArray(raw?.items) ? raw.items : [];
       setAllKpis(normalizeKpiDefinitions(items));
       setAllKpisLoaded(true);
     } catch (err) {
-      const msg = err?.message || "Full KPI list failed.";
-      setAllKpisError(msg);
-      if (!silent) setToast({ title: "Load failed", message: msg, tone: "error" });
+      console.error("Full KPI list failed", err?.detail || err);
+      if (!silent) {
+        setToast({
+          title: "Couldn't load goals",
+          message: toUserFacingMessage(
+            err?.message,
+            userFacingMessageForStatus(err?.status, "Please try again in a moment."),
+          ),
+          tone: "error",
+          ts: Date.now(),
+        });
+      }
     } finally {
       setAllKpisLoading(false);
     }
@@ -206,7 +222,6 @@ export default function AdminGoalsRegistry() {
         allKpis={allKpis}
         allKpisLoaded={allKpisLoaded}
         allKpisLoading={allKpisLoading}
-        allKpisError={allKpisError}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
         catalogStreams={catalogStreams}

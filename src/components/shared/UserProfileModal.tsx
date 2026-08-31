@@ -3,6 +3,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Loader2, Mail, User } from "lucide-react";
 import ModalOverlay from "./ModalOverlay";
 import { fetchEmployeeProfile } from "../../api/user";
+import { firstDisplayString } from "../../utils/coerceDisplayString";
+import { formatEmployeeBandCode } from "../../api/band-stream-directory";
 
 function firstNonEmpty(...values) {
   for (const v of values) {
@@ -22,7 +24,7 @@ function unwrapProfilePayload(raw) {
 }
 
 function ProfileField({ label, value, mono = false }) {
-  const text = String(value ?? "").trim() || "—";
+  const text = firstDisplayString(value) || "—";
   return (
     <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4 py-3 border-b border-[rgb(var(--border))]/80 last:border-0">
       <dt className="text-[10px] font-semibold uppercase tracking-wider text-[rgb(var(--muted))] shrink-0">
@@ -103,9 +105,10 @@ export default function UserProfileModal({ open, onClose, auth }) {
       email,
       role: firstNonEmpty(role, r.role, r.empRole, r.userRole),
       empId: firstNonEmpty(empId, r.empId, r.employeeId),
-      band: firstNonEmpty(auth?.band, r.band, r.bandName, r.level),
-      stream: firstNonEmpty(auth?.stream, r.department, r.stream, r.context),
-      designation: firstNonEmpty(auth?.designation, r.designation, r.title, r.jobTitle),
+      band: formatEmployeeBandCode(firstDisplayString(auth?.band, r.band, r.bandName, r.level))
+        || firstDisplayString(auth?.band, r.band, r.bandName, r.level),
+      stream: firstDisplayString(auth?.stream, r.department, r.stream, r.context),
+      designation: firstDisplayString(auth?.designation, r.designation, r.title, r.jobTitle),
       phone: firstNonEmpty(r.phoneNumber, r.phone, r.mobile),
       status: firstNonEmpty(r.userStatus, r.status),
       workMode: firstNonEmpty(r.workMode, r.work_mode),

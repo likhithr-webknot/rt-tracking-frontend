@@ -6,7 +6,6 @@ import { fetchAllocations, normalizeAllocations } from "../../api/allocations";
 import { fetchAvailableProjects, normalizeProjects } from "../../api/projects";
 import {
   Activity,
-  AlertTriangle,
   BarChart3,
   CheckCircle2,
   Clock,
@@ -45,7 +44,7 @@ import {
   normalizeYearMonth,
   resolveSubmissionCycleKey,
 } from "../../utils/reviewCycles";
-import { friendlyProxyUnreachableMessage } from "../../api/http";
+import { toUserFacingMessage, userFacingMessageForStatus } from "../../utils/userFacingError";
 import { normalizeMonthlySubmission } from "../../api/monthly-submissions";
 import { resolveRoleStatsBucket } from "../../api/employees";
 import {
@@ -433,19 +432,29 @@ export default function AdminDashboard({
     cycleKey: activeCycleKey,
   });
   const monthlyOverview = overviewQuery.data ?? null;
-  const monthlyOverviewError = overviewQuery.error
-    ? friendlyProxyUnreachableMessage(
-        (overviewQuery.error as Error)?.message || "Failed to load monthly overview."
-      )
-    : "";
 
   const CHART_TOOLTIP_STYLE = useChartTooltipStyle();
 
   function showToast(nextToast) {
     setToast(nextToast);
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 6000);
   }
+
+  useEffect(() => {
+    if (!overviewQuery.error) return;
+    const err = overviewQuery.error as Error & { status?: number };
+    console.error("Failed to load monthly overview", err);
+    showToast({
+      title: "Couldn't load overview",
+      message: toUserFacingMessage(
+        err?.message,
+        userFacingMessageForStatus(err?.status, "Please try again in a moment."),
+      ),
+      tone: "error",
+      ts: Date.now(),
+    });
+  }, [overviewQuery.error]);
 
 
   useEffect(() => {
@@ -1199,15 +1208,6 @@ export default function AdminDashboard({
               {selectedCycleRatingCount} rated submission{selectedCycleRatingCount === 1 ? "" : "s"}
             </span>
           ) : null}
-        </div>
-      ) : null}
-
-      {monthlyOverviewError ? (
-        <div className="pulse-callout pulse-callout--warn">
-          <AlertTriangle size={20} className="shrink-0 text-amber-700 dark:text-amber-200" />
-          <div className="min-w-0">
-            <p className="font-semibold text-amber-950 dark:text-amber-50">{monthlyOverviewError}</p>
-          </div>
         </div>
       ) : null}
 
